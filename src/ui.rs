@@ -1,8 +1,8 @@
 //! Rendering. Reads `State`, writes nothing but the frame, and returns the
 //! clickable regions it drew. Layout: tab bar and its rule (2 rows),
-//! list | detail (`state.split`, 42% | 58% by default), a blank row, key bar
-//! (1 row). List rows are two
-//! lines tall. The dialog is a centered overlay.
+//! list | detail (`state.split`, 42% | 58% by default), the message row
+//! (1 to 3 rows, blank when there is no message), the centered key bar
+//! (1 row). List rows are two lines tall. The dialog is a centered overlay.
 
 use crate::app::{
     self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
@@ -61,17 +61,23 @@ pub mod palette {
 
 const ROW_HEIGHT: u16 = 2;
 const DETAIL_MAX_WIDTH: u16 = 100;
+const MESSAGE_MAX_LINES: usize = 3;
 
 pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     let now = jiff::Timestamp::now();
-    let [tabs, rule, body, _gap, keys] = Layout::vertical([
+    let screen = frame.area();
+    // Tabs, rule, one body row, and keys always fit before the message grows.
+    let room = usize::from(screen.height.saturating_sub(4)).clamp(1, MESSAGE_MAX_LINES);
+    let message = message(state).map(|(text, style)| (wrap_text(&text, usize::from(screen.width), room), style));
+    let message_height = message.as_ref().map_or(1, |(lines, _)| lines.len().max(1));
+    let [tabs, rule, body, message_area, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
-        Constraint::Length(1),
+        Constraint::Length(u16::try_from(message_height).unwrap_or(1)),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(screen);
     let list_width = state.split.list_width(body.width);
     let list = Rect { width: list_width, ..body };
     let detail = Rect { x: body.x + list_width, width: body.width - list_width, ..body };
@@ -79,11 +85,14 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     // The border plus the blank column left of it: one column is hard to hit.
     let divider = Rect { x: detail.x.saturating_sub(1), width: 2, ..body }.intersection(body);
     hits.targets.push((divider, HitTarget::Divider));
-    let screen = frame.area();
     frame.buffer_mut().set_style(screen, palette::PLAIN);
     draw_tabs(frame, tabs, rule, state, &mut hits);
     draw_list(frame, list, state, now, &mut hits);
     draw_detail(frame, detail, state, now);
+    if let Some((lines, style)) = message {
+        let lines: Vec<Line<'static>> = lines.into_iter().map(|l| centered(vec![span(l, style)], message_area.width)).collect();
+        frame.render_widget(Paragraph::new(lines), message_area);
+    }
     draw_keys(frame, keys, state);
     if let Focus::Dialog(dialog) = &state.focus {
         draw_dialog(frame, frame.area(), state, dialog, config);
@@ -156,6 +165,42 @@ fn fit_path(path: &str, width: usize) -> String {
         _ => &tail,
     };
     format!("…{tail}")
+}
+
+/// Word-wraps `text` to `width` cells in at most `max` lines. The last line
+/// ends with an ellipsis when text is left over; a word wider than `width`
+/// is cut.
+fn wrap_text(text: &str, width: usize, max: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && cells(&line) + 1 + cells(word) > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    if lines.len() > max {
+        let rest = lines.split_off(max).join(" ");
+        if let Some(last) = lines.last_mut() {
+            *last = format!("{last} {rest}");
+        }
+    }
+    lines.iter().map(|l| fit(l, width)).collect()
+}
+
+/// Pads `spans` on the left so they sit in the middle of `width` cells. A
+/// line wider than `width` stays at the left edge and is cut at the right.
+fn centered(spans: Vec<Span<'static>>, width: u16) -> Line<'static> {
+    let pad = usize::from(width).saturating_sub(spans_width(&spans)) / 2;
+    let mut line = vec![Span::raw(" ".repeat(pad))];
+    line.extend(spans);
+    Line::from(line)
 }
 
 fn one_line(text: &str) -> String {
@@ -284,17 +329,17 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mu
         spans.push(Span::raw("   "));
         x = x.saturating_add(w).saturating_add(3);
     }
-    let status = match state.tab {
-        Tab::Issues => feed_status(&state.issues),
-        Tab::Prs => feed_status(&state.prs),
-        Tab::Sessions => None,
+    let loading = match state.tab {
+        Tab::Issues => matches!(state.issues.status, FeedStatus::Loading),
+        Tab::Prs => matches!(state.prs.status, FeedStatus::Loading),
+        Tab::Sessions => false,
     };
-    let (text, style) = status.unwrap_or_else(|| (state.context.repo_name.clone(), palette::DIM));
+    let text = if loading { "loading…".to_string() } else { state.context.repo_name.clone() };
     let used = usize::from(x.saturating_sub(area.x));
     let room = usize::from(area.width).saturating_sub(used + 1);
     let text = fit(&text, room);
     spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
-    spans.push(span(text, style));
+    spans.push(span(text, palette::DIM));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
     let total = usize::from(rule.width);
@@ -310,52 +355,58 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mu
     );
 }
 
-fn feed_status<T>(feed: &Feed<T>) -> Option<(String, Style)> {
-    match &feed.status {
-        FeedStatus::Loading => Some(("loading…".to_string(), palette::DIM)),
-        FeedStatus::Fresh => None,
-        FeedStatus::Failed(e) => {
-            let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
-            Some((format!("gh failed{kept}: {}", one_line(e)), palette::ERROR))
-        }
+/// The one place for messages: the toast, or else the error of the shown
+/// feed. Drawn on the message row above the key bar.
+fn message(state: &State) -> Option<(String, Style)> {
+    if let Some(toast) = &state.toast {
+        let style = if toast.text.contains("failed") { palette::ERROR } else { palette::PLAIN };
+        return Some((one_line(&toast.text), style));
     }
+    let failure = match state.tab {
+        Tab::Issues => feed_failure(&state.issues),
+        Tab::Prs => feed_failure(&state.prs),
+        Tab::Sessions => None,
+    };
+    failure.map(|text| (text, palette::ERROR))
+}
+
+fn feed_failure<T>(feed: &Feed<T>) -> Option<String> {
+    let FeedStatus::Failed(e) = &feed.status else { return None };
+    let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
+    Some(format!("gh failed{kept}: {}", one_line(e)))
 }
 
 fn draw_keys(frame: &mut Frame, area: Rect, state: &State) {
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-    let hint = |spans: &mut Vec<Span<'static>>, k: &str, d: &str| {
-        spans.extend([span(k.to_string(), palette::ACCENT), span(format!(" {d}   "), palette::DIM)]);
-    };
+    let hint = |k: &str, d: &str| vec![span(k.to_string(), palette::ACCENT), span(format!(" {d}"), palette::DIM)];
+    let mut parts: Vec<Vec<Span<'static>>> = Vec::new();
     match &state.focus {
         Focus::Filter => {
-            spans.push(span("/ ", palette::ACCENT));
-            spans.push(Span::raw(state.filter.clone()));
-            spans.push(span("▏   ", palette::DIM));
-            hint(&mut spans, "enter", "keep");
-            hint(&mut spans, "esc", "clear");
+            parts.push(vec![span("/ ", palette::ACCENT), Span::raw(state.filter.clone()), span("▏", palette::DIM)]);
+            parts.push(hint("enter", "keep"));
+            parts.push(hint("esc", "clear"));
         }
         Focus::Dialog(_) => {
             for (k, d) in [("ctrl-s", "start"), ("tab", "next field"), ("←/→", "change"), ("esc", "cancel")] {
-                hint(&mut spans, k, d);
+                parts.push(hint(k, d));
             }
         }
         Focus::List => {
             if !state.filter.is_empty() {
-                spans.push(span(format!("/{}   ", state.filter), palette::LABEL));
+                parts.push(vec![span(format!("/{}", state.filter), palette::LABEL)]);
             }
             for (k, d) in app::key_bar(state) {
-                hint(&mut spans, k, d);
+                parts.push(hint(k, d));
             }
         }
     }
-    if let Some(toast) = &state.toast {
-        let room = usize::from(area.width).saturating_sub(spans_width(&spans) + 1);
-        let style = if toast.text.contains("failed") { palette::ERROR } else { palette::PLAIN };
-        let text = fit(&one_line(&toast.text), room);
-        spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
-        spans.push(span(text, style));
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, part) in parts.into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw("   "));
+        }
+        spans.extend(part);
     }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    frame.render_widget(Paragraph::new(centered(spans, area.width)), area);
 }
 
 // ---- list ------------------------------------------------------------------
@@ -1025,6 +1076,41 @@ mod tests {
         let screen = text(&frame(&mut state, &config, 40, 10));
         let row = screen.lines().nth(2).unwrap_or_default();
         assert!(row.contains("▌ #") && row.contains("│  Retry"), "a pane is empty:\n{screen}");
+    }
+
+    #[test]
+    fn a_long_message_wraps_on_its_own_row_above_the_centered_keys() {
+        let (mut state, config) = full_state();
+        state.toast = Some(app::Toast { text: "Press m again to ask #3's agent to merge PR #10".to_string(), shown_at: None });
+        let screen = text(&render(&state, &config, 30, 12));
+        let lines: Vec<&str> = screen.lines().collect();
+        let message = format!("{} {}", lines[9].trim(), lines[10].trim());
+        assert_eq!(message, "Press m again to ask #3's agent to merge PR #10", "message not whole in\n{screen}");
+        assert!(!lines[11].contains("Press"), "message on the key bar:\n{screen}");
+
+        state.toast = None;
+        let screen = text(&render(&state, &config, 160, 24));
+        let keys = screen.lines().last().unwrap_or_default();
+        let left = keys.len() - keys.trim_start().len();
+        let right = keys.len() - keys.trim_end().len();
+        assert!(left > 1 && left.abs_diff(right) <= 1, "key bar not centered: {keys:?}");
+    }
+
+    #[test]
+    fn a_failed_feed_shows_on_the_message_row() {
+        let (mut state, config) = full_state();
+        state.issues.status = FeedStatus::Failed("rate limited".to_string());
+        let screen = text(&render(&state, &config, 100, 20));
+        let row = screen.lines().nth(18).unwrap_or_default();
+        assert!(row.contains("gh failed, showing old data: rate limited"), "missing failure in\n{screen}");
+        assert!(screen.lines().next().unwrap_or_default().trim_end().ends_with("orbit"));
+    }
+
+    #[test]
+    fn wrap_text_breaks_at_words_and_cuts_what_does_not_fit() {
+        assert_eq!(wrap_text("aa bb cc", 5, 3), ["aa bb", "cc"]);
+        assert_eq!(wrap_text("aa bb cc dd", 2, 2), ["aa", "b…"]);
+        assert_eq!(wrap_text("abcdefgh", 4, 3), ["abc…"]);
     }
 
     #[test]
