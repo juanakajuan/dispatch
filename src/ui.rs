@@ -913,7 +913,7 @@ mod tests {
         let (mut state, _) = app::init(
             Instant::now(),
             &config,
-            Context { repo_name: "orbit".to_string(), base: "origin/main".to_string() },
+            Context { repo_name: "orbit".to_string(), base: "origin/main".to_string(), ..Context::default() },
         );
         state.issues.items = vec![
             issue(
