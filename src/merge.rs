@@ -1,7 +1,7 @@
 //! The second `m`: look at the PR again, because the list can be a minute
 //! old, then merge it here or hand it to the session's agent.
 
-use crate::domain::{MergeMethod, PrNumber, PrState};
+use crate::domain::{MergeMethod, PrNumber, PrState, PullRequest};
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::{github, proc};
 use std::path::Path;
@@ -14,8 +14,9 @@ pub enum MergeOutcome {
     Merged(MergeMethod),
     /// `gh pr merge` succeeded but the PR is still open: a merge queue took it.
     Queued,
-    /// The agent must fix `problem`, then merge with `method`.
-    Handoff { problem: MergeProblem, method: MergeMethod, base: String },
+    /// An agent must fix `problem`, then merge with `method`. `pr` is the PR
+    /// as GitHub showed it now.
+    Handoff { problem: MergeProblem, method: MergeMethod, pr: PullRequest },
     Refused(String),
 }
 
@@ -34,7 +35,7 @@ pub fn merge(repo_root: &Path, pr: PrNumber) -> Result<MergeOutcome, String> {
             let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
             Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
         }
-        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, base: fresh.base }),
+        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: fresh }),
     }
 }
 
@@ -124,8 +125,10 @@ mod tests {
     fn a_conflicted_pr_goes_to_the_agent_with_the_method_and_is_not_merged() {
         world(view("CONFLICTING", "DIRTY", ""), Some("rebase"), ALL_ALLOWED);
         let outcome = merge(Path::new("/r"), PrNumber(10));
-        let want = MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, base: "main".to_string() };
-        assert_eq!(outcome, Ok(want));
+        assert!(
+            matches!(&outcome, Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr }) if pr.base == "main" && pr.head == "fix/3-x"),
+            "{outcome:?}"
+        );
         assert!(merges().is_empty());
     }
 
@@ -182,8 +185,8 @@ mod tests {
         for (status, problem) in [("BEHIND", MergeProblem::Behind), ("BLOCKED", MergeProblem::Blocked)] {
             let passed = r#"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}"#;
             world(view("MERGEABLE", status, passed), None, ALL_ALLOWED);
-            let want = MergeOutcome::Handoff { problem, method: MergeMethod::Merge, base: "main".to_string() };
-            assert_eq!(merge(Path::new("/r"), PrNumber(10)), Ok(want), "{status}");
+            let outcome = merge(Path::new("/r"), PrNumber(10));
+            assert!(matches!(outcome, Ok(MergeOutcome::Handoff { problem: p, method: MergeMethod::Merge, .. }) if p == problem), "{status}");
             assert!(merges().is_empty());
         }
     }

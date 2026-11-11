@@ -76,6 +76,16 @@ pub struct StartRequest {
     pub branch: BranchName,
     pub mode: Mode,
     pub prompt: String,
+    pub from: StartFrom,
+}
+
+/// Where a new branch starts. Used only when `branch` does not exist locally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartFrom {
+    /// The default branch, for new work on an issue.
+    Base,
+    /// The branch of the same name on origin, for work on an open PR.
+    Origin,
 }
 
 /// A converged start. `warnings` hold non-fatal problems, such as a failed
@@ -228,6 +238,7 @@ impl Workspace {
     fn layout(&self) -> Layout {
         Layout {
             repo_root: self.repo_root.clone(),
+            base: self.base.clone(),
             hooks: self.detect_waiting.then_some(WAITING_HOOKS),
             claude: self.claude.clone(),
         }
@@ -258,13 +269,13 @@ impl Workspace {
         let mut warnings = Vec::new();
         for step in steps {
             match step {
-                Step::Fetch => {
-                    if let Err(e) = git::fetch(&self.repo_root, &self.base) {
-                        warnings.push(format!("fetch failed, using the local {}: {e}", self.base));
+                Step::Fetch(remote_ref) => {
+                    if let Err(e) = git::fetch(&self.repo_root, &remote_ref) {
+                        warnings.push(format!("fetch failed, using the local {remote_ref}: {e}"));
                     }
                 }
-                Step::AddWorktree { dir, branch, create } => {
-                    git::add_worktree(&self.repo_root, &dir, &branch, create.then_some(self.base.as_str()))?;
+                Step::AddWorktree { dir, branch, from } => {
+                    git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
                 }
                 Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
                 Step::OpenWindow { dir, name, argv } => {
@@ -379,6 +390,8 @@ struct StartObservation {
 
 struct Layout {
     repo_root: PathBuf,
+    /// `origin/main`.
+    base: String,
     hooks: Option<&'static str>,
     claude: ClaudeCommand,
 }
@@ -394,11 +407,12 @@ enum StartPlan {
 /// `plan_start` recognizes and finishes.
 #[derive(Debug, PartialEq, Eq)]
 enum Step {
-    /// `git fetch origin <default>` so the new branch starts from a fresh base.
-    Fetch,
-    /// `git worktree add <dir> -b <branch> <base>` when the branch is new,
-    /// `git worktree add <dir> <branch>` when it exists (crash recovery).
-    AddWorktree { dir: PathBuf, branch: BranchName, create: bool },
+    /// `git fetch origin <branch>` for a remote ref such as `origin/main`, so
+    /// the new branch starts from fresh commits.
+    Fetch(String),
+    /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
+    /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
+    AddWorktree { dir: PathBuf, branch: BranchName, from: Option<String> },
     /// `git config branch.<b>.dispatch-issue N`.
     /// Overwrites, so running it twice is harmless.
     Mark { branch: BranchName, issue: IssueNumber },
@@ -422,6 +436,9 @@ enum Step {
 /// | req.branch exists, unmarked, free                     | [AddWorktree create=false, Mark, OpenWindow] |
 /// | nothing exists                                        | [Fetch, AddWorktree create=true, Mark, OpenWindow] |
 ///
+/// A created branch starts from the default branch, or from `origin/<branch>`
+/// when `req.from` is `StartFrom::Origin`.
+///
 /// A marked branch for this issue wins over `req.branch`, so a retry with an
 /// edited branch name can not make a second branch for one issue.
 fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Result<StartPlan, StartConflict> {
@@ -432,7 +449,7 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
         argv: layout.claude.argv(&rules::claude_args(req.mode, &req.prompt, layout.hooks)),
     };
     let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
-    let add = |branch: BranchName, create: bool| Step::AddWorktree { dir: target.clone(), branch, create };
+    let add = |branch: BranchName, from: Option<String>| Step::AddWorktree { dir: target.clone(), branch, from };
     let planned = WorktreePath::planned(target.clone());
 
     if let Some(s) = obs.sessions.get(&req.issue) {
@@ -452,7 +469,7 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
         return Err(StartConflict::PathTaken(target));
     }
     if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.issue) {
-        return Ok(StartPlan::Steps(vec![add(branch.clone(), false), mark(branch.clone()), open(planned)]));
+        return Ok(StartPlan::Steps(vec![add(branch.clone(), None), mark(branch.clone()), open(planned)]));
     }
     if let Some(&issue) = obs.markers.get(&req.branch) {
         return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue });
@@ -460,12 +477,15 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
     if let Some(w) = obs.worktrees.iter().find(|w| w.branch.as_ref() == Some(&req.branch)) {
         return Err(StartConflict::BranchCheckedOut { branch: req.branch.clone(), path: w.path.as_path().to_path_buf() });
     }
-    let create = !obs.branch_exists;
     let mut steps = Vec::new();
-    if create {
-        steps.push(Step::Fetch);
+    let from = (!obs.branch_exists).then(|| match req.from {
+        StartFrom::Base => layout.base.clone(),
+        StartFrom::Origin => format!("origin/{}", req.branch.as_str()),
+    });
+    if let Some(remote_ref) = &from {
+        steps.push(Step::Fetch(remote_ref.clone()));
     }
-    steps.extend([add(req.branch.clone(), create), mark(req.branch.clone()), open(planned)]);
+    steps.extend([add(req.branch.clone(), from), mark(req.branch.clone()), open(planned)]);
     Ok(StartPlan::Steps(steps))
 }
 
@@ -554,6 +574,7 @@ mod tests {
     fn layout() -> Layout {
         Layout {
             repo_root: PathBuf::from("/a/orbit"),
+            base: "origin/main".to_string(),
             hooks: None,
             claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
         }
@@ -565,6 +586,7 @@ mod tests {
             branch: br("fix/142-x"),
             mode: Mode::Implement,
             prompt: "p".to_string(),
+            from: StartFrom::Base,
         }
     }
 
@@ -605,7 +627,7 @@ mod tests {
         /// commands would.
         fn apply(&mut self, step: &Step) {
             match step {
-                Step::Fetch => {}
+                Step::Fetch(_) => {}
                 Step::AddWorktree { dir, branch, .. } => {
                     self.worktrees.push(git::Worktree { path: WorktreePath::planned(dir.clone()), branch: Some(branch.clone()) });
                     self.branch_exists = true;
@@ -631,8 +653,12 @@ mod tests {
         Step::OpenWindow { dir: wp("/a/orbit-142"), name: "#142".to_string(), argv }
     }
 
-    fn add(branch: &str, create: bool) -> Step {
-        Step::AddWorktree { dir: PathBuf::from("/a/orbit-142"), branch: br(branch), create }
+    fn add(branch: &str, from: Option<&str>) -> Step {
+        Step::AddWorktree { dir: PathBuf::from("/a/orbit-142"), branch: br(branch), from: from.map(String::from) }
+    }
+
+    fn fetch(remote_ref: &str) -> Step {
+        Step::Fetch(remote_ref.to_string())
     }
 
     fn mark(branch: &str) -> Step {
@@ -670,7 +696,7 @@ mod tests {
         let mut w = World::empty();
         w.markers = markers(&[("fix/142-earlier-name", 142)]);
         w.branch_exists = false;
-        assert_eq!(steps(w.plan()), [add("fix/142-earlier-name", false), mark("fix/142-earlier-name"), open_step()]);
+        assert_eq!(steps(w.plan()), [add("fix/142-earlier-name", None), mark("fix/142-earlier-name"), open_step()]);
     }
 
     #[test]
@@ -711,15 +737,27 @@ mod tests {
     fn plan_existing_free_branch_skips_the_fetch_and_the_create() {
         let mut w = World::empty();
         w.branch_exists = true;
-        assert_eq!(steps(w.plan()), [add("fix/142-x", false), mark("fix/142-x"), open_step()]);
+        assert_eq!(steps(w.plan()), [add("fix/142-x", None), mark("fix/142-x"), open_step()]);
     }
 
     #[test]
     fn plan_from_nothing_runs_all_four_steps() {
         assert_eq!(
             steps(World::empty().plan()),
-            [Step::Fetch, add("fix/142-x", true), mark("fix/142-x"), open_step()]
+            [fetch("origin/main"), add("fix/142-x", Some("origin/main")), mark("fix/142-x"), open_step()]
         );
+    }
+
+    #[test]
+    fn plan_for_a_pr_branch_starts_from_its_origin_branch() {
+        let mut r = req();
+        r.from = StartFrom::Origin;
+        let got = steps(plan_start(&World::empty().obs(), &r, &layout()));
+        assert_eq!(got, [fetch("origin/fix/142-x"), add("fix/142-x", Some("origin/fix/142-x")), mark("fix/142-x"), open_step()]);
+        let mut w = World::empty();
+        w.branch_exists = true;
+        let got = steps(plan_start(&w.obs(), &r, &layout()));
+        assert_eq!(got, [add("fix/142-x", None), mark("fix/142-x"), open_step()], "an existing local branch is used as is");
     }
 
     #[test]
@@ -753,7 +791,7 @@ mod tests {
         };
         for mut world in starts {
             let original = steps(world.plan());
-            let without_fetch: Vec<&Step> = original.iter().filter(|s| **s != Step::Fetch).collect();
+            let without_fetch: Vec<&Step> = original.iter().filter(|s| !matches!(s, Step::Fetch(_))).collect();
             for (k, step) in original.iter().enumerate() {
                 world.apply(step);
                 let rest = world.plan();
