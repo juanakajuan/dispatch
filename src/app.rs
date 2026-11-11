@@ -4,7 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest, Split};
 use crate::rules;
 use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -108,11 +108,14 @@ pub struct Toast {
     pub shown_at: Option<Instant>,
 }
 
-/// Clickable regions from the last frame. Written by the shell after each
-/// draw (`ui::draw` returns it); read by `update` on mouse events.
+/// Clickable regions and pane geometry from the last frame. Written by the
+/// shell after each draw (`ui::draw` returns it); read by `update` on mouse
+/// events and resize keys.
 #[derive(Default)]
 pub struct HitMap {
     pub targets: Vec<(ratatui::layout::Rect, HitTarget)>,
+    /// The body the list and detail panes share. Zero before the first draw.
+    pub panes: ratatui::layout::Rect,
 }
 
 impl HitMap {
@@ -126,6 +129,8 @@ impl HitMap {
 pub enum HitTarget {
     Tab(Tab),
     Row(RowKey),
+    /// The border between the list and the detail pane.
+    Divider,
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -157,6 +162,10 @@ pub struct State {
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
+    /// The list | detail border, the same on every tab.
+    pub split: Split,
+    /// True from a press on the divider to the next release.
+    pub dragging_split: bool,
     /// Set by a first `m`. A second `m` on the same session and PR sends the
     /// merge request; any other key clears it.
     pub armed_merge: Option<MergeAsk>,
@@ -242,6 +251,8 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         due: Due { github: now + config.github_refresh, sessions: now + SESSIONS_EVERY, tail: None },
         hits: HitMap::default(),
         last_click: None,
+        split: config.split,
+        dragging_split: false,
         armed_merge: None,
     };
     (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
@@ -270,6 +281,9 @@ pub enum Action {
     Refresh,
     Filter,
     ClearFilter,
+    SplitNarrower,
+    SplitWider,
+    SplitReset,
     Quit,
 }
 
@@ -327,6 +341,9 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
     Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
+    Binding { keys: &[Key::Char('<')], action: Action::SplitNarrower, bar: &[] },
+    Binding { keys: &[Key::Char('>')], action: Action::SplitWider, bar: &[] },
+    Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
     Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
 ];
 
@@ -372,7 +389,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             Focus::List => {
                 let armed = state.armed_merge.take();
                 match action_for(&ev) {
-                    Some(action) => act(state, action, armed),
+                    Some(action) => act(state, action, armed, config),
                     None => Vec::new(),
                 }
             }
@@ -518,7 +535,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 }
 
 /// `armed` is the merge a previous `m` armed; only a second `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<MergeAsk>) -> Vec<Cmd> {
+fn act(state: &mut State, action: Action, armed: Option<MergeAsk>, config: &Config) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -551,6 +568,9 @@ fn act(state: &mut State, action: Action, armed: Option<MergeAsk>) -> Vec<Cmd> {
         }
         Action::Filter => state.focus = Focus::Filter,
         Action::ClearFilter => state.filter.clear(),
+        Action::SplitNarrower => state.split = state.split.narrower(state.hits.panes.width),
+        Action::SplitWider => state.split = state.split.wider(state.hits.panes.width),
+        Action::SplitReset => state.split = config.split,
         Action::Quit => return vec![Cmd::Quit],
     }
     Vec::new()
@@ -683,12 +703,21 @@ fn select(state: &mut State, key: RowKey) {
 }
 
 fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant) -> Vec<Cmd> {
+    // Before the focus gate, so a drag can not stay stuck behind a dialog.
+    if matches!(ev.kind, MouseEventKind::Up(_) | MouseEventKind::Down(_)) {
+        state.dragging_split = false;
+    }
     if !matches!(state.focus, Focus::List) {
         return Vec::new();
     }
     match ev.kind {
         MouseEventKind::ScrollDown => move_selection(state, Move::Down),
         MouseEventKind::ScrollUp => move_selection(state, Move::Up),
+        // Follows the pointer even off the divider, so a fast drag keeps hold.
+        MouseEventKind::Drag(MouseButton::Left) if state.dragging_split => {
+            let panes = state.hits.panes;
+            state.split = Split::at_column(panes.width, ev.column.saturating_sub(panes.x));
+        }
         MouseEventKind::Down(MouseButton::Left) => {
             let Some(target) = state.hits.at(ev.column, ev.row) else { return Vec::new() };
             let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
@@ -698,6 +727,7 @@ fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant) -> Vec<Cmd> {
                     state.tab = tab;
                     state.due.tail = None;
                 }
+                HitTarget::Divider => state.dragging_split = true,
                 HitTarget::Row(key) => {
                     select(state, key);
                     if let (true, RowKey::Issue(n)) = (double, key) {

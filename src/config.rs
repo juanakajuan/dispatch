@@ -7,10 +7,12 @@
 //! ```json
 //! {
 //!   "detect_waiting": true,
-//!   "claude_command": ["claude"]
+//!   "claude_command": ["claude"],
+//!   "split": 42
 //! }
 //! ```
 
+use crate::domain::Split;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -43,6 +45,9 @@ pub struct Config {
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
     pub claude_command: ClaudeCommand,
+    /// Where the list | detail border starts, and where `=` puts it back.
+    /// Resizes stay in memory; dispatch never writes this file.
+    pub split: Split,
 }
 
 impl Default for Config {
@@ -51,6 +56,7 @@ impl Default for Config {
             github_refresh: Duration::from_secs(60),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+            split: Split::DEFAULT,
         }
     }
 }
@@ -60,6 +66,7 @@ pub enum ConfigError {
     Read { path: PathBuf, source: std::io::Error },
     Json { path: PathBuf, message: String },
     BadCommand(&'static str),
+    BadSplit(u64),
 }
 
 impl fmt::Display for ConfigError {
@@ -68,6 +75,10 @@ impl fmt::Display for ConfigError {
             ConfigError::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
             ConfigError::BadCommand(why) => write!(f, "invalid config: claude_command {why}"),
+            ConfigError::BadSplit(value) => {
+                let (lo, hi) = (Split::PERCENT.start(), Split::PERCENT.end());
+                write!(f, "invalid config: split {value} is not a percent from {lo} to {hi}")
+            }
         }
     }
 }
@@ -77,6 +88,7 @@ impl fmt::Display for ConfigError {
 struct ConfigFile {
     detect_waiting: Option<bool>,
     claude_command: Option<Vec<String>>,
+    split: Option<u64>,
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -94,6 +106,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
             return Err(ConfigError::BadCommand("starts with an empty program name"));
         }
         config.claude_command = ClaudeCommand { program, args: parts.collect() };
+    }
+    if let Some(percent) = file.split {
+        config.split = Split::from_percent(percent).ok_or(ConfigError::BadSplit(percent))?;
     }
     Ok(config)
 }
@@ -132,6 +147,7 @@ mod tests {
         let c = Config::default();
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
+        assert_eq!(c.split, Split::DEFAULT);
     }
 
     #[test]
@@ -143,10 +159,12 @@ mod tests {
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"]}"#).expect("valid");
+        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30}"#)
+            .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
+        assert_eq!(c.split.list_width(100), 30);
     }
 
     #[test]
@@ -156,6 +174,9 @@ mod tests {
         assert!(matches!(parse_str(r#"{"claude_command":[]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"split":95}"#), Err(ConfigError::BadSplit(95))));
+        assert!(matches!(parse_str(r#"{"split":-1}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"split":"42"}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]
