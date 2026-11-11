@@ -63,6 +63,10 @@ Mouse: a click selects a row or a tab. A double-click on an issue opens the star
 
 The Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
 
+## Colors
+
+dispatch uses the Gruvbox dark colors for text. It paints no background, so the background of your terminal shows through.
+
 ## Config
 
 The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~/.config/dispatch/config.json`. Every field is optional. A field you set replaces the default.
