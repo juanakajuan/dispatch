@@ -71,7 +71,7 @@ pub fn skill_for<'c>(labels: &[String], config: &'c Config) -> (SkillChoice, Opt
 pub fn prompt_for(issue: &Issue) -> String {
     let n = issue.number.0;
     format!(
-        "Implement GitHub issue #{n}: {}\n\nRead the issue and its comments with `gh issue view {n} --comments`.\nAdd or update tests. Open a draft PR that closes #{n} when the tests pass.",
+        "Implement GitHub issue #{n}: {}\n\nRead the issue and its comments with `gh issue view {n} --comments`.\nAdd or update tests. Open a ready-for-review PR (not a draft) that closes #{n} when the tests pass.",
         issue.title
     )
 }
@@ -168,6 +168,16 @@ mod tests {
         assert_eq!(why, Some("bug"));
         assert_eq!(skill_for(&["p1".to_string()], &config), (None, None));
         assert_eq!(skill_for(&["BUG".to_string()], &config).0, Some(skill("pstack:tdd")));
+    }
+
+    #[test]
+    fn prompt_asks_for_a_ready_pr_not_a_draft() {
+        assert_eq!(
+            prompt_for(&issue(142, "Retry queue drops jobs", &[])),
+            "Implement GitHub issue #142: Retry queue drops jobs\n\n\
+             Read the issue and its comments with `gh issue view 142 --comments`.\n\
+             Add or update tests. Open a ready-for-review PR (not a draft) that closes #142 when the tests pass."
+        );
     }
 
     #[test]
