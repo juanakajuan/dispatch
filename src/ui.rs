@@ -119,6 +119,33 @@ fn fit(text: &str, width: usize) -> String {
     out
 }
 
+/// Cuts `path` from the start to at most `width` cells, so the last segments
+/// stay visible. The cut starts at a `/` when the rest still fits.
+fn fit_path(path: &str, width: usize) -> String {
+    if cells(path) <= width {
+        return path.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut kept = Vec::new();
+    let mut used = 0;
+    for c in path.chars().rev() {
+        let w = cells(c.encode_utf8(&mut [0; 4]));
+        if used + w + 1 > width {
+            break;
+        }
+        kept.push(c);
+        used += w;
+    }
+    let tail: String = kept.into_iter().rev().collect();
+    let tail = match tail.find('/') {
+        Some(i) if i + 1 < tail.len() => &tail[i..],
+        _ => &tail,
+    };
+    format!("…{tail}")
+}
+
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -150,8 +177,11 @@ fn row_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>) -> 
 }
 
 /// A detail row with a dim key in a fixed column.
+/// Cells taken by the key column of a detail field.
+const FIELD_KEY_CELLS: usize = 9;
+
 fn field(key: &str, value: Vec<Span<'static>>) -> Line<'static> {
-    let mut spans = vec![span(format!("{key:<9}"), palette::DIM)];
+    let mut spans = vec![span(format!("{key:<FIELD_KEY_CELLS$}"), palette::DIM)];
     spans.extend(value);
     Line::from(spans)
 }
@@ -543,7 +573,7 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
         Line::raw(""),
         field("state", vec![badge(Some(s), false)]),
         field("branch", vec![Span::raw(s.branch.as_str().to_string())]),
-        field("worktree", vec![Span::raw(s.worktree.as_path().display().to_string())]),
+        field("worktree", vec![Span::raw(fit_path(&s.worktree.as_path().display().to_string(), width.saturating_sub(FIELD_KEY_CELLS)))]),
         field("skill", vec![Span::raw(s.skill.as_ref().map_or_else(|| "automatic".to_string(), |k| k.as_str().to_string()))]),
     ];
     if let Some(p) = app::pr_for_session(state, s) {
@@ -716,6 +746,28 @@ mod tests {
         assert_eq!(fit("hello", 10), "hello");
         assert_eq!(fit("hello world", 6), "hello…");
         assert_eq!(fit("anything", 0), "");
+    }
+
+    #[test]
+    fn fit_path_keeps_the_last_segments() {
+        assert_eq!(fit_path("/w/orbit-3", 20), "/w/orbit-3");
+        assert_eq!(fit_path("/home/me/scratchpad/smoke/hf-1017", 26), "…/scratchpad/smoke/hf-1017");
+        assert_eq!(fit_path("/home/me/scratchpad/smoke/hf-1017", 24), "…/smoke/hf-1017", "the cut starts at a slash");
+        assert_eq!(fit_path("/a/very-long-final-segment", 10), "…l-segment", "a segment wider than the space is cut by cells");
+        assert_eq!(fit_path("/anything", 0), "");
+    }
+
+    #[test]
+    fn sessions_detail_shows_the_end_of_a_long_worktree_path() {
+        let (mut state, config) = full_state();
+        let long = "/home/someone/projects/a-very-long-directory-name/another-long-directory/scratchpad/smoke/hf-1017";
+        if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
+            s.worktree = WorktreePath::planned(PathBuf::from(long));
+        }
+        send(&mut state, &config, KeyCode::Char('3'));
+        let screen = text(&render(&state, &config, 80, 24));
+        let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
+        assert!(line.contains("…/") && line.trim_end().ends_with("/smoke/hf-1017"), "path end not visible in {line:?}\n{screen}");
     }
 
     fn full_state() -> (State, Config) {
