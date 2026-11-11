@@ -6,24 +6,15 @@
 //!
 //! ```json
 //! {
-//!   "skills": ["pstack:tdd", "pstack:architect"],
-//!   "label_skills": [{ "label": "bug", "skill": "pstack:tdd" }],
 //!   "detect_waiting": true,
 //!   "claude_command": ["claude"]
 //! }
 //! ```
 
-use crate::domain::SkillName;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LabelRule {
-    pub label: String,
-    pub skill: SkillName,
-}
 
 /// The program and leading args that start Claude. Dispatch appends its own
 /// args after these. The program is separate from the args, so an empty
@@ -46,12 +37,6 @@ impl ClaudeCommand {
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Ordered. First match wins.
-    pub label_rules: Vec<LabelRule>,
-    /// What the skill selector cycles through, after "automatic".
-    /// Invariant: contains every `label_rules[i].skill` (checked in `parse`),
-    /// so a default the dialog picks is always selectable.
-    pub skills: Vec<SkillName>,
     pub github_refresh: Duration,
     /// On by default. Sessions get Claude hooks that flag "waiting for you"
     /// on their tmux window (see `session::WAITING_HOOKS`). Turn it off if the
@@ -62,31 +47,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        const RULES: [(&str, &str); 5] = [
-            ("bug", "pstack:tdd"),
-            ("feature", "pstack:architect"),
-            ("enhancement", "pstack:architect"),
-            ("documentation", "pstack:technical-writing"),
-            ("docs", "pstack:technical-writing"),
-        ];
-        // The literals are valid, and `default_covers_every_literal` proves it,
-        // so `filter_map` drops nothing.
-        let label_rules: Vec<LabelRule> = RULES
-            .iter()
-            .filter_map(|(label, skill)| {
-                SkillName::parse(skill).ok().map(|skill| LabelRule { label: (*label).to_string(), skill })
-            })
-            .collect();
-        let mut skills = Vec::new();
-        for r in &label_rules {
-            push_unique(&mut skills, r.skill.clone());
-        }
-        if let Ok(s) = SkillName::parse("pstack:figure-it-out") {
-            push_unique(&mut skills, s);
-        }
         Config {
-            label_rules,
-            skills,
             github_refresh: Duration::from_secs(60),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
@@ -94,17 +55,10 @@ impl Default for Config {
     }
 }
 
-fn push_unique(skills: &mut Vec<SkillName>, skill: SkillName) {
-    if !skills.contains(&skill) {
-        skills.push(skill);
-    }
-}
-
 #[derive(Debug)]
 pub enum ConfigError {
     Read { path: PathBuf, source: std::io::Error },
     Json { path: PathBuf, message: String },
-    BadSkill { value: String, reason: String },
     BadCommand(&'static str),
 }
 
@@ -113,7 +67,6 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
-            ConfigError::BadSkill { value, reason } => write!(f, "invalid config: skill {value:?}: {reason}"),
             ConfigError::BadCommand(why) => write!(f, "invalid config: claude_command {why}"),
         }
     }
@@ -122,21 +75,8 @@ impl fmt::Display for ConfigError {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
-    skills: Option<Vec<String>>,
-    label_skills: Option<Vec<WireLabelSkill>>,
     detect_waiting: Option<bool>,
     claude_command: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireLabelSkill {
-    label: String,
-    skill: String,
-}
-
-fn skill(value: &str) -> Result<SkillName, ConfigError> {
-    SkillName::parse(value).map_err(|reason| ConfigError::BadSkill { value: value.to_string(), reason })
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -144,18 +84,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     let file: ConfigFile = serde_json::from_str(text)
         .map_err(|e| ConfigError::Json { path: path.to_path_buf(), message: e.to_string() })?;
     let mut config = Config::default();
-    if let Some(rules) = file.label_skills {
-        config.label_rules = rules
-            .iter()
-            .map(|r| skill(&r.skill).map(|skill| LabelRule { label: r.label.clone(), skill }))
-            .collect::<Result<_, _>>()?;
-    }
-    if let Some(names) = file.skills {
-        config.skills = names.iter().map(|n| skill(n)).collect::<Result<_, _>>()?;
-    }
-    for rule in &config.label_rules {
-        push_unique(&mut config.skills, rule.skill.clone());
-    }
     if let Some(detect) = file.detect_waiting {
         config.detect_waiting = detect;
     }
@@ -202,10 +130,6 @@ mod tests {
     #[test]
     fn default_covers_every_literal() {
         let c = Config::default();
-        assert_eq!(c.label_rules.len(), 5);
-        assert_eq!(c.skills.len(), 4);
-        assert!(c.label_rules.iter().all(|r| c.skills.contains(&r.skill)));
-        assert!(c.skills.iter().any(|s| s.as_str() == "pstack:figure-it-out"));
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
     }
@@ -213,20 +137,13 @@ mod tests {
     #[test]
     fn empty_object_is_the_default() {
         let c = parse_str("{}").expect("valid");
-        assert_eq!(c.skills, Config::default().skills);
-        assert_eq!(c.label_rules, Config::default().label_rules);
+        assert!(c.detect_waiting);
+        assert_eq!(c.claude_command, Config::default().claude_command);
     }
 
     #[test]
-    fn fields_replace_defaults_and_rule_skills_are_selectable() {
-        let c = parse_str(
-            r#"{"skills":["a"],"label_skills":[{"label":"x","skill":"b:c"}],
-                "detect_waiting":false,"claude_command":["sh","-c","echo","_"]}"#,
-        )
-        .expect("valid");
-        let names: Vec<_> = c.skills.iter().map(SkillName::as_str).collect();
-        assert_eq!(names, ["a", "b:c"]);
-        assert_eq!(c.label_rules.len(), 1);
+    fn fields_replace_defaults() {
+        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"]}"#).expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
@@ -235,8 +152,7 @@ mod tests {
     #[test]
     fn invalid_files_are_errors() {
         assert!(matches!(parse_str("not json"), Err(ConfigError::Json { .. })));
-        assert!(matches!(parse_str(r#"{"skils":[]}"#), Err(ConfigError::Json { .. })));
-        assert!(matches!(parse_str(r#"{"skills":["a b"]}"#), Err(ConfigError::BadSkill { .. })));
+        assert!(matches!(parse_str(r#"{"skills":[]}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"claude_command":[]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));

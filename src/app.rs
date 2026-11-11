@@ -4,7 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest, SkillChoice};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest};
 use crate::rules;
 use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -63,10 +63,6 @@ pub struct StartDialog {
     pub issue: IssueNumber,
     pub title: String,
     pub branch: tui_textarea::TextArea<'static>,
-    /// Index into `choices`; 0 is "automatic".
-    pub skill: usize,
-    pub choices: Vec<SkillChoice>,
-    pub skill_reason: Option<String>,
     pub mode: Mode,
     pub prompt: tui_textarea::TextArea<'static>,
     pub field: DialogField,
@@ -77,12 +73,11 @@ pub struct StartDialog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DialogField {
     Branch,
-    Skill,
     Mode,
     Prompt,
 }
 
-const FIELDS: [DialogField; 4] = [DialogField::Branch, DialogField::Skill, DialogField::Mode, DialogField::Prompt];
+const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, DialogField::Prompt];
 
 /// One flag per job kind. The tick only schedules a job whose flag is clear,
 /// so a slow `gh` never stacks up a second call.
@@ -377,12 +372,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             Focus::List => {
                 let armed = state.armed_merge.take();
                 match action_for(&ev) {
-                    Some(action) => act(state, action, armed, config),
+                    Some(action) => act(state, action, armed),
                     None => Vec::new(),
                 }
             }
         },
-        Msg::Mouse(ev, now) => on_mouse(state, &ev, now, config),
+        Msg::Mouse(ev, now) => on_mouse(state, &ev, now),
         Msg::Tick(now) => tick(state, now, config),
         Msg::Issues(result) => {
             state.inflight.issues = false;
@@ -523,7 +518,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 }
 
 /// `armed` is the merge a previous `m` armed; only a second `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<MergeAsk>, config: &Config) -> Vec<Cmd> {
+fn act(state: &mut State, action: Action, armed: Option<MergeAsk>) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -531,9 +526,9 @@ fn act(state: &mut State, action: Action, armed: Option<MergeAsk>, config: &Conf
         }
         Action::Down => move_selection(state, Move::Down),
         Action::Up => move_selection(state, Move::Up),
-        Action::Start => return start_key(state, config),
+        Action::Start => return start_key(state),
         Action::Enter => match state.tab {
-            Tab::Issues => return start_key(state, config),
+            Tab::Issues => return start_key(state),
             Tab::Prs => go_to_issue_of_pr(state),
             Tab::Sessions => return attach_key(state),
         },
@@ -621,21 +616,21 @@ fn merge_key(state: &mut State, armed: Option<MergeAsk>) -> Vec<Cmd> {
 }
 
 /// `s` or Enter on an issue, or a double-click on one.
-fn start_key(state: &mut State, config: &Config) -> Vec<Cmd> {
+fn start_key(state: &mut State) -> Vec<Cmd> {
     let Some(RowKey::Issue(n)) = selected_row(state).filter(|_| state.tab == Tab::Issues) else {
         return Vec::new();
     };
-    start_issue(state, n, config);
+    start_issue(state, n);
     Vec::new()
 }
 
-fn start_issue(state: &mut State, n: IssueNumber, config: &Config) {
+fn start_issue(state: &mut State, n: IssueNumber) {
     if state.sessions.contains_key(&n) {
         goto_session(state, n);
     } else if state.starting.contains(&n) {
         say(state, format!("#{} is already starting", n.0));
     } else if let Some(issue) = state.issues.items.iter().find(|i| i.number == n) {
-        state.focus = Focus::Dialog(Box::new(open_dialog(issue, config)));
+        state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
     }
 }
 
@@ -687,7 +682,7 @@ fn select(state: &mut State, key: RowKey) {
     state.due.tail = None;
 }
 
-fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant, config: &Config) -> Vec<Cmd> {
+fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant) -> Vec<Cmd> {
     if !matches!(state.focus, Focus::List) {
         return Vec::new();
     }
@@ -706,7 +701,7 @@ fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant, config: &Config) -
                 HitTarget::Row(key) => {
                     select(state, key);
                     if let (true, RowKey::Issue(n)) = (double, key) {
-                        start_issue(state, n, config);
+                        start_issue(state, n);
                     }
                 }
             }
@@ -735,11 +730,8 @@ fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 
 // ---- the start dialog --------------------------------------------------------
 
-fn open_dialog(issue: &Issue, config: &Config) -> StartDialog {
-    let defaults = rules::start_defaults(issue, config);
-    let mut choices: Vec<SkillChoice> = vec![None];
-    choices.extend(config.skills.iter().cloned().map(Some));
-    let skill = choices.iter().position(|c| *c == defaults.skill).unwrap_or(0);
+fn open_dialog(issue: &Issue) -> StartDialog {
+    let defaults = rules::start_defaults(issue);
     let mut branch = tui_textarea::TextArea::new(vec![defaults.branch.as_str().to_string()]);
     branch.move_cursor(tui_textarea::CursorMove::End);
     let prompt = tui_textarea::TextArea::new(defaults.prompt.split('\n').map(str::to_string).collect());
@@ -747,9 +739,6 @@ fn open_dialog(issue: &Issue, config: &Config) -> StartDialog {
         issue: issue.number,
         title: issue.title.clone(),
         branch,
-        skill,
-        choices,
-        skill_reason: defaults.skill_reason,
         mode: defaults.mode,
         prompt,
         field: DialogField::Branch,
@@ -767,13 +756,9 @@ fn dialog_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
         Some(Key::Code(KeyCode::Enter)) if dialog.field != DialogField::Prompt => return confirm_dialog(state),
         Some(Key::Code(KeyCode::Enter)) if ev.modifiers.contains(KeyModifiers::CONTROL) => return confirm_dialog(state),
         Some(Key::Code(KeyCode::Tab)) => dialog.field = step_field(dialog.field, 1),
-        Some(Key::Code(KeyCode::BackTab)) => dialog.field = step_field(dialog.field, 3),
+        Some(Key::Code(KeyCode::BackTab)) => dialog.field = step_field(dialog.field, FIELDS.len() - 1),
         Some(Key::Code(KeyCode::Down)) if dialog.field != DialogField::Prompt => dialog.field = step_field(dialog.field, 1),
-        Some(Key::Code(KeyCode::Up)) if dialog.field != DialogField::Prompt => dialog.field = step_field(dialog.field, 3),
-        Some(Key::Code(code @ (KeyCode::Left | KeyCode::Right))) if dialog.field == DialogField::Skill => {
-            let n = dialog.choices.len();
-            dialog.skill = if code == KeyCode::Right { (dialog.skill + 1) % n } else { (dialog.skill + n - 1) % n };
-        }
+        Some(Key::Code(KeyCode::Up)) if dialog.field != DialogField::Prompt => dialog.field = step_field(dialog.field, FIELDS.len() - 1),
         Some(Key::Code(KeyCode::Left | KeyCode::Right) | Key::Char(' ')) if dialog.field == DialogField::Mode => {
             dialog.mode = match dialog.mode {
                 Mode::PlanFirst => Mode::Implement,
@@ -814,7 +799,6 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     let req = StartRequest {
         issue: dialog.issue,
         branch,
-        skill: dialog.choices.get(dialog.skill).cloned().flatten(),
         mode: dialog.mode,
         prompt,
     };
@@ -919,7 +903,7 @@ pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a Pul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{SkillName, WorktreePath};
+    use crate::domain::WorktreePath;
     use crate::session::Window;
     use crate::testutil::{issue, pr};
     use ratatui::layout::Rect;
@@ -946,7 +930,6 @@ mod tests {
             issue: IssueNumber(n),
             branch: BranchName::parse(&format!("fix/{n}-x")).expect("branch"),
             worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
-            skill: SkillName::parse("pstack:tdd").ok(),
             window: window.map(|(alive, waiting)| Window { id: WindowId::parse(&format!("@{n}")).expect("id"), alive, waiting }),
         }
     }
@@ -994,8 +977,6 @@ mod tests {
         assert!(press(&mut state, &config, key('s')).is_empty());
         let d = dialog(&state);
         assert_eq!(d.branch.lines(), ["fix/3-retry-queue-drops-jobs"]);
-        assert_eq!(d.choices[d.skill].as_ref().map(SkillName::as_str), Some("pstack:tdd"));
-        assert_eq!(d.skill_reason.as_deref(), Some("bug"));
         assert!(d.prompt.lines()[0].starts_with("Implement GitHub issue #3: Retry queue drops jobs"));
     }
 
@@ -1046,7 +1027,7 @@ mod tests {
     fn enter_confirms_on_the_branch_field_but_adds_a_newline_in_the_prompt() {
         let (mut state, config, _) = app();
         press(&mut state, &config, key('s'));
-        for _ in 0..3 {
+        for _ in 0..2 {
             press(&mut state, &config, code(KeyCode::Tab));
         }
         assert_eq!(dialog(&state).field, DialogField::Prompt);
@@ -1060,18 +1041,18 @@ mod tests {
     }
 
     #[test]
-    fn dialog_skill_and_mode_cycle_and_reach_the_request() {
+    fn dialog_mode_toggles_and_reaches_the_request() {
         let (mut state, config, _) = app();
         press(&mut state, &config, key('s'));
+        press(&mut state, &config, code(KeyCode::BackTab));
+        assert_eq!(dialog(&state).field, DialogField::Prompt);
         press(&mut state, &config, code(KeyCode::Tab));
-        press(&mut state, &config, code(KeyCode::Left));
-        assert_eq!(dialog(&state).skill, 0, "tdd is first after automatic");
         press(&mut state, &config, code(KeyCode::Tab));
+        assert_eq!(dialog(&state).field, DialogField::Mode);
         press(&mut state, &config, code(KeyCode::Right));
         assert_eq!(dialog(&state).mode, Mode::PlanFirst);
         let cmds = press(&mut state, &config, ctrl('s'));
-        let reqs = starts(&cmds);
-        assert_eq!((reqs[0].skill.clone(), reqs[0].mode), (None, Mode::PlanFirst));
+        assert_eq!(starts(&cmds)[0].mode, Mode::PlanFirst);
     }
 
     #[test]
