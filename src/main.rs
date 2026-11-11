@@ -136,6 +136,10 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         Job::FetchIssues => spawn_read(ws, tx, |ws| Msg::Issues(github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string()))),
         Job::FetchPrs => spawn_read(ws, tx, |ws| Msg::Prs(github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string()))),
         Job::ObserveSessions => spawn_read(ws, tx, |ws| Msg::Sessions(ws.observe().map_err(|e| e.to_string()))),
+        Job::Open(target) => spawn_read(ws, tx, move |ws| Msg::Opened {
+            target,
+            result: github::open_in_browser(ws.repo_root(), target).map_err(|e| e.to_string()),
+        }),
         Job::Tail(id) => spawn_read(ws, tx, move |ws| {
             let result = ws.tail(&id, app::TAIL_LINES).map_err(|e| e.to_string());
             Msg::Tail { window: id, result }
