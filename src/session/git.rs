@@ -1,7 +1,7 @@
 //! git adapter. Private to `session`. Parsers are pure and tested on text
 //! captured from git 2.56.
 
-use crate::domain::{BranchName, IssueNumber, SkillChoice, SkillName, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -13,14 +13,8 @@ pub(super) struct Worktree {
     pub branch: Option<BranchName>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Marker {
-    pub issue: IssueNumber,
-    pub skill: SkillChoice,
-}
-
-/// branch -> marker. Only branches whose `dispatch-issue` parsed.
-pub(super) type Markers = BTreeMap<BranchName, Marker>;
+/// branch -> issue, from `dispatch-issue`. Only values that parsed.
+pub(super) type Markers = BTreeMap<BranchName, IssueNumber>;
 
 fn git<I, S>(root: &Path, args: I) -> Result<String, ProcError>
 where
@@ -89,7 +83,7 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
 }
 
 pub(super) fn list_markers(root: &Path) -> Result<Markers, String> {
-    match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-(issue|skill)$"]) {
+    match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-issue$"]) {
         Ok(t) => Ok(parse_markers(&t)),
         Err(e) if e.exit_code() == Some(1) => Ok(Markers::new()),
         Err(e) => Err(e.to_string()),
@@ -98,29 +92,13 @@ pub(super) fn list_markers(root: &Path) -> Result<Markers, String> {
 
 /// Lines like `branch.fix/142-retry-queue.dispatch-issue 142`.
 /// The branch is everything between `branch.` and the last `.`; the value is
-/// everything after the first space. Skill without issue -> dropped.
+/// everything after the first space.
 fn parse_markers(text: &str) -> Markers {
-    let mut issues: BTreeMap<BranchName, IssueNumber> = BTreeMap::new();
-    let mut skills: BTreeMap<BranchName, SkillName> = BTreeMap::new();
-    for line in text.lines() {
-        let Some((key, value)) = line.split_once(' ') else { continue };
-        let Some(rest) = key.strip_prefix("branch.") else { continue };
-        let value = value.trim();
-        if let Some(b) = rest.strip_suffix(".dispatch-issue") {
-            if let (Ok(branch), Ok(n)) = (BranchName::parse(b), value.parse::<u32>()) {
-                issues.insert(branch, IssueNumber(n));
-            }
-        } else if let (Some(b), Ok(skill)) = (rest.strip_suffix(".dispatch-skill"), SkillName::parse(value))
-            && let Ok(branch) = BranchName::parse(b)
-        {
-            skills.insert(branch, skill);
-        }
-    }
-    issues
-        .into_iter()
-        .map(|(branch, issue)| {
-            let skill = skills.remove(&branch);
-            (branch, Marker { issue, skill })
+    text.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(' ')?;
+            let b = key.strip_prefix("branch.")?.strip_suffix(".dispatch-issue")?;
+            Some((BranchName::parse(b).ok()?, IssueNumber(value.trim().parse().ok()?)))
         })
         .collect()
 }
@@ -149,17 +127,9 @@ pub(super) fn add_worktree(root: &Path, dir: &Path, branch: &BranchName, create_
     .map(|_| ())
 }
 
-pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber, skill: &SkillChoice) -> Result<(), String> {
-    let key = |suffix: &str| format!("branch.{}.{suffix}", branch.as_str());
-    text(root, ["config".to_string(), key("dispatch-issue"), issue.0.to_string()])?;
-    match skill {
-        Some(s) => text(root, ["config".to_string(), key("dispatch-skill"), s.as_str().to_string()]).map(|_| ()),
-        None => match git(root, ["config".to_string(), "--unset".to_string(), key("dispatch-skill")]) {
-            Ok(_) => Ok(()),
-            Err(e) if e.exit_code() == Some(5) => Ok(()),
-            Err(e) => Err(e.to_string()),
-        },
-    }
+pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), String> {
+    let key = format!("branch.{}.dispatch-issue", branch.as_str());
+    text(root, ["config".to_string(), key, issue.0.to_string()]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -204,19 +174,13 @@ mod tests {
     #[test]
     fn markers_from_real_regexp_output() {
         let text = "branch.fix/1-a.b-c.dispatch-issue 1\n\
-                    branch.fix/1-a.b-c.dispatch-skill pstack:tdd\n\
                     branch.feat/2-x.dispatch-issue abc\n\
-                    branch.feat/2-x.dispatch-skill pstack:x\n\
-                    branch.main.dispatch-skill pstack:y\n\
                     branch.feat/3.dispatch-issue 3\n";
         let m = parse_markers(text);
         assert_eq!(m.len(), 2);
-        let one = &m[&branch("fix/1-a.b-c")];
-        assert_eq!(one.issue, IssueNumber(1));
-        assert_eq!(one.skill.as_ref().map(SkillName::as_str), Some("pstack:tdd"));
-        assert_eq!(m[&branch("feat/3")].skill, None);
+        assert_eq!(m[&branch("fix/1-a.b-c")], IssueNumber(1));
+        assert_eq!(m[&branch("feat/3")], IssueNumber(3));
         assert!(!m.contains_key(&branch("feat/2-x")), "non-numeric issue is dropped");
-        assert!(!m.contains_key(&branch("main")), "skill without issue is dropped");
     }
 
     #[test]
@@ -225,14 +189,6 @@ mod tests {
         fake::install(|_| Ok(String::new()));
         fetch(Path::new("/"), "origin/main").expect("ok");
         assert_eq!(fake::calls(), ["git fetch origin main"]);
-    }
-
-    #[test]
-    fn unset_of_an_absent_skill_is_fine() {
-        use crate::proc::fake;
-        fake::install(|call| if call.contains("--unset") { Err(fake::fail("git", 5, "")) } else { Ok(String::new()) });
-        set_marker(Path::new("/"), &branch("a/b"), IssueNumber(4), &None).expect("ok");
-        assert_eq!(fake::calls(), ["git config branch.a/b.dispatch-issue 4", "git config --unset branch.a/b.dispatch-skill"]);
     }
 
     #[test]

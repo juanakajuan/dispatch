@@ -602,7 +602,6 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
         field("state", vec![badge(Some(s), false)]),
         field("branch", vec![Span::raw(s.branch.as_str().to_string())]),
         field("worktree", vec![Span::raw(fit_path(&s.worktree.as_path().display().to_string(), width.saturating_sub(FIELD_KEY_CELLS)))]),
-        field("skill", vec![Span::raw(s.skill.as_ref().map_or_else(|| "automatic".to_string(), |k| k.as_str().to_string()))]),
     ];
     if let Some(p) = app::pr_for_session(state, s) {
         head.push(field("pr", vec![Span::raw(format!("#{} ", p.number.0)), checks_span(p.checks), Span::raw(" "), pr_state_span(p.state)]));
@@ -624,9 +623,8 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
 /// The exact commands the dialog will run, for the "Runs" preview.
 fn preview(state: &State, dialog: &StartDialog, config: &Config) -> Vec<String> {
     let branch = dialog.branch.lines().join("");
-    let skill = dialog.choices.get(dialog.skill).cloned().flatten();
     let prompt = dialog.prompt.lines().join("\n");
-    let args = rules::claude_args(dialog.mode, &skill, prompt.trim(), None);
+    let args = rules::claude_args(dialog.mode, prompt.trim(), None);
     let shown: Vec<String> = config
         .claude_command
         .argv(&args)
@@ -675,11 +673,9 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let [branch_l, branch, _, skill, _, mode, _, prompt_l, prompt, _, runs, error] = Layout::vertical([
+    let [branch_l, branch, _, mode, _, prompt_l, prompt, _, runs, error] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(2),
         Constraint::Length(1),
@@ -695,25 +691,6 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
     frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
 
-    let chosen = d.choices.get(d.skill).cloned().flatten();
-    let hint = match (&chosen, &d.skill_reason) {
-        (Some(_), Some(label)) => format!("default from the {label} label"),
-        (None, _) => "no /skill prefix; the pstack session hook decides".to_string(),
-        _ => "the skill goes at the start of the prompt".to_string(),
-    };
-    let name = chosen.as_ref().map_or("automatic", |s| s.as_str());
-    frame.render_widget(
-        Paragraph::new(vec![
-            field_label("Skill", focus(DialogField::Skill)),
-            Line::from(vec![
-                span("  ‹ ", palette::DIM),
-                Span::raw(name.to_string()),
-                span(" ›   ", palette::DIM),
-                span(hint, palette::DIM),
-            ]),
-        ]),
-        skill,
-    );
     let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
         if on {
             vec![span("● ", palette::ACCENT), Span::raw(text.to_string())]
@@ -817,7 +794,6 @@ mod tests {
                 issue: IssueNumber(3),
                 branch: BranchName::parse("fix/3-x").expect("branch"),
                 worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),
-                skill: None,
                 window: Some(Window { id: id.clone(), alive: true, waiting: true }),
             },
         );
@@ -941,7 +917,6 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('3'));
         let screen = text(&render(&state, &config, 120, 24));
         assert!(screen.contains("worktree /w/orbit-3"));
-        assert!(screen.contains("skill    automatic"));
         let lines: Vec<&str> = screen.lines().collect();
         let rule = lines.iter().position(|l| l.contains("output ─")).expect("output rule drawn");
         assert!(lines[rule + 1].contains("fake output"));
@@ -954,7 +929,7 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('j'));
         send(&mut state, &config, KeyCode::Char('s'));
         let screen = text(&render(&state, &config, 120, 30));
-        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "‹ pstack:technical-writing ›", "default from the docs label", "Implement directly", "Runs", "$ git worktree add ../orbit-2 -b docs/2-docs origin/main", "claude \"/pstack:technical-writing Implement GitHub issue #2: Docs", "ctrl-s start"] {
+        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "$ git worktree add ../orbit-2 -b docs/2-docs origin/main", "claude \"Implement GitHub issue #2: Docs", "ctrl-s start"] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
     }

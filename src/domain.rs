@@ -84,36 +84,6 @@ pub enum BranchNameError {
     BadSequence(&'static str),
 }
 
-/// A skill name as typed after `/`, for example `pstack:tdd`.
-/// Invariant: matches `[A-Za-z0-9_-]+(:[A-Za-z0-9_-]+)?`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SkillName(String);
-
-impl SkillName {
-    pub fn parse(raw: &str) -> Result<SkillName, String> {
-        let valid_part = |part: &str| {
-            !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-        };
-        let mut parts = raw.split(':');
-        let ok = match (parts.next(), parts.next(), parts.next()) {
-            (Some(a), None, _) => valid_part(a),
-            (Some(a), Some(b), None) => valid_part(a) && valid_part(b),
-            _ => false,
-        };
-        if ok {
-            Ok(SkillName(raw.to_string()))
-        } else {
-            Err(format!("invalid skill name {raw:?}, expected name or plugin:name"))
-        }
-    }
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// `None` in the UI is "automatic": no `/<skill>` prefix.
-pub type SkillChoice = Option<SkillName>;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     PlanFirst,
@@ -286,16 +256,6 @@ mod tests {
         assert_eq!(BranchName::parse("a\\b"), Err(BranchNameError::BadChar('\\')));
         for bad in ["-x", "/x", "x/", "x.", "x.lock", "a..b", "a//b", "a@{b", "@", "a/.b"] {
             assert!(matches!(BranchName::parse(bad), Err(BranchNameError::BadSequence(_))), "{bad}");
-        }
-    }
-
-    #[test]
-    fn skill_name_shapes() {
-        for ok in ["pstack:tdd", "tdd", "a_b-c:d_e"] {
-            assert!(SkillName::parse(ok).is_ok(), "{ok}");
-        }
-        for bad in ["", ":", "a:", ":a", "a:b:c", "a b", "/tdd", "a/b"] {
-            assert!(SkillName::parse(bad).is_err(), "{bad}");
         }
     }
 

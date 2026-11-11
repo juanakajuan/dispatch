@@ -2,7 +2,7 @@
 
 ## Problem
 
-The user wants one terminal app that lists the GitHub issues and pull requests of the repo they stand in. From that app they pick an issue and start a Claude Code session for it in its own worktree and tmux window, with a pstack skill. The shape is not obvious for three reasons. First, a session is spread over three systems that dispatch does not own: a git worktree, a branch, and a tmux window. Any of them can change while dispatch is not running. Second, sessions must survive a crash of dispatch, and a start that runs twice must not make two worktrees. Third, the UI must not freeze while `gh` runs, and `attach` outside tmux must hand the real terminal to `tmux attach` and get it back. The work is greenfield, so Phase A had no code to ground on. I checked real output formats instead: tmux 3.8 `list-windows -a -F` (an unset `@option` prints an empty field), `gh pr list --json` (`statusCheckRollup` mixes `CheckRun` and `StatusContext` items, told apart by `__typename`), `git worktree list --porcelain`, and `claude --help` (`--permission-mode`, `--settings <file-or-json>`, `--continue` exist). The tmux man page confirms that `new-window` with more than one argument execs the command directly, without `sh -c`.
+The user wants one terminal app that lists the GitHub issues and pull requests of the repo they stand in. From that app they pick an issue and start a Claude Code session for it in its own worktree and tmux window. The shape is not obvious for three reasons. First, a session is spread over three systems that dispatch does not own: a git worktree, a branch, and a tmux window. Any of them can change while dispatch is not running. Second, sessions must survive a crash of dispatch, and a start that runs twice must not make two worktrees. Third, the UI must not freeze while `gh` runs, and `attach` outside tmux must hand the real terminal to `tmux attach` and get it back. The work is greenfield, so Phase A had no code to ground on. I checked real output formats instead: tmux 3.8 `list-windows -a -F` (an unset `@option` prints an empty field), `gh pr list --json` (`statusCheckRollup` mixes `CheckRun` and `StatusContext` items, told apart by `__typename`), `git worktree list --porcelain`, and `claude --help` (`--permission-mode`, `--settings <file-or-json>`, `--continue` exist). The tmux man page confirms that `new-window` with more than one argument execs the command directly, without `sh -c`.
 
 ## Usage (caller's view)
 
@@ -16,11 +16,10 @@ $ cd ~/src/orbit && dispatch
   j/k move  1-3 tabs  s start session  a attach  x stop  r refresh  / filter  q quit
 ```
 
-- Press `s`, Enter, or double-click on an issue. A dialog opens with the branch (`fix/142-retry-queue-drops-jobs`), the skill (`pstack:tdd`, because of the `bug` label), the mode, and the prompt. The dialog also shows the exact commands it will run. Press Ctrl-S to start.
+- Press `s`, Enter, or double-click on an issue. A dialog opens with the branch (`fix/142-retry-queue-drops-jobs`), the mode, and the prompt. The dialog also shows the exact commands it will run. Press Ctrl-S to start.
 - dispatch makes `../orbit-142` with `git worktree add ../orbit-142 -b fix/142-... origin/main`. It then opens a tmux window `#142` that runs `claude [--permission-mode plan] "/pstack:tdd Implement GitHub issue #142: ..."`.
 - On the Sessions tab, the detail pane shows the last lines of the Claude pane, refreshed each second. `a` attaches. Inside tmux, `a` selects the window. Outside tmux, dispatch suspends and runs `tmux attach`, and the TUI comes back when you detach. `x` kills the window, and the worktree stays. `a` on an exited session runs `claude --continue` in the same worktree.
 - Quit dispatch, kill it, or reboot. Run `dispatch` again and the same sessions are there. Nothing to clean up, because dispatch writes no state file.
-- `~/.config/dispatch/config.toml` (optional) replaces the label-to-skill table and the skill list.
 
 The internal call sites the sketch is derived from:
 
@@ -48,8 +47,8 @@ Module map (about 2.3k lines with tests):
 
 | module | owns | public surface |
 |---|---|---|
-| `domain` | validated types: `IssueNumber`, `PrNumber`, `BranchName`, `SkillName`, `WorktreePath`, `Issue`, `PullRequest`, `Checks` | types and their `parse` |
-| `rules` | pure product rules: branch slug, prompt, label-to-skill, `claude` argv, worktree dir, filter | pure functions |
+| `domain` | validated types: `IssueNumber`, `PrNumber`, `BranchName`, `WorktreePath`, `Issue`, `PullRequest`, `Checks` | types and their `parse` |
+| `rules` | pure product rules: branch slug, prompt, `claude` argv, worktree dir, filter | pure functions |
 | `config` | optional TOML, validated into `Config` | `load()` |
 | `github` | `gh` calls and private wire structs | `fetch_issues`, `fetch_prs` |
 | `session` (+ private `git`, `tmux`) | everything about worktrees, branches, windows | `Workspace::{discover, observe, start, resume, stop, tail, attach_plan}`, `Session`, `SessionState` |
@@ -127,7 +126,6 @@ Rejected: the fixed-path and `pane_start_path` link of candidate 2 (a shell the 
 Each item lists a change from the sketch and the reason.
 
 **Config**
-- `label_skills` is an array of `{label, skill}` objects, not an object map. Reason: table order is the priority, and a JSON object does not keep order in `serde_json`.
 - `Config` gains `claude_command: ClaudeCommand { program, args }`. Reason: a program plus args makes an empty command unrepresentable. `config::parse(text, path)` is pure and tested. `load()` only reads the file. The file uses `deny_unknown_fields`, so a typo is an error.
 - `Workspace::discover(cwd, &Config)` replaces `discover(cwd, detect_waiting)`, because it also needs `claude_command`. `Layout` drops `place` and `base` (only `Workspace` uses them) and gains `claude`.
 

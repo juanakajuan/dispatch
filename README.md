@@ -1,6 +1,6 @@
 # dispatch
 
-dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start a Claude Code session for it. Each session gets its own git worktree and its own tmux window, and you choose a skill for it.
+dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start a Claude Code session for it. Each session gets its own git worktree and its own tmux window.
 
 ## Requirements
 
@@ -27,7 +27,6 @@ There are three tabs: Issues, Pull requests, and Sessions. The list is on the le
 To start a session, select an issue and press `s`, press Enter, or double-click it. A dialog opens with these fields:
 
 - Branch, for example `fix/142-retry-queue-drops-jobs`.
-- Skill, chosen from the issue labels. For example `bug` gives `pstack:tdd`. Automatic means no `/skill` prefix.
 - Mode: plan first, or implement directly.
 - Prompt. You can edit it.
 
@@ -37,7 +36,7 @@ dispatch then does this:
 
 1. It fetches the default branch.
 2. It runs `git worktree add ../<repo>-<issue> -b <branch> origin/<default>`.
-3. It opens a tmux window named `#<issue>` that runs `claude [--permission-mode plan] "/<skill> <prompt>"` in the worktree.
+3. It opens a tmux window named `#<issue>` that runs `claude [--permission-mode plan] "<prompt>"` in the worktree. The prompt has no `/skill` prefix. A SessionStart hook, such as pstack's, picks the workflow.
 
 Each worktree is a new directory. Claude Code asks if you trust the directory the first time, unless you trusted a parent directory before. Attach to the session with `a` to answer. The session does not show `needs you` during this question.
 
@@ -75,7 +74,7 @@ If more than one PR closes the issue, the row shows the most advanced one: merge
 | `=` | Put the border back where it started |
 | `q`, Ctrl-C | Quit |
 
-In the dialog: Tab and Shift-Tab change the field, Left and Right change the skill or the mode, Esc cancels.
+In the dialog: Tab and Shift-Tab change the field, Left and Right change the mode, Esc cancels.
 
 Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection. Drag the border between the list and the details to resize them.
 
@@ -93,19 +92,12 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 
 ```json
 {
-  "skills": ["pstack:tdd", "pstack:architect", "pstack:technical-writing"],
-  "label_skills": [
-    { "label": "bug", "skill": "pstack:tdd" },
-    { "label": "feature", "skill": "pstack:architect" }
-  ],
   "detect_waiting": true,
   "claude_command": ["claude"],
   "split": 42
 }
 ```
 
-- `skills` is the list the skill selector cycles through.
-- `label_skills` is checked in order. The first label that the issue has wins. Skills named here are added to `skills`.
 - `detect_waiting` is on by default. dispatch passes `--settings` with four hooks to `claude`. They set a flag on the tmux window when Claude waits for you. Set it to `false` if the hooks conflict with yours.
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
 - `split` is the width of the list as a percent of the window, from 10 to 90. The default is 42. `=` puts the border back here.
@@ -116,7 +108,7 @@ An invalid file stops dispatch at start with a message. Unknown fields are error
 
 dispatch writes no state file. A session is derived from git and tmux each time:
 
-- A branch that dispatch made has `branch.<name>.dispatch-issue` (and `dispatch-skill`) in `.git/config`.
+- A branch that dispatch made has `branch.<name>.dispatch-issue` in `.git/config`.
 - The worktree of that branch is the session's directory.
 - A tmux window with the option `@dispatch-worktree` set to that directory is the session's window.
 

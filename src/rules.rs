@@ -1,27 +1,20 @@
 //! Pure product rules. No I/O. Every function here has unit tests that need
 //! no `gh`, `git`, or `tmux`.
 
-use crate::config::Config;
-use crate::domain::{BranchName, Issue, IssueNumber, Mode, PrNumber, SkillChoice};
+use crate::domain::{BranchName, Issue, IssueNumber, Mode, PrNumber};
 use std::path::Path;
 
 /// The editable defaults the start dialog opens with.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartDefaults {
     pub branch: BranchName,
-    pub skill: SkillChoice,
-    /// The label that picked `skill`, shown as the dialog hint.
-    pub skill_reason: Option<String>,
     pub mode: Mode,
     pub prompt: String,
 }
 
-pub fn start_defaults(issue: &Issue, config: &Config) -> StartDefaults {
-    let (skill, reason) = skill_for(&issue.labels, config);
+pub fn start_defaults(issue: &Issue) -> StartDefaults {
     StartDefaults {
         branch: branch_for(issue),
-        skill,
-        skill_reason: reason.map(str::to_string),
         mode: Mode::Implement,
         prompt: prompt_for(issue),
     }
@@ -58,16 +51,6 @@ pub fn branch_for(issue: &Issue) -> BranchName {
     BranchName::parse(&name).unwrap_or_else(|_| BranchName::numbered(issue.number))
 }
 
-/// First rule in `config.label_rules` whose label is on the issue wins.
-/// Table order is the priority, so `[bug, feature]` on one issue gives tdd.
-pub fn skill_for<'c>(labels: &[String], config: &'c Config) -> (SkillChoice, Option<&'c str>) {
-    config
-        .label_rules
-        .iter()
-        .find(|rule| labels.iter().any(|l| l.eq_ignore_ascii_case(&rule.label)))
-        .map_or((None, None), |rule| (Some(rule.skill.clone()), Some(rule.label.as_str())))
-}
-
 pub fn prompt_for(issue: &Issue) -> String {
     let n = issue.number.0;
     format!(
@@ -76,24 +59,16 @@ pub fn prompt_for(issue: &Issue) -> String {
     )
 }
 
-/// The exact text passed to `claude` as its first prompt argument.
-pub fn final_prompt(skill: &SkillChoice, prompt: &str) -> String {
-    match skill {
-        Some(s) => format!("/{} {}", s.as_str(), prompt),
-        None => prompt.to_string(),
-    }
-}
-
 /// `claude` argv after the program name. Built as argv, never as a shell
 /// string, so the prompt needs no quoting (tmux execs multi-arg commands
 /// directly, without `sh -c`).
-pub fn claude_args(mode: Mode, skill: &SkillChoice, prompt: &str, hooks_json: Option<&str>) -> Vec<String> {
+pub fn claude_args(mode: Mode, prompt: &str, hooks_json: Option<&str>) -> Vec<String> {
     let mut args = Vec::new();
     if mode == Mode::PlanFirst {
         args.extend(["--permission-mode".to_string(), "plan".to_string()]);
     }
     args.extend(settings_args(hooks_json));
-    args.push(final_prompt(skill, prompt));
+    args.push(prompt.to_string());
     args
 }
 
@@ -137,12 +112,7 @@ pub fn matches_filter(haystack_parts: &[&str], needle: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::SkillName;
     use crate::testutil::issue;
-
-    fn skill(s: &str) -> SkillName {
-        SkillName::parse(s).expect("valid skill in test")
-    }
 
     #[test]
     fn branch_prefix_follows_labels() {
@@ -161,16 +131,6 @@ mod tests {
     }
 
     #[test]
-    fn skill_table_order_wins_over_label_order() {
-        let config = Config::default();
-        let (s, why) = skill_for(&["feature".to_string(), "bug".to_string()], &config);
-        assert_eq!(s, Some(skill("pstack:tdd")));
-        assert_eq!(why, Some("bug"));
-        assert_eq!(skill_for(&["p1".to_string()], &config), (None, None));
-        assert_eq!(skill_for(&["BUG".to_string()], &config).0, Some(skill("pstack:tdd")));
-    }
-
-    #[test]
     fn prompt_asks_for_a_ready_pr_not_a_draft() {
         assert_eq!(
             prompt_for(&issue(142, "Retry queue drops jobs", &[])),
@@ -181,17 +141,11 @@ mod tests {
     }
 
     #[test]
-    fn final_prompt_prefixes_the_skill() {
-        assert_eq!(final_prompt(&Some(skill("pstack:tdd")), "do it"), "/pstack:tdd do it");
-        assert_eq!(final_prompt(&None, "do it"), "do it");
-    }
-
-    #[test]
     fn claude_args_modes_hooks_and_prompt_passthrough() {
         let prompt = "say \"hi\" $HOME `x`\nline two;";
-        let args = claude_args(Mode::PlanFirst, &Some(skill("pstack:tdd")), prompt, None);
-        assert_eq!(args, ["--permission-mode", "plan", &format!("/pstack:tdd {prompt}")]);
-        let args = claude_args(Mode::Implement, &None, prompt, Some("{}"));
+        let args = claude_args(Mode::PlanFirst, prompt, None);
+        assert_eq!(args, ["--permission-mode", "plan", prompt]);
+        let args = claude_args(Mode::Implement, prompt, Some("{}"));
         assert_eq!(args, ["--settings", "{}", prompt]);
         assert_eq!(continue_args(None), ["--continue"]);
         assert_eq!(continue_args(Some("{}")), ["--continue", "--settings", "{}"]);
@@ -214,10 +168,8 @@ mod tests {
 
     #[test]
     fn defaults_combine_the_rules() {
-        let d = start_defaults(&issue(3, "Fix it", &["bug"]), &Config::default());
+        let d = start_defaults(&issue(3, "Fix it", &["bug"]));
         assert_eq!(d.branch.as_str(), "fix/3-fix-it");
-        assert_eq!(d.skill, Some(skill("pstack:tdd")));
-        assert_eq!(d.skill_reason.as_deref(), Some("bug"));
         assert_eq!(d.mode, Mode::Implement);
         assert!(d.prompt.starts_with("Implement GitHub issue #3: Fix it\n\n"));
         assert!(d.prompt.contains("`gh issue view 3 --comments`"));

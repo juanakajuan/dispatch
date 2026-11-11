@@ -3,7 +3,7 @@
 //! Session truth lives in git and tmux, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
-//! - `git config branch.<b>.dispatch-issue` and `dispatch-skill`: which
+//! - `git config branch.<b>.dispatch-issue`: which
 //!   branches dispatch made, for which issue
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
 //!   window runs Claude in which worktree
@@ -20,7 +20,7 @@ mod git;
 mod tmux;
 
 use crate::config::{ClaudeCommand, Config};
-use crate::domain::{BranchName, IssueNumber, Mode, SkillChoice, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
 use crate::rules;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -34,8 +34,6 @@ pub struct Session {
     pub issue: IssueNumber,
     pub branch: BranchName,
     pub worktree: WorktreePath,
-    /// From the `dispatch-skill` marker. Shown in the detail pane.
-    pub skill: SkillChoice,
     pub window: Option<Window>,
 }
 
@@ -76,7 +74,6 @@ pub type Sessions = BTreeMap<IssueNumber, Session>;
 pub struct StartRequest {
     pub issue: IssueNumber,
     pub branch: BranchName,
-    pub skill: SkillChoice,
     pub mode: Mode,
     pub prompt: String,
 }
@@ -269,7 +266,7 @@ impl Workspace {
                 Step::AddWorktree { dir, branch, create } => {
                     git::add_worktree(&self.repo_root, &dir, &branch, create.then_some(self.base.as_str()))?;
                 }
-                Step::Mark { branch, issue, skill } => git::set_marker(&self.repo_root, &branch, issue, &skill)?,
+                Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
                 Step::OpenWindow { dir, name, argv } => {
                     tmux::open_window(&self.place, &dir, &name, &argv)?;
                 }
@@ -353,17 +350,16 @@ fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[tmux::Wi
     let mut sessions = Sessions::new();
     for w in by_path {
         let Some(branch) = &w.branch else { continue };
-        let Some(marker) = markers.get(branch) else { continue };
+        let Some(&issue) = markers.get(branch) else { continue };
         let window = windows
             .iter()
             .filter(|o| o.worktree == w.path)
             .min_by_key(|o| o.dead)
             .map(|o| Window { id: o.id.clone(), alive: !o.dead, waiting: o.waiting });
-        sessions.entry(marker.issue).or_insert_with(|| Session {
-            issue: marker.issue,
+        sessions.entry(issue).or_insert_with(|| Session {
+            issue,
             branch: branch.clone(),
             worktree: w.path.clone(),
-            skill: marker.skill.clone(),
             window,
         });
     }
@@ -403,9 +399,9 @@ enum Step {
     /// `git worktree add <dir> -b <branch> <base>` when the branch is new,
     /// `git worktree add <dir> <branch>` when it exists (crash recovery).
     AddWorktree { dir: PathBuf, branch: BranchName, create: bool },
-    /// `git config branch.<b>.dispatch-issue N` and `dispatch-skill S`.
+    /// `git config branch.<b>.dispatch-issue N`.
     /// Overwrites, so running it twice is harmless.
-    Mark { branch: BranchName, issue: IssueNumber, skill: SkillChoice },
+    Mark { branch: BranchName, issue: IssueNumber },
     /// Two tmux calls: new-window (or new-session when the detached session
     /// is missing) with argv `claude ...`, then set-option for
     /// `@dispatch-worktree` and `remain-on-exit on` on that window id.
@@ -433,9 +429,9 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
         name: format!("#{}", req.issue.0),
-        argv: layout.claude.argv(&rules::claude_args(req.mode, &req.skill, &req.prompt, layout.hooks)),
+        argv: layout.claude.argv(&rules::claude_args(req.mode, &req.prompt, layout.hooks)),
     };
-    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue, skill: req.skill.clone() };
+    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
     let add = |branch: BranchName, create: bool| Step::AddWorktree { dir: target.clone(), branch, create };
     let planned = WorktreePath::planned(target.clone());
 
@@ -447,19 +443,19 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.path.as_path() == target) {
         let Some(branch) = &w.branch else { return Err(StartConflict::PathTaken(target)) };
-        if let Some(m) = obs.markers.get(branch) {
-            return Err(StartConflict::BranchBelongsTo { branch: branch.clone(), issue: m.issue });
+        if let Some(&issue) = obs.markers.get(branch) {
+            return Err(StartConflict::BranchBelongsTo { branch: branch.clone(), issue });
         }
         return Ok(StartPlan::Steps(vec![mark(branch.clone()), open(w.path.clone())]));
     }
     if obs.target_dir_exists {
         return Err(StartConflict::PathTaken(target));
     }
-    if let Some((branch, _)) = obs.markers.iter().find(|(_, m)| m.issue == req.issue) {
+    if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.issue) {
         return Ok(StartPlan::Steps(vec![add(branch.clone(), false), mark(branch.clone()), open(planned)]));
     }
-    if let Some(m) = obs.markers.get(&req.branch) {
-        return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue: m.issue });
+    if let Some(&issue) = obs.markers.get(&req.branch) {
+        return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue });
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.branch.as_ref() == Some(&req.branch)) {
         return Err(StartConflict::BranchCheckedOut { branch: req.branch.clone(), path: w.path.as_path().to_path_buf() });
@@ -486,7 +482,6 @@ const WAITING_HOOKS: &str = r#"{"hooks":{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::SkillName;
     use crate::proc::fake;
     use crate::testutil::temp_dir;
     use std::cell::RefCell;
@@ -500,18 +495,12 @@ mod tests {
         BranchName::parse(s).expect("valid branch")
     }
 
-    fn skill(s: &str) -> SkillName {
-        SkillName::parse(s).expect("valid skill")
-    }
-
     fn wt(path: &str, branch: Option<&str>) -> git::Worktree {
         git::Worktree { path: wp(path), branch: branch.map(br) }
     }
 
-    fn markers(rows: &[(&str, u32, Option<&str>)]) -> git::Markers {
-        rows.iter()
-            .map(|(b, n, s)| (br(b), git::Marker { issue: IssueNumber(*n), skill: s.map(skill) }))
-            .collect()
+    fn markers(rows: &[(&str, u32)]) -> git::Markers {
+        rows.iter().map(|(b, n)| (br(b), IssueNumber(*n))).collect()
     }
 
     fn win(id: &str, path: &str, dead: bool, waiting: bool) -> tmux::WindowObs {
@@ -523,11 +512,10 @@ mod tests {
     #[test]
     fn join_live_window_is_running_and_waiting_flag_needs_you() {
         let worktrees = [wt("/a/orbit", Some("main")), wt("/a/orbit-1", Some("fix/1-x"))];
-        let m = markers(&[("fix/1-x", 1, Some("pstack:tdd"))]);
+        let m = markers(&[("fix/1-x", 1)]);
         let s = join(&worktrees, &m, &[win("@1", "/a/orbit-1", false, false)]);
         assert_eq!(s.len(), 1);
         assert_eq!(s[&IssueNumber(1)].state(), SessionState::Running);
-        assert_eq!(s[&IssueNumber(1)].skill, Some(skill("pstack:tdd")));
         let s = join(&worktrees, &m, &[win("@1", "/a/orbit-1", false, true)]);
         assert_eq!(s[&IssueNumber(1)].state(), SessionState::NeedsYou);
     }
@@ -535,7 +523,7 @@ mod tests {
     #[test]
     fn join_dead_pane_and_missing_window_are_exited() {
         let worktrees = [wt("/a/orbit-1", Some("fix/1-x"))];
-        let m = markers(&[("fix/1-x", 1, None)]);
+        let m = markers(&[("fix/1-x", 1)]);
         let dead = join(&worktrees, &m, &[win("@1", "/a/orbit-1", true, true)]);
         assert_eq!(dead[&IssueNumber(1)].state(), SessionState::Exited);
         assert!(dead[&IssueNumber(1)].window.is_some());
@@ -547,14 +535,14 @@ mod tests {
     #[test]
     fn join_ignores_unmarked_detached_and_orphan_windows() {
         let worktrees = [wt("/a/orbit", Some("main")), wt("/a/orbit-2", None)];
-        let s = join(&worktrees, &markers(&[("other", 9, None)]), &[win("@5", "/a/gone", false, false)]);
+        let s = join(&worktrees, &markers(&[("other", 9)]), &[win("@5", "/a/gone", false, false)]);
         assert!(s.is_empty());
     }
 
     #[test]
     fn join_one_issue_marked_twice_keeps_first_path_and_prefers_live_window() {
         let worktrees = [wt("/a/z", Some("b2")), wt("/a/a", Some("b1"))];
-        let m = markers(&[("b1", 7, None), ("b2", 7, None)]);
+        let m = markers(&[("b1", 7), ("b2", 7)]);
         let s = join(&worktrees, &m, &[win("@1", "/a/a", true, false), win("@2", "/a/a", false, false)]);
         assert_eq!(s.len(), 1);
         assert_eq!(s[&IssueNumber(7)].branch, br("b1"));
@@ -575,7 +563,6 @@ mod tests {
         StartRequest {
             issue: IssueNumber(142),
             branch: br("fix/142-x"),
-            skill: Some(skill("pstack:tdd")),
             mode: Mode::Implement,
             prompt: "p".to_string(),
         }
@@ -624,8 +611,8 @@ mod tests {
                     self.branch_exists = true;
                     self.target_dir_exists = true;
                 }
-                Step::Mark { branch, issue, skill } => {
-                    self.markers.insert(branch.clone(), git::Marker { issue: *issue, skill: skill.clone() });
+                Step::Mark { branch, issue } => {
+                    self.markers.insert(branch.clone(), *issue);
                 }
                 Step::OpenWindow { dir, .. } => {
                     self.windows.push(tmux::WindowObs {
@@ -640,7 +627,7 @@ mod tests {
     }
 
     fn open_step() -> Step {
-        let argv = ["claude".to_string(), "/pstack:tdd p".to_string()].to_vec();
+        let argv = ["claude".to_string(), "p".to_string()].to_vec();
         Step::OpenWindow { dir: wp("/a/orbit-142"), name: "#142".to_string(), argv }
     }
 
@@ -649,7 +636,7 @@ mod tests {
     }
 
     fn mark(branch: &str) -> Step {
-        Step::Mark { branch: br(branch), issue: IssueNumber(142), skill: Some(skill("pstack:tdd")) }
+        Step::Mark { branch: br(branch), issue: IssueNumber(142) }
     }
 
     fn steps(plan: Result<StartPlan, StartConflict>) -> Vec<Step> {
@@ -663,7 +650,7 @@ mod tests {
     fn plan_session_with_live_window_is_already_running() {
         let mut w = World::empty();
         w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
-        w.markers = markers(&[("fix/142-x", 142, None)]);
+        w.markers = markers(&[("fix/142-x", 142)]);
         w.windows.push(win("@3", "/a/orbit-142", false, false));
         assert!(matches!(w.plan(), Ok(StartPlan::AlreadyRunning(s)) if s.issue == IssueNumber(142)));
     }
@@ -672,7 +659,7 @@ mod tests {
     fn plan_session_without_live_window_opens_one() {
         let mut w = World::empty();
         w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
-        w.markers = markers(&[("fix/142-x", 142, None)]);
+        w.markers = markers(&[("fix/142-x", 142)]);
         assert_eq!(steps(w.plan()), [open_step()]);
         w.windows.push(win("@3", "/a/orbit-142", true, false));
         assert_eq!(steps(w.plan()), [open_step()]);
@@ -681,7 +668,7 @@ mod tests {
     #[test]
     fn plan_marked_branch_without_worktree_uses_that_branch() {
         let mut w = World::empty();
-        w.markers = markers(&[("fix/142-earlier-name", 142, None)]);
+        w.markers = markers(&[("fix/142-earlier-name", 142)]);
         w.branch_exists = false;
         assert_eq!(steps(w.plan()), [add("fix/142-earlier-name", false), mark("fix/142-earlier-name"), open_step()]);
     }
@@ -704,7 +691,7 @@ mod tests {
     #[test]
     fn plan_branch_marked_for_another_issue_conflicts() {
         let mut w = World::empty();
-        w.markers = markers(&[("fix/142-x", 7, None)]);
+        w.markers = markers(&[("fix/142-x", 7)]);
         w.branch_exists = true;
         assert_eq!(w.plan(), Err(StartConflict::BranchBelongsTo { branch: br("fix/142-x"), issue: IssueNumber(7) }));
     }
@@ -742,7 +729,6 @@ mod tests {
         l.hooks = Some("{}");
         let mut r = req();
         r.mode = Mode::PlanFirst;
-        r.skill = None;
         let got = steps(plan_start(&World::empty().obs(), &r, &l));
         let Some(Step::OpenWindow { argv, .. }) = got.last() else { panic!("no OpenWindow") };
         assert_eq!(argv, &["sh", "-c", "echo", "_", "--permission-mode", "plan", "--settings", "{}", "p"]);
@@ -759,7 +745,7 @@ mod tests {
             let mut existing = World::empty();
             existing.branch_exists = true;
             let mut marked = World::empty();
-            marked.markers = markers(&[("fix/142-old", 142, None)]);
+            marked.markers = markers(&[("fix/142-old", 142)]);
             let mut half = World::empty();
             half.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
             half.target_dir_exists = true;
@@ -850,7 +836,7 @@ mod tests {
             .iter()
             .map(String::as_str)
             .filter(|c| {
-                ["git fetch", "git worktree add", "git config branch", "git config --unset", "tmux new-", "tmux set-option"]
+                ["git fetch", "git worktree add", "git config branch", "tmux new-", "tmux set-option"]
                     .iter()
                     .any(|p| c.starts_with(p))
             })
@@ -861,8 +847,7 @@ mod tests {
     fn start_runs_the_steps_in_order_and_a_second_start_runs_none() {
         let base = temp_dir("start");
         let ws = workspace(&base);
-        let mut r = req();
-        r.skill = None;
+        let r = req();
         install_world(base.clone(), Rc::new(RefCell::new(Sim::default())));
         let out = ws.start(&r).expect("start");
         assert_eq!(out.session.state(), SessionState::Running);
@@ -870,13 +855,12 @@ mod tests {
         let dir = base.join("orbit-142");
         let calls = fake::calls();
         let ran = mutating(&calls);
-        assert_eq!(ran.len(), 6, "{ran:?}");
+        assert_eq!(ran.len(), 5, "{ran:?}");
         assert_eq!(ran[0], "git fetch origin main");
         assert_eq!(ran[1], format!("git worktree add {} -b fix/142-x origin/main", dir.display()));
         assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
-        assert_eq!(ran[3], "git config --unset branch.fix/142-x.dispatch-skill");
-        assert!(ran[4].starts_with(&format!("tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p", dir.display())));
-        assert!(ran[5].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
+        assert!(ran[3].starts_with(&format!("tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p", dir.display())));
+        assert!(ran[4].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
 
         let before = fake::calls().len();
         let again = ws.start(&r).expect("second start");
@@ -895,7 +879,7 @@ mod tests {
         assert_eq!(out.session.branch, br("fix/142-x"));
         let calls = fake::calls();
         let ran = mutating(&calls);
-        assert_eq!(ran.len(), 4, "{ran:?}");
+        assert_eq!(ran.len(), 3, "{ran:?}");
         assert!(ran[0].starts_with("git config branch.fix/142-x.dispatch-issue"));
         assert!(ran.iter().all(|c| !c.starts_with("git worktree add") && !c.starts_with("git fetch")));
     }
