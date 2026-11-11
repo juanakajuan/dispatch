@@ -32,9 +32,16 @@ where
     git(root, args).map_err(|e| e.to_string())
 }
 
-/// The main worktree's root, even when `cwd` is inside a linked worktree, so
-/// the sibling dir names stay `<repo>-<n>`.
-pub(super) fn repo_root(cwd: &Path) -> Result<PathBuf, String> {
+/// The repo's two fixed dirs, both canonical.
+pub(super) struct RepoDirs {
+    /// The main worktree's root, even when `cwd` is inside a linked worktree,
+    /// so session worktrees always go under the main checkout.
+    pub root: PathBuf,
+    /// The git dir that all worktrees share (`.git` of the main checkout).
+    pub common: PathBuf,
+}
+
+pub(super) fn repo_dirs(cwd: &Path) -> Result<RepoDirs, String> {
     let top = text(cwd, ["rev-parse", "--show-toplevel"])?;
     let common = text(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
     let common = PathBuf::from(common.trim());
@@ -42,7 +49,27 @@ pub(super) fn repo_root(cwd: &Path) -> Result<PathBuf, String> {
         (Some(name), Some(parent)) if name == ".git" => parent.to_path_buf(),
         _ => PathBuf::from(top.trim()),
     };
-    std::fs::canonicalize(&root).map_err(|e| format!("cannot resolve {}: {e}", root.display()))
+    let canonical = |p: &Path| std::fs::canonicalize(p).map_err(|e| format!("cannot resolve {}: {e}", p.display()));
+    Ok(RepoDirs { root: canonical(&root)?, common: canonical(&common)? })
+}
+
+/// Adds `pattern` as one line to `<common>/info/exclude`, unless a line equal
+/// to it is there. Idempotent. dispatch never edits the user's `.gitignore`.
+pub(super) fn ensure_excluded(common: &Path, pattern: &str) -> Result<(), String> {
+    let info = common.join("info");
+    let file = info.join("exclude");
+    let err = |e: std::io::Error| format!("cannot update {}: {e}", file.display());
+    let existing = match std::fs::read_to_string(&file) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(err(e)),
+    };
+    if existing.lines().any(|l| l.trim() == pattern) {
+        return Ok(());
+    }
+    let separator = if existing.is_empty() || existing.ends_with('\n') { "" } else { "\n" };
+    std::fs::create_dir_all(&info).map_err(err)?;
+    std::fs::write(&file, format!("{existing}{separator}{pattern}\n")).map_err(err)
 }
 
 pub(super) fn origin_head(root: &Path) -> Result<String, String> {
@@ -169,6 +196,34 @@ mod tests {
                 ("wt3".to_string(), None),
             ]
         );
+    }
+
+    #[test]
+    fn exclude_adds_the_line_once_and_keeps_the_user_lines() {
+        let common = temp_dir("exclude");
+        ensure_excluded(&common, ".claude/worktrees/").expect("creates info/exclude");
+        let file = common.join("info").join("exclude");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), ".claude/worktrees/\n");
+
+        std::fs::write(&file, "# user\n*.log").expect("write");
+        ensure_excluded(&common, ".claude/worktrees/").expect("appends");
+        ensure_excluded(&common, ".claude/worktrees/").expect("second call is a no-op");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "# user\n*.log\n.claude/worktrees/\n");
+    }
+
+    #[test]
+    fn repo_dirs_from_a_linked_worktree_is_the_main_checkout() {
+        let base = temp_dir("repo-dirs");
+        let main = base.join("main");
+        let linked = main.join(".claude").join("worktrees").join("1");
+        std::fs::create_dir_all(main.join(".git")).expect("mkdir .git");
+        std::fs::create_dir_all(&linked).expect("mkdir linked");
+        use crate::proc::fake;
+        let (top, common) = (linked.display().to_string(), main.join(".git").display().to_string());
+        fake::install(move |call| Ok(if call.contains("--show-toplevel") { top.clone() } else { format!("{common}\n") }));
+        let dirs = repo_dirs(&linked).expect("dirs");
+        assert_eq!(dirs.root, main);
+        assert_eq!(dirs.common, main.join(".git"));
     }
 
     #[test]

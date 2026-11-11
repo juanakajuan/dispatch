@@ -694,10 +694,9 @@ fn preview(state: &State, dialog: &StartDialog, config: &Config) -> Vec<String> 
         .into_iter()
         .map(|a| if a.contains([' ', '\n', '"']) { format!("{:?}", one_line(&a)) } else { a })
         .collect();
-    let repo = if state.context.repo_name.is_empty() { "repo" } else { state.context.repo_name.as_str() };
     let base = if state.context.base.is_empty() { "origin/main" } else { state.context.base.as_str() };
     vec![
-        format!("git worktree add ../{repo}-{} -b {} {base}", dialog.issue.0, branch.trim()),
+        format!("git worktree add {}/{} -b {} {base}", rules::WORKTREES_DIR, dialog.issue.0, branch.trim()),
         shown.join(" "),
     ]
 }
@@ -1021,7 +1020,7 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('j'));
         send(&mut state, &config, KeyCode::Char('s'));
         let screen = text(&render(&state, &config, 120, 30));
-        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "$ git worktree add ../orbit-2 -b docs/2-docs origin/main", "claude \"Implement GitHub issue #2: Docs", "ctrl-s start"] {
+        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "$ git worktree add .claude/worktrees/2 -b docs/2-docs origin/main", "claude \"Implement GitHub issue #2: Docs", "ctrl-s start"] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
     }

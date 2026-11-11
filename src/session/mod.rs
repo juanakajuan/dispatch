@@ -158,6 +158,8 @@ pub enum AttachPlan {
 #[derive(Clone, Debug)]
 pub struct Workspace {
     repo_root: PathBuf,
+    /// The git dir that all worktrees share, for `info/exclude`.
+    git_common_dir: PathBuf,
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
     place: tmux::Place,
@@ -187,7 +189,7 @@ impl fmt::Display for SetupError {
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
     pub fn discover(cwd: &std::path::Path, config: &Config) -> Result<Workspace, SetupError> {
-        let repo_root = git::repo_root(cwd).map_err(SetupError::NotARepo)?;
+        let git::RepoDirs { root: repo_root, common: git_common_dir } = git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
         crate::proc::run("tmux", ["-V"], &repo_root).map_err(|e| match e {
             crate::proc::ProcError::Spawn { .. } => SetupError::TmuxMissing,
@@ -197,6 +199,7 @@ impl Workspace {
         let place = tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
         Ok(Workspace {
             repo_root,
+            git_common_dir,
             base,
             place,
             detect_waiting: config.detect_waiting,
@@ -263,8 +266,9 @@ impl Workspace {
     }
 
     /// The step runner. A failed `Fetch` is a warning: the start continues
-    /// from the local base. Any other failure stops the run, and the next
-    /// `start` plans from whatever state exists.
+    /// from the local base. A failed exclude before `AddWorktree` is a warning
+    /// too: the worktree only shows in `git status`. Any other failure stops
+    /// the run, and the next `start` plans from whatever state exists.
     fn run_steps(&self, steps: Vec<Step>) -> Result<Vec<String>, String> {
         let mut warnings = Vec::new();
         for step in steps {
@@ -275,6 +279,9 @@ impl Workspace {
                     }
                 }
                 Step::AddWorktree { dir, branch, from } => {
+                    if let Err(e) = git::ensure_excluded(&self.git_common_dir, rules::WORKTREES_EXCLUDE) {
+                        warnings.push(format!("{} still shows in git status: {e}", rules::WORKTREES_DIR));
+                    }
                     git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
                 }
                 Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
@@ -571,6 +578,9 @@ mod tests {
 
     // ---- plan_start, one test per table row ----
 
+    /// `rules::worktree_dir_for` of `layout().repo_root` and issue 142.
+    const TARGET: &str = "/a/orbit/.claude/worktrees/142";
+
     fn layout() -> Layout {
         Layout {
             repo_root: PathBuf::from("/a/orbit"),
@@ -650,11 +660,11 @@ mod tests {
 
     fn open_step() -> Step {
         let argv = ["claude".to_string(), "p".to_string()].to_vec();
-        Step::OpenWindow { dir: wp("/a/orbit-142"), name: "#142".to_string(), argv }
+        Step::OpenWindow { dir: wp(TARGET), name: "#142".to_string(), argv }
     }
 
     fn add(branch: &str, from: Option<&str>) -> Step {
-        Step::AddWorktree { dir: PathBuf::from("/a/orbit-142"), branch: br(branch), from: from.map(String::from) }
+        Step::AddWorktree { dir: PathBuf::from(TARGET), branch: br(branch), from: from.map(String::from) }
     }
 
     fn fetch(remote_ref: &str) -> Step {
@@ -675,20 +685,29 @@ mod tests {
     #[test]
     fn plan_session_with_live_window_is_already_running() {
         let mut w = World::empty();
-        w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
+        w.worktrees.push(wt(TARGET, Some("fix/142-x")));
         w.markers = markers(&[("fix/142-x", 142)]);
-        w.windows.push(win("@3", "/a/orbit-142", false, false));
+        w.windows.push(win("@3", TARGET, false, false));
         assert!(matches!(w.plan(), Ok(StartPlan::AlreadyRunning(s)) if s.issue == IssueNumber(142)));
     }
 
     #[test]
     fn plan_session_without_live_window_opens_one() {
         let mut w = World::empty();
-        w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
+        w.worktrees.push(wt(TARGET, Some("fix/142-x")));
         w.markers = markers(&[("fix/142-x", 142)]);
         assert_eq!(steps(w.plan()), [open_step()]);
-        w.windows.push(win("@3", "/a/orbit-142", true, false));
+        w.windows.push(win("@3", TARGET, true, false));
         assert_eq!(steps(w.plan()), [open_step()]);
+    }
+
+    #[test]
+    fn plan_session_in_an_old_sibling_worktree_reopens_there() {
+        let mut w = World::empty();
+        w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
+        w.markers = markers(&[("fix/142-x", 142)]);
+        let opened = steps(w.plan());
+        assert!(matches!(&opened[..], [Step::OpenWindow { dir, .. }] if dir == &wp("/a/orbit-142")), "{opened:?}");
     }
 
     #[test]
@@ -702,7 +721,7 @@ mod tests {
     #[test]
     fn plan_worktree_at_target_without_marker_marks_its_branch() {
         let mut w = World::empty();
-        w.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
+        w.worktrees.push(wt(TARGET, Some("fix/142-x")));
         w.target_dir_exists = true;
         assert_eq!(steps(w.plan()), [mark("fix/142-x"), open_step()]);
     }
@@ -711,7 +730,7 @@ mod tests {
     fn plan_target_dir_that_is_no_worktree_conflicts() {
         let mut w = World::empty();
         w.target_dir_exists = true;
-        assert_eq!(w.plan(), Err(StartConflict::PathTaken(PathBuf::from("/a/orbit-142"))));
+        assert_eq!(w.plan(), Err(StartConflict::PathTaken(PathBuf::from(TARGET))));
     }
 
     #[test]
@@ -785,7 +804,7 @@ mod tests {
             let mut marked = World::empty();
             marked.markers = markers(&[("fix/142-old", 142)]);
             let mut half = World::empty();
-            half.worktrees.push(wt("/a/orbit-142", Some("fix/142-x")));
+            half.worktrees.push(wt(TARGET, Some("fix/142-x")));
             half.target_dir_exists = true;
             vec![fresh, existing, marked, half]
         };
@@ -824,7 +843,7 @@ mod tests {
     fn install_world(base: PathBuf, sim: Rc<RefCell<Sim>>) {
         fake::install(move |call| {
             let mut s = sim.borrow_mut();
-            let dir = base.join("orbit-142");
+            let dir = base.join("orbit/.claude/worktrees/142");
             if call.starts_with("git worktree list") {
                 let mut t = format!("worktree {}\nHEAD x\nbranch refs/heads/main\n\n", base.join("orbit").display());
                 if s.added {
@@ -862,6 +881,7 @@ mod tests {
         std::fs::create_dir_all(base.join("orbit")).expect("mkdir");
         Workspace {
             repo_root: base.join("orbit"),
+            git_common_dir: base.join("orbit").join(".git"),
             base: "origin/main".to_string(),
             place: tmux::Place::Inside { session_id: "$1".to_string() },
             detect_waiting: false,
@@ -890,7 +910,7 @@ mod tests {
         let out = ws.start(&r).expect("start");
         assert_eq!(out.session.state(), SessionState::Running);
         assert!(out.warnings.is_empty());
-        let dir = base.join("orbit-142");
+        let dir = base.join("orbit/.claude/worktrees/142");
         let calls = fake::calls();
         let ran = mutating(&calls);
         assert_eq!(ran.len(), 5, "{ran:?}");
@@ -899,6 +919,8 @@ mod tests {
         assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
         assert!(ran[3].starts_with(&format!("tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p", dir.display())));
         assert!(ran[4].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
+        let exclude = base.join("orbit/.git/info/exclude");
+        assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
 
         let before = fake::calls().len();
         let again = ws.start(&r).expect("second start");
@@ -910,7 +932,7 @@ mod tests {
     fn start_after_a_crash_between_steps_runs_only_the_rest() {
         let base = temp_dir("crash");
         let ws = workspace(&base);
-        std::fs::create_dir_all(base.join("orbit-142")).expect("mkdir");
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
         let sim = Sim { added: true, ..Sim::default() };
         install_world(base.clone(), Rc::new(RefCell::new(sim)));
         let out = ws.start(&req()).expect("start");
@@ -957,7 +979,7 @@ mod tests {
         let base = temp_dir("stop");
         let ws = workspace(&base);
         install_world(base.clone(), Rc::new(RefCell::new(Sim { added: true, marked: true, window: true, tagged: true, ..Sim::default() })));
-        std::fs::create_dir_all(base.join("orbit-142")).expect("mkdir");
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
         ws.stop(IssueNumber(142)).expect("stop");
         let calls = fake::calls();
         assert!(calls.iter().any(|c| c == "tmux kill-window -t @4"));
@@ -966,7 +988,7 @@ mod tests {
     }
 
     #[test]
-    fn resume_respawns_a_dead_pane_with_continue() {
+    fn resume_respawns_a_dead_pane_in_an_old_sibling_worktree() {
         let base = temp_dir("resume");
         let ws = workspace(&base);
         std::fs::create_dir_all(base.join("orbit-142")).expect("mkdir");

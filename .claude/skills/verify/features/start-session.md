@@ -6,7 +6,7 @@ A user selects an open issue and starts a Claude session for it. A dialog shows 
 
 - `start-open` opens the dialog from the Issues tab with `s`, Enter, or a double-click.
 - `start-fields` shows a branch name from the issue type and title, the mode (plan first or implement), and an editable prompt.
-- `start-preview` shows `git worktree add ../<repo>-<n> -b <branch> <base>` and the `claude` command under `Runs`.
+- `start-preview` shows `git worktree add .claude/worktrees/<n> -b <branch> <base>` and the `claude` command under `Runs`.
 - `start-run` makes the worktree, the `branch.<b>.dispatch-issue` marker, and a tagged tmux window named `#<n>`.
 - `start-plan-mode` adds `--permission-mode plan` to the argv when the mode is plan first.
 - `start-idempotent` goes to the existing session instead of making a second worktree.
@@ -26,12 +26,12 @@ Preconditions:
 - The Issues tab lists at least one open issue `#N` that has no session.
 
 - **Pick the issue.** Press `1`. Run `$V keys "$RUN" 1`, then `$V screen "$RUN"`, and pick the `#N` of a row. Move to it with `j`/`k`. The row starts with `▌`. Run `$V shot "$RUN" issues-before`.
-- **Open the dialog.** Press `s`. Run `$V keys "$RUN" s` and `$V wait "$RUN" 'Start session for #N'`. The dialog shows `Branch`, `Mode` with `● Implement directly`, `Prompt` starting `Implement GitHub issue #N:`, and under `Runs` the line `$ git worktree add ../<repo>-N -b <branch> origin/<default>`. Run `$V shot "$RUN" start-dialog`.
+- **Open the dialog.** Press `s`. Run `$V keys "$RUN" s` and `$V wait "$RUN" 'Start session for #N'`. The dialog shows `Branch`, `Mode` with `● Implement directly`, `Prompt` starting `Implement GitHub issue #N:`, and under `Runs` the line `$ git worktree add .claude/worktrees/N -b <branch> origin/<default>`. Run `$V shot "$RUN" start-dialog`.
 - **Cancel.** Press Esc. Run `$V keys "$RUN" Escape`. The dialog closes. `$V state "$RUN" after-cancel` shows only the main worktree and `(none)` under markers.
 - **Plan mode (optional).** Reopen with `s`, press `Tab` to focus `Mode`, then `Left`. Run `$V keys "$RUN" s Tab Left`. The radio shows `● Plan first, then wait for approval`.
 - **Start.** Press Ctrl-S. Run `$V keys "$RUN" C-s` and `$V wait "$RUN" 'needs you' 20`. dispatch moves to the Sessions tab. The `#N` row shows `▲ needs you` (the fake claude runs dispatch's `Stop` hook after 2 s), and the tab row shows `3 Sessions 1 ▲1`. Run `$V shot "$RUN" after-start`.
-- **Side effects.** Run `$V state "$RUN" after-start`. It shows the worktree `$RUN/work/<repo>-N` on `[<branch>]`, the marker `branch.<branch>.dispatch-issue N`, and a window `#N` with `tag=$RUN/work/<repo>-N waiting=1`.
-- **Claude argv.** Read `$RUN/evidence/claude-calls.log`. The first line has `cwd=$RUN/work/<repo>-N` and an argv with `--settings` (the hooks JSON) and the prompt as one argument. With plan mode, the argv starts with `--permission-mode plan`. The next lines are `hook UserPromptSubmit` and `hook Stop`.
+- **Side effects.** Run `$V state "$RUN" after-start`. It shows the worktree `$RUN/work/<repo>/.claude/worktrees/N` on `[<branch>]`, the marker `branch.<branch>.dispatch-issue N`, and a window `#N` with `tag=$RUN/work/<repo>/.claude/worktrees/N waiting=1`. `git -C $RUN/work/<repo> status --short` does not list `.claude/worktrees/`, and `.git/info/exclude` has the line `.claude/worktrees/` one time.
+- **Claude argv.** Read `$RUN/evidence/claude-calls.log`. The first line has `cwd=$RUN/work/<repo>/.claude/worktrees/N` and an argv with `--settings` (the hooks JSON) and the prompt as one argument. With plan mode, the argv starts with `--permission-mode plan`. The next lines are `hook UserPromptSubmit` and `hook Stop`.
 - **Start again.** Press `1`, select `#N`, press `s`. The UI goes to the existing session and no dialog opens. `$V state` still shows one worktree for `N`.
 
 ## Gotchas
