@@ -9,11 +9,12 @@
 //!   "skills": ["pstack:tdd", "pstack:architect"],
 //!   "label_skills": [{ "label": "bug", "skill": "pstack:tdd" }],
 //!   "detect_waiting": true,
-//!   "claude_command": ["claude"]
+//!   "claude_command": ["claude"],
+//!   "split": 42
 //! }
 //! ```
 
-use crate::domain::SkillName;
+use crate::domain::{SkillName, Split};
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -58,6 +59,9 @@ pub struct Config {
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
     pub claude_command: ClaudeCommand,
+    /// Where the list | detail border starts, and where `=` puts it back.
+    /// Resizes stay in memory; dispatch never writes this file.
+    pub split: Split,
 }
 
 impl Default for Config {
@@ -90,6 +94,7 @@ impl Default for Config {
             github_refresh: Duration::from_secs(60),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+            split: Split::DEFAULT,
         }
     }
 }
@@ -106,6 +111,7 @@ pub enum ConfigError {
     Json { path: PathBuf, message: String },
     BadSkill { value: String, reason: String },
     BadCommand(&'static str),
+    BadSplit(u64),
 }
 
 impl fmt::Display for ConfigError {
@@ -115,6 +121,10 @@ impl fmt::Display for ConfigError {
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
             ConfigError::BadSkill { value, reason } => write!(f, "invalid config: skill {value:?}: {reason}"),
             ConfigError::BadCommand(why) => write!(f, "invalid config: claude_command {why}"),
+            ConfigError::BadSplit(value) => {
+                let (lo, hi) = (Split::PERCENT.start(), Split::PERCENT.end());
+                write!(f, "invalid config: split {value} is not a percent from {lo} to {hi}")
+            }
         }
     }
 }
@@ -126,6 +136,7 @@ struct ConfigFile {
     label_skills: Option<Vec<WireLabelSkill>>,
     detect_waiting: Option<bool>,
     claude_command: Option<Vec<String>>,
+    split: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -166,6 +177,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
             return Err(ConfigError::BadCommand("starts with an empty program name"));
         }
         config.claude_command = ClaudeCommand { program, args: parts.collect() };
+    }
+    if let Some(percent) = file.split {
+        config.split = Split::from_percent(percent).ok_or(ConfigError::BadSplit(percent))?;
     }
     Ok(config)
 }
@@ -208,6 +222,7 @@ mod tests {
         assert!(c.skills.iter().any(|s| s.as_str() == "pstack:figure-it-out"));
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
+        assert_eq!(c.split, Split::DEFAULT);
     }
 
     #[test]
@@ -221,7 +236,7 @@ mod tests {
     fn fields_replace_defaults_and_rule_skills_are_selectable() {
         let c = parse_str(
             r#"{"skills":["a"],"label_skills":[{"label":"x","skill":"b:c"}],
-                "detect_waiting":false,"claude_command":["sh","-c","echo","_"]}"#,
+                "detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30}"#,
         )
         .expect("valid");
         let names: Vec<_> = c.skills.iter().map(SkillName::as_str).collect();
@@ -230,6 +245,7 @@ mod tests {
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
+        assert_eq!(c.split.list_width(100), 30);
     }
 
     #[test]
@@ -240,6 +256,9 @@ mod tests {
         assert!(matches!(parse_str(r#"{"claude_command":[]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"split":95}"#), Err(ConfigError::BadSplit(95))));
+        assert!(matches!(parse_str(r#"{"split":-1}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"split":"42"}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]

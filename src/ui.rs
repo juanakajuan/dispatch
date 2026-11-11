@@ -1,6 +1,7 @@
 //! Rendering. Reads `State`, writes nothing but the frame, and returns the
 //! clickable regions it drew. Layout: tab bar and its rule (2 rows),
-//! list | detail (42% | 58%), a blank row, key bar (1 row). List rows are two
+//! list | detail (`state.split`, 42% | 58% by default), a blank row, key bar
+//! (1 row). List rows are two
 //! lines tall. The dialog is a centered overlay.
 
 use crate::app::{
@@ -65,8 +66,13 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    let [list, detail] = Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).areas(body);
-    let mut hits = HitMap::default();
+    let list_width = state.split.list_width(body.width);
+    let list = Rect { width: list_width, ..body };
+    let detail = Rect { x: body.x + list_width, width: body.width - list_width, ..body };
+    let mut hits = HitMap { panes: body, ..HitMap::default() };
+    // The border plus the blank column left of it: one column is hard to hit.
+    let divider = Rect { x: detail.x.saturating_sub(1), width: 2, ..body }.intersection(body);
+    hits.targets.push((divider, HitTarget::Divider));
     let screen = frame.area();
     frame.buffer_mut().set_style(screen, palette::PLAIN);
     draw_tabs(frame, tabs, rule, state, &mut hits);
@@ -447,7 +453,8 @@ fn list_row(
 // ---- detail ----------------------------------------------------------------
 
 fn draw_detail(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp) {
-    let block = Block::new().borders(Borders::LEFT).border_style(palette::DIM).padding(Padding::horizontal(2));
+    let border = if state.dragging_split { palette::ACCENT } else { palette::DIM };
+    let block = Block::new().borders(Borders::LEFT).border_style(border).padding(Padding::horizontal(2));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let inner = Rect { width: inner.width.min(DETAIL_MAX_WIDTH), ..inner };
@@ -741,7 +748,8 @@ mod tests {
     use crate::domain::{BranchName, WorktreePath};
     use crate::session::{Window, WindowId};
     use crate::testutil::{issue, pr};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crate::domain::Split;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -961,6 +969,117 @@ mod tests {
         let rows: Vec<_> = hits.targets.iter().filter_map(|(r, t)| match t { HitTarget::Row(k) => Some((r.y, *k)), _ => None }).collect();
         assert_eq!(tabs, 3);
         assert_eq!(rows, [(2, RowKey::Issue(IssueNumber(3))), (4, RowKey::Issue(IssueNumber(2)))]);
+    }
+
+    /// Draws like the shell does: the frame's hits go back into `state`.
+    fn frame(state: &mut State, config: &Config, w: u16, h: u16) -> Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+        let mut hits = HitMap::default();
+        terminal.draw(|f| hits = draw(f, state, config)).expect("draw");
+        state.hits = hits;
+        terminal.backend().buffer().clone()
+    }
+
+    /// The column of the list | detail border on the first body row.
+    fn border(buf: &Buffer) -> Option<u16> {
+        (0..buf.area.width).find(|&x| buf[(x, 2)].symbol() == "│")
+    }
+
+    fn mouse(state: &mut State, config: &Config, kind: MouseEventKind, column: u16) {
+        let ev = MouseEvent { kind, column, row: 4, modifiers: KeyModifiers::NONE };
+        let _ = app::update(state, Msg::Mouse(ev, Instant::now()), config);
+    }
+
+    fn drag(state: &mut State, config: &Config, from: u16, to: u16) {
+        mouse(state, config, MouseEventKind::Down(MouseButton::Left), from);
+        mouse(state, config, MouseEventKind::Drag(MouseButton::Left), to);
+        mouse(state, config, MouseEventKind::Up(MouseButton::Left), to);
+    }
+
+    #[test]
+    fn dragging_the_border_and_the_resize_keys_move_it() {
+        let (mut state, config) = full_state();
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+        drag(&mut state, &config, 42, 60);
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(60));
+        drag(&mut state, &config, 59, 50); // the blank column left of the border also grabs it
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(50));
+        send(&mut state, &config, KeyCode::Char('<'));
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(45));
+        send(&mut state, &config, KeyCode::Char('>'));
+        send(&mut state, &config, KeyCode::Char('>'));
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(55));
+        send(&mut state, &config, KeyCode::Char('3'));
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(55), "the split applies to every tab");
+        send(&mut state, &config, KeyCode::Char('='));
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+    }
+
+    #[test]
+    fn a_drag_stops_at_the_minimum_pane_widths() {
+        let (mut state, config) = full_state();
+        let _ = frame(&mut state, &config, 100, 20);
+        drag(&mut state, &config, 42, 0);
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(Split::MIN_LIST));
+        drag(&mut state, &config, Split::MIN_LIST, 99);
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(100 - Split::MIN_DETAIL));
+    }
+
+    #[test]
+    fn a_drag_that_starts_on_a_row_selects_it_and_leaves_the_border() {
+        let (mut state, config) = full_state();
+        let _ = frame(&mut state, &config, 100, 20);
+        drag(&mut state, &config, 10, 70);
+        assert_eq!(app::selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+    }
+
+    #[test]
+    fn resize_keys_typed_into_the_filter_are_text() {
+        let (mut state, config) = full_state();
+        let _ = frame(&mut state, &config, 100, 20);
+        send(&mut state, &config, KeyCode::Char('/'));
+        send(&mut state, &config, KeyCode::Char('<'));
+        assert_eq!(state.filter, "<");
+        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+    }
+
+    #[test]
+    fn narrow_panes_still_draw_two_line_rows_and_the_worktree_tail() {
+        let (mut state, config) = full_state();
+        let long = "/home/someone/projects/a-very-long-directory-name/another-long-directory/scratchpad/smoke/hf-1017";
+        if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
+            s.worktree = WorktreePath::planned(PathBuf::from(long));
+        }
+        let _ = frame(&mut state, &config, 100, 20);
+        drag(&mut state, &config, 42, 0);
+        let screen = text(&frame(&mut state, &config, 100, 20));
+        let rows: Vec<&str> = screen.lines().collect();
+        assert!(rows[2].contains("#3") && rows[3].contains("octo"), "two-line row broken:\n{screen}");
+        assert!(rows[4].contains("#2"), "second row not drawn:\n{screen}");
+        drag(&mut state, &config, Split::MIN_LIST, 99);
+        send(&mut state, &config, KeyCode::Char('3'));
+        let screen = text(&frame(&mut state, &config, 100, 20));
+        let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
+        assert!(line.contains('…') && line.trim_end().ends_with("hf-1017"), "path end not visible in {line:?}\n{screen}");
+    }
+
+    #[test]
+    fn small_terminals_keep_both_panes() {
+        for (w, h) in [(54, 12), (40, 10), (20, 6), (3, 5)] {
+            for percent in [10, 42, 90] {
+                let (mut state, mut config) = full_state();
+                config.split = Split::from_percent(percent).expect("in range");
+                state.split = config.split;
+                let buf = frame(&mut state, &config, w, h);
+                let x = border(&buf).unwrap_or_else(|| panic!("no border at {w}x{h} {percent}%:\n{}", text(&buf)));
+                assert!(x >= 1 && x < w, "{w}x{h} {percent}%: border at {x}");
+            }
+        }
+        let (mut state, config) = full_state();
+        let screen = text(&frame(&mut state, &config, 40, 10));
+        let row = screen.lines().nth(2).unwrap_or_default();
+        assert!(row.contains("▌ #") && row.contains("│  Retry"), "a pane is empty:\n{screen}");
     }
 
     #[test]

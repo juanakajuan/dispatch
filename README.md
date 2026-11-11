@@ -71,11 +71,15 @@ If more than one PR closes the issue, the row shows the most advanced one: merge
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Refresh |
 | `/` | Filter. Enter keeps it, Esc clears it |
+| `<` / `>` | Move the border between the list and the details left or right by 5% |
+| `=` | Put the border back where it started |
 | `q`, Ctrl-C | Quit |
 
 In the dialog: Tab and Shift-Tab change the field, Left and Right change the skill or the mode, Esc cancels.
 
-Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection.
+Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection. Drag the border between the list and the details to resize them.
+
+The border is the same on all three tabs. Each side keeps at least 24 columns for the list and 30 for the details. On a terminal too narrow for both, the panes share the width and the border does not move. A resize lasts until you quit. To change where the border starts, set `split` in the config.
 
 The Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
 
@@ -95,7 +99,8 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
     { "label": "feature", "skill": "pstack:architect" }
   ],
   "detect_waiting": true,
-  "claude_command": ["claude"]
+  "claude_command": ["claude"],
+  "split": 42
 }
 ```
 
@@ -103,6 +108,7 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 - `label_skills` is checked in order. The first label that the issue has wins. Skills named here are added to `skills`.
 - `detect_waiting` is on by default. dispatch passes `--settings` with four hooks to `claude`. They set a flag on the tmux window when Claude waits for you. Set it to `false` if the hooks conflict with yours.
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
+- `split` is the width of the list as a percent of the window, from 10 to 90. The default is 42. `=` puts the border back here.
 
 An invalid file stops dispatch at start with a message. Unknown fields are errors.
 
