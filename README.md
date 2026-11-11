@@ -168,13 +168,15 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 {
   "detect_waiting": true,
   "claude_command": ["claude"],
-  "split": 42
+  "split": 42,
+  "icons": "unicode"
 }
 ```
 
 - `detect_waiting` is on by default. dispatch passes `--settings` with four hooks to `claude`. They set a flag on the tmux window when Claude waits for you. Set it to `false` if the hooks conflict with yours.
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
 - `split` is the width of the list as a percent of the window, from 10 to 90. The default is 42. `=` puts the border back here.
+- `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
 An invalid file stops dispatch at start with a message. Unknown fields are errors.
 

@@ -20,6 +20,7 @@ mod app;
 mod config;
 mod domain;
 mod github;
+mod glyphs;
 mod markdown;
 mod merge;
 mod proc;

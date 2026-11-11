@@ -9,6 +9,7 @@ use crate::app::{
     self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
 };
 use crate::config::Config;
+use crate::glyphs::Icons;
 use crate::markdown;
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::rules;
@@ -89,9 +90,10 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     let divider = Rect { x: detail.x.saturating_sub(1), width: 2, ..body }.intersection(body);
     hits.targets.push((divider, HitTarget::Divider));
     frame.buffer_mut().set_style(screen, palette::PLAIN);
-    draw_tabs(frame, tabs, rule, state, Instant::now(), &mut hits);
-    draw_list(frame, list, state, now, &mut hits);
-    draw_detail(frame, detail, state, now);
+    let icons = config.icons.icons();
+    draw_tabs(frame, tabs, rule, state, Instant::now(), icons, &mut hits);
+    draw_list(frame, list, state, now, icons, &mut hits);
+    draw_detail(frame, detail, state, now, icons);
     if let Some((lines, style)) = message {
         let lines: Vec<Line<'static>> = lines.into_iter().map(|l| centered(vec![span(l, style)], message_area.width)).collect();
         frame.render_widget(Paragraph::new(lines), message_area);
@@ -246,22 +248,22 @@ fn field(key: &str, value: Vec<Span<'static>>) -> Line<'static> {
     Line::from(spans)
 }
 
-fn badge(session: Option<&Session>, starting: bool) -> Span<'static> {
+fn badge(session: Option<&Session>, starting: bool, icons: &Icons) -> Span<'static> {
     match (session.map(Session::state), starting) {
-        (Some(SessionState::Running), _) => span("● running", palette::RUNNING),
-        (Some(SessionState::NeedsYou), _) => span("▲ needs you", palette::NEEDS_YOU),
-        (Some(SessionState::Exited), _) => span("○ exited", palette::EXITED),
-        (None, true) => span("… starting", palette::STARTING),
+        (Some(SessionState::Running), _) => span(format!("{} running", icons.running), palette::RUNNING),
+        (Some(SessionState::NeedsYou), _) => span(format!("{} needs you", icons.needs_you), palette::NEEDS_YOU),
+        (Some(SessionState::Exited), _) => span(format!("{} exited", icons.exited), palette::EXITED),
+        (None, true) => span(format!("{} starting", icons.starting), palette::STARTING),
         (None, false) => Span::raw(""),
     }
 }
 
-fn checks_span(checks: Checks) -> Span<'static> {
+fn checks_span(checks: Checks, icons: &Icons) -> Span<'static> {
     match checks {
-        Checks::Pass => span("✓", palette::PASS),
-        Checks::Fail => span("✗", palette::FAIL),
-        Checks::Pending => span("●", palette::PENDING),
-        Checks::None => span("·", palette::DIM),
+        Checks::Pass => span(icons.check_pass, palette::PASS),
+        Checks::Fail => span(icons.check_fail, palette::FAIL),
+        Checks::Pending => span(icons.check_pending, palette::PENDING),
+        Checks::None => span(icons.check_none, palette::DIM),
     }
 }
 
@@ -284,15 +286,15 @@ fn pr_state_span(state: PrState) -> Span<'static> {
 }
 
 /// Two cells before an issue title: the state of its lead PR, or blank.
-fn pr_mark(pr: Option<&PullRequest>) -> Span<'static> {
+fn pr_mark(pr: Option<&PullRequest>, icons: &Icons) -> Span<'static> {
     let Some(p) = pr else { return Span::raw("  ") };
     match (p.state, p.checks) {
-        (PrState::Merged, _) => span("✓ ", palette::MERGED),
-        (PrState::Draft, _) => span("◌ ", palette::DIM),
-        (PrState::Open, Checks::Pass) => span("● ", palette::PASS),
-        (PrState::Open, Checks::Fail) => span("● ", palette::FAIL),
-        (PrState::Open, Checks::Pending) => span("● ", palette::PENDING),
-        (PrState::Open, Checks::None) => span("● ", palette::PLAIN),
+        (PrState::Merged, _) => span(format!("{} ", icons.pr_merged), palette::MERGED),
+        (PrState::Draft, _) => span(format!("{} ", icons.pr_draft), palette::DIM),
+        (PrState::Open, Checks::Pass) => span(format!("{} ", icons.pr_open), palette::PASS),
+        (PrState::Open, Checks::Fail) => span(format!("{} ", icons.pr_open), palette::FAIL),
+        (PrState::Open, Checks::Pending) => span(format!("{} ", icons.pr_open), palette::PENDING),
+        (PrState::Open, Checks::None) => span(format!("{} ", icons.pr_open), palette::PLAIN),
         (PrState::Closed, _) => Span::raw("  "),
     }
 }
@@ -303,7 +305,7 @@ fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
 
 // ---- tabs and key bar ------------------------------------------------------
 
-fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Instant, hits: &mut HitMap) {
+fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Instant, icons: &Icons, hits: &mut HitMap) {
     let needs = state.sessions.values().filter(|s| s.state() == SessionState::NeedsYou).count();
     let tabs = [
         (Tab::Issues, "1", "Issues", state.issues.items.len(), 0),
@@ -321,7 +323,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Inst
             span(format!(" {count}"), palette::DIM),
         ];
         if needs > 0 {
-            label.push(span(format!(" ▲{needs}"), palette::NEEDS_YOU));
+            label.push(span(format!(" {}{needs}", icons.needs_you), palette::NEEDS_YOU));
         }
         let w = u16::try_from(spans_width(&label)).unwrap_or(u16::MAX);
         hits.targets.push((Rect::new(x, area.y, w, 1).intersection(area), HitTarget::Tab(tab)));
@@ -457,7 +459,7 @@ fn row_number(key: RowKey) -> String {
     }
 }
 
-fn draw_list(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, hits: &mut HitMap) {
+fn draw_list(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, icons: &Icons, hits: &mut HitMap) {
     let area = Rect { width: area.width.saturating_sub(1), ..area };
     let rows = app::visible_rows(state);
     let selected = app::selected_row(state);
@@ -476,7 +478,7 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp,
             break;
         }
         let rect = Rect::new(area.x, y, area.width, height);
-        let lines = list_row(state, *key, now, area.width, number_width, selected == Some(*key));
+        let lines = list_row(state, *key, now, area.width, number_width, selected == Some(*key), icons);
         frame.render_widget(Paragraph::new(lines.to_vec()), rect);
         hits.targets.push((rect, HitTarget::Row(*key)));
         y = y.saturating_add(ROW_HEIGHT);
@@ -505,9 +507,10 @@ fn list_row(
     width: u16,
     number_width: usize,
     selected: bool,
+    icons: &Icons,
 ) -> [Line<'static>; 2] {
     let mark = match key {
-        RowKey::Issue(n) => vec![pr_mark(app::lead_pr(state, n))],
+        RowKey::Issue(n) => vec![pr_mark(app::lead_pr(state, n), icons)],
         RowKey::Pr(_) | RowKey::Session(_) => Vec::new(),
     };
     let (title, right, meta): (String, Span<'static>, Vec<Span<'static>>) = match key {
@@ -517,13 +520,13 @@ fn list_row(
             if !i.labels.is_empty() {
                 facts.push_str(&format!(" · {}", i.labels.join(", ")));
             }
-            (one_line(&i.title), badge(state.sessions.get(&n), state.starting.contains(&n)), vec![span(facts, palette::DIM)])
+            (one_line(&i.title), badge(state.sessions.get(&n), state.starting.contains(&n), icons), vec![span(facts, palette::DIM)])
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return [Line::raw(""), Line::raw("")] };
             let mut meta = vec![span(format!("{} · {}", p.author, age(p.created_at, now)), palette::DIM)];
             if p.checks != Checks::None {
-                meta.extend([span(" · ", palette::DIM), checks_span(p.checks), span(format!(" {}", checks_word(p.checks)), palette::DIM)]);
+                meta.extend([span(" · ", palette::DIM), checks_span(p.checks, icons), span(format!(" {}", checks_word(p.checks)), palette::DIM)]);
             }
             (one_line(&p.title), pr_state_span(p.state), meta)
         }
@@ -532,7 +535,7 @@ fn list_row(
             let title = issue_of(state, n).map(|i| one_line(&i.title));
             let branch = session.map(|s| s.branch.as_str().to_string());
             let meta = if title.is_some() { branch.clone().unwrap_or_default() } else { String::new() };
-            (title.or(branch).unwrap_or_default(), badge(session, state.starting.contains(&n)), vec![span(meta, palette::DIM)])
+            (title.or(branch).unwrap_or_default(), badge(session, state.starting.contains(&n), icons), vec![span(meta, palette::DIM)])
         }
     };
     let marker = || if selected { span("▌ ", palette::ACCENT) } else { Span::raw("  ") };
@@ -548,7 +551,7 @@ fn list_row(
 
 // ---- detail ----------------------------------------------------------------
 
-fn draw_detail(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp) {
+fn draw_detail(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, icons: &Icons) {
     let border = if state.dragging_split { palette::ACCENT } else { palette::DIM };
     let block = Block::new().borders(Borders::LEFT).border_style(border).padding(Padding::horizontal(2));
     let inner = block.inner(area);
@@ -556,9 +559,9 @@ fn draw_detail(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestam
     let inner = Rect { width: inner.width.min(DETAIL_MAX_WIDTH), ..inner };
     let Some(key) = app::selected_row(state) else { return };
     match key {
-        RowKey::Issue(n) => draw_issue_detail(frame, inner, state, n, now),
-        RowKey::Pr(n) => draw_pr_detail(frame, inner, state, n, now),
-        RowKey::Session(n) => draw_session_detail(frame, inner, state, n),
+        RowKey::Issue(n) => draw_issue_detail(frame, inner, state, n, now, icons),
+        RowKey::Pr(n) => draw_pr_detail(frame, inner, state, n, now, icons),
+        RowKey::Session(n) => draw_session_detail(frame, inner, state, n, icons),
     }
 }
 
@@ -577,7 +580,7 @@ fn labels_line(labels: &[String]) -> Line<'static> {
     Line::from(labels.iter().flat_map(|l| [span(l.clone(), palette::LABEL), Span::raw("  ")]).collect::<Vec<_>>())
 }
 
-fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, now: jiff::Timestamp) {
+fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, now: jiff::Timestamp, icons: &Icons) {
     let Some(i) = issue_of(state, n) else { return };
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(span(i.title.clone(), palette::HEADING)),
@@ -599,12 +602,12 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
     lines.push(Line::raw(""));
     match (state.sessions.get(&n), state.starting.contains(&n)) {
         (Some(s), _) => {
-            lines.push(field("session", vec![badge(Some(s), false), span(format!("  {}", s.branch.as_str()), palette::DIM)]));
+            lines.push(field("session", vec![badge(Some(s), false, icons), span(format!("  {}", s.branch.as_str()), palette::DIM)]));
             let width = usize::from(area.width).saturating_sub(2);
             lines.extend(last_n(tail_lines(state, s), 3).iter().map(|l| Line::from(vec![span("│ ", palette::DIM), span(fit(l, width), palette::DIM)])));
             lines.push(Line::raw(""));
         }
-        (None, true) => lines.extend([field("session", vec![badge(None, true)]), Line::raw("")]),
+        (None, true) => lines.extend([field("session", vec![badge(None, true, icons)]), Line::raw("")]),
         (None, false) => {}
     }
     lines.extend(markdown::render(&i.body, area.width));
@@ -617,7 +620,7 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
                 span(format!("#{}  ", p.number.0), palette::DIM),
                 Span::raw(one_line(&p.title)),
                 Span::raw("  "),
-                checks_span(p.checks),
+                checks_span(p.checks, icons),
                 Span::raw(" "),
                 pr_state_span(p.state),
             ]));
@@ -626,14 +629,14 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain::PrNumber, now: jiff::Timestamp) {
+fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain::PrNumber, now: jiff::Timestamp, icons: &Icons) {
     let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return };
     let mut lines = vec![
         Line::from(span(p.title.clone(), palette::HEADING)),
         Line::from(span(format!("#{} · opened {} ago by {}", n.0, age(p.created_at, now), p.author), palette::DIM)),
         Line::raw(""),
         field("state", vec![pr_state_span(p.state)]),
-        field("checks", vec![checks_span(p.checks), Span::raw(format!(" {}", checks_word(p.checks)))]),
+        field("checks", vec![checks_span(p.checks, icons), Span::raw(format!(" {}", checks_word(p.checks)))]),
         field("branch", vec![Span::raw(format!("{} → {}", p.head, p.base))]),
         field("diff", vec![span(format!("+{}", p.additions), palette::PASS), Span::raw(" "), span(format!("-{}", p.deletions), palette::FAIL)]),
     ];
@@ -642,12 +645,12 @@ fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain
         lines.push(field("closes", vec![Span::raw(closes)]));
     }
     if let Some(s) = state.sessions.values().find(|s| s.branch.as_str() == p.head) {
-        lines.push(field("session", vec![Span::raw(format!("#{} ", s.issue.0)), badge(Some(s), false)]));
+        lines.push(field("session", vec![Span::raw(format!("#{} ", s.issue.0)), badge(Some(s), false, icons)]));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber) {
+fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, icons: &Icons) {
     let Some(s) = state.sessions.get(&n) else {
         let text = if state.starting.contains(&n) { "Creating the worktree and the tmux window…" } else { "" };
         frame.render_widget(Paragraph::new(span(text, palette::STARTING)), area);
@@ -659,12 +662,12 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
         Line::from(span(fit(&title, width), palette::HEADING)),
         Line::from(span(format!("#{}", n.0), palette::DIM)),
         Line::raw(""),
-        field("state", vec![badge(Some(s), false)]),
+        field("state", vec![badge(Some(s), false, icons)]),
         field("branch", vec![Span::raw(s.branch.as_str().to_string())]),
         field("worktree", vec![Span::raw(fit_path(&s.worktree.as_path().display().to_string(), width.saturating_sub(FIELD_KEY_CELLS)))]),
     ];
     if let Some(p) = app::pr_for_session(state, s) {
-        head.push(field("pr", vec![Span::raw(format!("#{} ", p.number.0)), checks_span(p.checks), Span::raw(" "), pr_state_span(p.state)]));
+        head.push(field("pr", vec![Span::raw(format!("#{} ", p.number.0)), checks_span(p.checks, icons), Span::raw(" "), pr_state_span(p.state)]));
     }
     head.push(Line::raw(""));
     head.push(Line::from(span(format!("output {}", "─".repeat(width.saturating_sub(7))), palette::DIM)));
@@ -751,11 +754,12 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
     frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
 
+    let icons = config.icons.icons();
     let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
         if on {
-            vec![span("● ", palette::ACCENT), Span::raw(text.to_string())]
+            vec![span(format!("{} ", icons.radio_on), palette::ACCENT), Span::raw(text.to_string())]
         } else {
-            vec![span(format!("○ {text}"), palette::DIM)]
+            vec![span(format!("{} {text}", icons.radio_off), palette::DIM)]
         }
     };
     let mut modes = vec![Span::raw("  ")];
@@ -786,6 +790,7 @@ mod tests {
     use crate::session::{Window, WindowId};
     use crate::testutil::{issue, pr};
     use crate::domain::Split;
+    use crate::glyphs::IconSet;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -971,6 +976,31 @@ mod tests {
         }
         let screen = text(&render(&state, &config, 100, 20));
         assert!(screen.contains("#3    Retry queue") && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
+    }
+
+    /// The column of `needle` on the first screen line that holds `anchor`.
+    fn column_of(screen: &str, anchor: &str, needle: &str) -> usize {
+        let line = screen.lines().find(|l| l.contains(anchor)).unwrap_or_else(|| panic!("no {anchor:?} in\n{screen}"));
+        let byte = line.find(needle).unwrap_or_else(|| panic!("no {needle:?} in {line:?}"));
+        cells(&line[..byte])
+    }
+
+    #[test]
+    fn the_nerd_font_set_draws_its_glyphs_in_the_same_columns_as_unicode() {
+        let (state, unicode) = full_state();
+        let nerd = Config { icons: IconSet::NerdFont, ..Config::default() };
+        let icons = nerd.icons.icons();
+        let plain = text(&render(&state, &unicode, 120, 24));
+        let screen = text(&render(&state, &nerd, 120, 24));
+        let mark = mark_cell(&render(&state, &nerd, 120, 24), 3);
+        assert_eq!(mark, (icons.pr_open.to_string(), palette::FG), "the PR mark cell");
+        assert!(screen.contains(&format!("#3  {} Retry queue", icons.pr_open)) && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
+        assert!(screen.contains(&format!("3 Sessions 1 {}1", icons.needs_you)), "tab count\n{screen}");
+        assert!(screen.contains(&format!("{} needs you", icons.needs_you)), "session badge\n{screen}");
+        for (anchor, needle) in [("#3 ", "Retry queue"), ("#2 ", "Docs"), ("#3 ", "needs you"), ("Sessions", "orbit")] {
+            assert_eq!(column_of(&screen, anchor, needle), column_of(&plain, anchor, needle), "{needle:?} moved");
+        }
+        assert_eq!(column_of(&screen, "needs you", icons.needs_you) + 2, column_of(&screen, "needs you", "needs you"));
     }
 
     #[test]
