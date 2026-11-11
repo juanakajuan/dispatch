@@ -1599,8 +1599,8 @@ mod tests {
         assert_eq!(github_fetches(&press(state, config, Msg::Tick(at))), 2);
         assert_eq!(state.due.github, at + config.github_refresh, "the timer starts again");
         assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))), 0, "inflight, and no new event");
-        press(state, config, Msg::Issues(Ok(Vec::new())));
-        press(state, config, Msg::Prs(Ok(Vec::new())));
+        press(state, config, Msg::Issues { result: Ok(Vec::new()), at });
+        press(state, config, Msg::Prs { result: Ok(Vec::new()), at });
         assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))), 0, "one event, one fetch");
     }
 
@@ -1655,9 +1655,9 @@ mod tests {
         press(&mut state, &config, Msg::FocusGained);
         let later = at + GITHUB_COOLDOWN;
         assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "waits for the fetch in flight");
-        press(&mut state, &config, Msg::Issues(Ok(Vec::new())));
+        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: later });
         assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "PRs still in flight");
-        press(&mut state, &config, Msg::Prs(Ok(Vec::new())));
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: later });
         assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 2);
     }
 
@@ -1669,8 +1669,8 @@ mod tests {
         state.due.github = now + GITHUB_COOLDOWN;
         let cmds = press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
-        press(&mut state, &config, Msg::Issues(Ok(Vec::new())));
-        press(&mut state, &config, Msg::Prs(Ok(Vec::new())));
+        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
         assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))), 2, "the issues fetch predated the event");
     }
 
