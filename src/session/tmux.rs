@@ -14,7 +14,7 @@ use std::path::Path;
 pub struct WindowId(String);
 
 impl WindowId {
-    pub(super) fn parse(raw: &str) -> Result<WindowId, String> {
+    pub fn parse(raw: &str) -> Result<WindowId, String> {
         let id = raw.trim();
         if id.starts_with('@') && id.len() > 1 && id[1..].chars().all(|c| c.is_ascii_digit()) {
             Ok(WindowId(id.to_string()))
