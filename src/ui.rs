@@ -318,9 +318,9 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Inst
     for (tab, key, name, count, needs) in tabs {
         let on = tab == state.tab;
         let mut label = vec![
-            span(format!("{key} "), palette::DIM),
+            span(format!("{key} "), palette::ACCENT),
             span(name, if on { palette::ACTIVE } else { palette::PLAIN }),
-            span(format!(" {count}"), palette::DIM),
+            span(format!(" ({count})"), palette::DIM),
         ];
         if needs > 0 {
             label.push(span(format!(" {}{needs}", icons.needs_you), palette::NEEDS_YOU));
@@ -930,9 +930,9 @@ mod tests {
         let (state, config) = full_state();
         let screen = text(&render(&state, &config, 120, 24));
         for want in [
-            "1 Issues 2",
-            "2 Pull requests 1",
-            "3 Sessions 1 ▲1",
+            "1 Issues (2)",
+            "2 Pull requests (1)",
+            "3 Sessions (1) ▲1",
             "#3  ● Retry queue",
             "▲ needs you",
             "bug, p1",
@@ -995,7 +995,7 @@ mod tests {
         let mark = mark_cell(&render(&state, &nerd, 120, 24), 3);
         assert_eq!(mark, (icons.pr_open.to_string(), palette::FG), "the PR mark cell");
         assert!(screen.contains(&format!("#3  {} Retry queue", icons.pr_open)) && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
-        assert!(screen.contains(&format!("3 Sessions 1 {}1", icons.needs_you)), "tab count\n{screen}");
+        assert!(screen.contains(&format!("3 Sessions (1) {}1", icons.needs_you)), "tab count\n{screen}");
         assert!(screen.contains(&format!("{} needs you", icons.needs_you)), "session badge\n{screen}");
         for (anchor, needle) in [("#3 ", "Retry queue"), ("#2 ", "Docs"), ("#3 ", "needs you"), ("Sessions", "orbit")] {
             assert_eq!(column_of(&screen, anchor, needle), column_of(&plain, anchor, needle), "{needle:?} moved");
@@ -1036,6 +1036,29 @@ mod tests {
         let rows: Vec<_> = hits.targets.iter().filter_map(|(r, t)| match t { HitTarget::Row(k) => Some((r.y, *k)), _ => None }).collect();
         assert_eq!(tabs, 3);
         assert_eq!(rows, [(2, RowKey::Issue(IssueNumber(3))), (4, RowKey::Issue(IssueNumber(2)))]);
+    }
+
+    #[test]
+    fn tab_keys_look_like_key_hints_and_counts_like_counts() {
+        let (mut state, config) = full_state();
+        state.issues.items.clear();
+        let buf = frame(&mut state, &config, 120, 20);
+        let top = text(&buf).lines().next().expect("tab row").to_string();
+        let column = |needle: &str| u16::try_from(top.chars().take(top.find(needle).expect(needle)).count()).expect("x");
+        for (label, end, tab) in [("1 Issues (0)", "(0)", Tab::Issues), ("2 Pull requests (1)", "(1)", Tab::Prs), ("3 Sessions (1) ▲1", "▲1", Tab::Sessions)] {
+            let x = column(label);
+            assert_eq!(buf[(x, 0)].fg, palette::ORANGE, "{label}: the key has the key bar's accent");
+            let count = column(end);
+            assert_eq!(buf[(count, 0)].symbol(), end.chars().next().expect("end").to_string());
+            if end.starts_with('(') {
+                assert_eq!(buf[(count, 0)].fg, palette::GRAY, "{label}: the count is dim");
+            }
+            let last = x + u16::try_from(cells(label)).expect("w") - 1;
+            let hit = |cx: u16| state.hits.targets.iter().find(|(r, _)| r.contains((cx, 0).into())).map(|(_, t)| *t);
+            assert_eq!(hit(x), Some(HitTarget::Tab(tab)), "{label}: a click on the key selects the tab");
+            assert_eq!(hit(last), Some(HitTarget::Tab(tab)), "{label}: a click on the last cell selects the tab");
+            assert_eq!(hit(last + 1), None, "{label}: the hit area ends at the label");
+        }
     }
 
     /// Draws like the shell does: the frame's hits go back into `state`.
@@ -1247,7 +1270,7 @@ mod tests {
     fn a_narrow_tab_row_keeps_the_age_and_drops_the_repo_name() {
         let (mut state, config) = full_state();
         state.issues.status = FeedStatus::Fresh { at: ago(12) };
-        let row = text(&render(&state, &config, 72, 10)).lines().next().unwrap_or_default().to_string();
+        let row = text(&render(&state, &config, 78, 10)).lines().next().unwrap_or_default().to_string();
         assert!(row.trim_end().ends_with("updated 12s ago") && !row.contains("orbit"), "row: {row:?}");
     }
 

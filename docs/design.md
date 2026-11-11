@@ -10,7 +10,7 @@ The user's view, as the README states it:
 
 ```
 $ cd ~/src/orbit && dispatch
-  1 Issues 9   2 Pull requests 4   3 Sessions 2 ▲1
+  1 Issues (9)   2 Pull requests (4)   3 Sessions (2) ▲1
   #142 Retry queue drops jobs when Redis reconnects  [bug][p1]          3h
   ...
   j/k move  1-3 tabs  s start session  a attach  x stop  r refresh  / filter  q quit
