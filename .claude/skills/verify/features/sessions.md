@@ -24,7 +24,7 @@ Preconditions:
 - A run is up and doctor shows no `FAIL`.
 - A session for issue `#N` exists. Make it with [Start a session](./start-session.md).
 
-- **State and tail.** Press `3`. Run `$V keys "$RUN" 3` and `$V wait "$RUN" 'FAKE-CLAUDE waiting'`. The detail pane shows `state    ▲ needs you`, `branch`, `worktree $RUN/work/<repo>-N`, and under `output ─` the fake claude lines. Run `$V shot "$RUN" sessions-tab`.
+- **State and tail.** Press `3`. Run `$V keys "$RUN" 3` and `$V wait "$RUN" 'FAKE-CLAUDE waiting'`. The detail pane shows `state    ▲ needs you`, `branch`, `worktree $RUN/work/<repo>/.claude/worktrees/N`, and under `output ─` the fake claude lines. Run `$V shot "$RUN" sessions-tab`.
 - **Running.** Type a line into the session window, as a user does after attach. Run `$V tmux "$RUN" send-keys -t '=drive:#N' 'hello' Enter` and `$V wait "$RUN" '● running' 5`. The fake claude runs the `UserPromptSubmit` hook, so the row shows `● running` for 1 s, then `▲ needs you` again. The tail shows `FAKE-CLAUDE got: hello`.
 - **Attach.** Attach a client, then press `a`. Run `$V client "$RUN"`, `$V tmux "$RUN" select-window -t drive:dispatch`, `$V keys "$RUN" a`, and `$V tmux "$RUN" display -p -t drive '#{window_name}'`. It prints `#N`. Go back with `$V tmux "$RUN" select-window -t drive:dispatch`.
 - **Stop.** Press `x`. Run `$V keys "$RUN" x` and `$V wait "$RUN" 'Stopped #N'`. The row shows `○ exited`. `$V state "$RUN" after-stop` shows the worktree and the marker, and no `#N` window.

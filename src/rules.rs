@@ -171,13 +171,19 @@ fn settings_args(hooks_json: Option<&str>) -> Vec<String> {
     hooks_json.map_or_else(Vec::new, |json| vec!["--settings".to_string(), json.to_string()])
 }
 
-/// `<repo parent>/<repo dir name>-<issue>`. Deterministic per issue: the
+/// Where session worktrees live, relative to the repo root. The same place
+/// Claude Code uses for its own worktrees.
+pub const WORKTREES_DIR: &str = ".claude/worktrees";
+
+/// The `.git/info/exclude` line that hides `WORKTREES_DIR` from `git status`
+/// in the main checkout.
+pub const WORKTREES_EXCLUDE: &str = ".claude/worktrees/";
+
+/// `<repo root>/.claude/worktrees/<issue>`. Deterministic per issue: the
 /// path itself is a second guard against two worktrees for one issue,
 /// because `git worktree add` refuses an existing path.
 pub fn worktree_dir_for(repo_root: &Path, issue: IssueNumber) -> std::path::PathBuf {
-    let name = repo_root.file_name().map_or_else(|| "repo".into(), |n| n.to_string_lossy().into_owned());
-    let dir_name = format!("{name}-{}", issue.0);
-    repo_root.parent().map_or_else(|| dir_name.clone().into(), |p| p.join(&dir_name))
+    repo_root.join(WORKTREES_DIR).join(issue.0.to_string())
 }
 
 /// Case-insensitive substring match over `#N title labels branch`.
@@ -229,8 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn worktree_dir_is_a_sibling() {
-        assert_eq!(worktree_dir_for(Path::new("/a/orbit"), IssueNumber(142)), Path::new("/a/orbit-142"));
+    fn worktree_dir_is_inside_the_repo() {
+        assert_eq!(worktree_dir_for(Path::new("/a/orbit"), IssueNumber(142)), Path::new("/a/orbit/.claude/worktrees/142"));
+        assert!(Path::new(WORKTREES_EXCLUDE).starts_with(WORKTREES_DIR));
     }
 
     #[test]
