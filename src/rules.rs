@@ -84,8 +84,7 @@ pub fn continue_args(hooks_json: Option<&str>) -> Vec<String> {
 /// so it can fix a red check or a conflict, or explain why it stopped.
 pub fn merge_prompt(pr: PrNumber) -> String {
     format!(
-        "Merge PR #{n} with `gh pr merge {n}`, using a merge method the repo allows. \
-         If checks are failing or the branch does not merge cleanly, stop and tell me why instead of forcing it.",
+        "Merge PR #{n} with `gh pr merge {n}`, using a merge method the repo allows.",
         n = pr.0
     )
 }
