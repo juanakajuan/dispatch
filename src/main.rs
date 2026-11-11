@@ -9,9 +9,10 @@
 //! - Each read job (`gh`, observe, tail) runs on its own short-lived
 //!   `std::thread`, with an owned clone of the immutable `Workspace`, and sends
 //!   exactly one `Msg` back on an mpsc channel. `Inflight` caps it at one job
-//!   per kind. Start, stop, and resume go through one serial writer thread,
-//!   because two concurrent `git config` writes can fail on the `.git/config`
-//!   lock. No `Mutex`, no `Arc<State>`.
+//!   per kind. Start, stop, resume, send, and merge go through one serial
+//!   writer thread, because two concurrent `git config` writes can fail on the
+//!   `.git/config` lock, and because a second merge must see the first one
+//!   done. No `Mutex`, no `Arc<State>`.
 //! - The loop: drain the channel, poll input for up to 100 ms, emit a `Tick`,
 //!   update, draw. gh latency never blocks a frame.
 
@@ -20,6 +21,7 @@ mod config;
 mod domain;
 mod github;
 mod markdown;
+mod merge;
 mod proc;
 mod rules;
 mod session;
@@ -103,6 +105,7 @@ enum WriteJob {
     Stop(domain::IssueNumber),
     Resume(domain::IssueNumber),
     Send { issue: domain::IssueNumber, text: String },
+    Merge(app::MergeAsk),
 }
 
 fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
@@ -116,6 +119,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
                 WriteJob::Resume(issue) => Msg::Resumed { issue, result: ws.resume(issue).map_err(|e| e.to_string()) },
                 WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) },
+                WriteJob::Merge(ask) => Msg::Merged { ask, result: merge::merge(ws.repo_root(), ask.pr) },
             };
             if tx.send(msg).is_err() {
                 return;
@@ -138,6 +142,9 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         }
         Job::Send { issue, text } => {
             let _ = writer.send(WriteJob::Send { issue, text });
+        }
+        Job::Merge(ask) => {
+            let _ = writer.send(WriteJob::Merge(ask));
         }
         Job::FetchIssues => spawn_read(ws, tx, |ws| Msg::Issues(github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string()))),
         Job::FetchPrs => spawn_read(ws, tx, |ws| Msg::Prs(github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string()))),

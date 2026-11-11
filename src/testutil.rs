@@ -1,6 +1,6 @@
 //! Shared fixtures for unit tests.
 
-use crate::domain::{Checks, Issue, IssueNumber, PrNumber, PrState, PullRequest};
+use crate::domain::{Checks, Issue, IssueNumber, Mergeability, PrNumber, PrState, PullRequest};
 use std::path::PathBuf;
 
 pub fn issue(number: u32, title: &str, labels: &[&str]) -> Issue {
@@ -24,10 +24,12 @@ pub fn pr(number: u32, head: &str, closes: &[u32]) -> PullRequest {
         author: "octo".to_string(),
         created_at: jiff::Timestamp::UNIX_EPOCH,
         head: head.to_string(),
+        head_oid: format!("sha{number}"),
         base: "main".to_string(),
         additions: 1,
         deletions: 0,
         checks: Checks::None,
+        mergeability: Mergeability::Clean,
         closes: closes.iter().map(|n| IssueNumber(*n)).collect(),
         url: String::new(),
     }
