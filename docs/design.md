@@ -72,7 +72,7 @@ Module map (about 2.3k lines with tests):
 
 **Waiting detection is cheap here, so it is in.** The window is already observed through user options. When `detect_waiting` is on (default), `claude` gets `--settings` with four hooks. `Notification` and `Stop` set `@dispatch-waiting` on `$TMUX_PANE`, and `UserPromptSubmit` and `PreToolUse` clear it. The cost is one more format field and one JSON constant. There is no extra polling and no transcript parsing.
 
-**Colors.** `ui::palette` is the only place that builds a `Style`. It uses foreground ANSI colors only, never a background, and `REVERSED` for selection, so the terminal theme applies everywhere.
+**Colors.** `ui::palette` is the only place that builds a `Style`. It uses Gruvbox dark foreground colors (the user asked for them after the first version) and never a background, so the terminal background shows through. Selection is an accent marker and bold text, not `REVERSED`.
 
 **Not done.** No state file. No PID tracking. dispatch does not delete worktrees or branches. No multi-repo view. No GitHub writes; Claude opens the PR.
 

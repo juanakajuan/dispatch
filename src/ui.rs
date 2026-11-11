@@ -1,6 +1,7 @@
 //! Rendering. Reads `State`, writes nothing but the frame, and returns the
-//! clickable regions it drew. Layout: tab bar (1 row), list | detail
-//! (40% | 60%), key bar (1 row). The dialog is a centered overlay.
+//! clickable regions it drew. Layout: tab bar and its rule (2 rows),
+//! list | detail (42% | 58%), a blank row, key bar (1 row). List rows are two
+//! lines tall. The dialog is a centered overlay.
 
 use crate::app::{
     self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
@@ -13,40 +14,62 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
 
 /// The whole palette. No other module builds a `Style`.
-/// Rule: foreground from the 16 ANSI colors only; never a background color;
-/// selection is `Modifier::REVERSED`, so it uses the terminal's own colors and
-/// the user's theme applies everywhere.
+/// Rule: Gruvbox (dark) foregrounds only; never a background color, so the
+/// terminal's own background shows through. One accent (orange) marks what
+/// is active: the tab, the selected row, the focused field, the keys. The
+/// other colors carry state only.
 pub mod palette {
     use ratatui::style::{Color, Modifier, Style};
 
-    pub const PLAIN: Style = Style::new();
-    pub const HEADING: Style = Style::new().add_modifier(Modifier::BOLD);
-    pub const DIM: Style = Style::new().fg(Color::DarkGray);
-    pub const NUMBER: Style = Style::new().fg(Color::Cyan);
-    pub const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
-    pub const RUNNING: Style = Style::new().fg(Color::Green);
-    pub const NEEDS_YOU: Style = Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    pub const EXITED: Style = Style::new().fg(Color::DarkGray);
-    pub const STARTING: Style = Style::new().fg(Color::Cyan);
-    pub const PASS: Style = Style::new().fg(Color::Green);
-    pub const FAIL: Style = Style::new().fg(Color::Red);
-    pub const PENDING: Style = Style::new().fg(Color::Yellow);
-    pub const MERGED: Style = Style::new().fg(Color::Magenta);
-    pub const LABEL: Style = Style::new().fg(Color::Magenta);
-    pub const KEY: Style = Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD);
-    pub const ERROR: Style = Style::new().fg(Color::Red);
+    pub const FG: Color = Color::Rgb(0xeb, 0xdb, 0xb2);
+    pub const GRAY: Color = Color::Rgb(0x92, 0x83, 0x74);
+    pub const RED: Color = Color::Rgb(0xfb, 0x49, 0x34);
+    pub const GREEN: Color = Color::Rgb(0xb8, 0xbb, 0x26);
+    pub const YELLOW: Color = Color::Rgb(0xfa, 0xbd, 0x2f);
+    pub const BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
+    pub const PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
+    pub const AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
+    pub const ORANGE: Color = Color::Rgb(0xfe, 0x80, 0x19);
+
+    pub const PLAIN: Style = Style::new().fg(FG);
+    pub const HEADING: Style = Style::new().fg(FG).add_modifier(Modifier::BOLD);
+    pub const DIM: Style = Style::new().fg(GRAY);
+    pub const ACCENT: Style = Style::new().fg(ORANGE);
+    pub const ACTIVE: Style = Style::new().fg(ORANGE).add_modifier(Modifier::BOLD);
+    pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
+    pub const RUNNING: Style = Style::new().fg(GREEN);
+    pub const NEEDS_YOU: Style = Style::new().fg(YELLOW).add_modifier(Modifier::BOLD);
+    pub const EXITED: Style = Style::new().fg(GRAY);
+    pub const STARTING: Style = Style::new().fg(AQUA);
+    pub const PASS: Style = Style::new().fg(GREEN);
+    pub const FAIL: Style = Style::new().fg(RED);
+    pub const PENDING: Style = Style::new().fg(YELLOW);
+    pub const MERGED: Style = Style::new().fg(PURPLE);
+    pub const LABEL: Style = Style::new().fg(BLUE);
+    pub const ERROR: Style = Style::new().fg(RED);
 }
+
+const ROW_HEIGHT: u16 = 2;
+const DETAIL_MAX_WIDTH: u16 = 100;
 
 pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     let now = jiff::Timestamp::now();
-    let [tabs, body, keys] =
-        Layout::vertical([Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(frame.area());
-    let [list, detail] = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)]).areas(body);
+    let [tabs, rule, body, _gap, keys] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(frame.area());
+    let [list, detail] = Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)]).areas(body);
     let mut hits = HitMap::default();
-    draw_tabs(frame, tabs, state, &mut hits);
+    let screen = frame.area();
+    frame.buffer_mut().set_style(screen, palette::PLAIN);
+    draw_tabs(frame, tabs, rule, state, &mut hits);
     draw_list(frame, list, state, now, &mut hits);
     draw_detail(frame, detail, state, now);
     draw_keys(frame, keys, state);
@@ -104,10 +127,14 @@ fn span(text: impl Into<String>, style: Style) -> Span<'static> {
     Span::styled(text.into(), style)
 }
 
-/// One list row: `left` is cut to fit, `right` stays whole at the edge.
-fn row_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>, selected: bool) -> Line<'static> {
+fn spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(Span::width).sum()
+}
+
+/// One row line: `left` is cut to fit, `right` stays whole at the edge.
+fn row_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>) -> Line<'static> {
     let width = usize::from(width);
-    let right_w: usize = right.iter().map(Span::width).sum();
+    let right_w = spans_width(&right);
     let budget = width.saturating_sub(right_w + 1);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0;
@@ -119,8 +146,14 @@ fn row_line(width: u16, left: Vec<Span<'static>>, right: Vec<Span<'static>>, sel
     }
     spans.push(Span::raw(" ".repeat(width.saturating_sub(used + right_w))));
     spans.extend(right);
-    let line = Line::from(spans);
-    if selected { line.style(palette::SELECTED) } else { line }
+    Line::from(spans)
+}
+
+/// A detail row with a dim key in a fixed column.
+fn field(key: &str, value: Vec<Span<'static>>) -> Line<'static> {
+    let mut spans = vec![span(format!("{key:<9}"), palette::DIM)];
+    spans.extend(value);
+    Line::from(spans)
 }
 
 fn badge(session: Option<&Session>, starting: bool) -> Span<'static> {
@@ -142,6 +175,15 @@ fn checks_span(checks: Checks) -> Span<'static> {
     }
 }
 
+fn checks_word(checks: Checks) -> &'static str {
+    match checks {
+        Checks::Pass => "checks passing",
+        Checks::Fail => "checks failing",
+        Checks::Pending => "checks running",
+        Checks::None => "no checks",
+    }
+}
+
 fn pr_state_span(state: PrState) -> Span<'static> {
     match state {
         PrState::Open => span("open", palette::PASS),
@@ -151,48 +193,65 @@ fn pr_state_span(state: PrState) -> Span<'static> {
     }
 }
 
-fn labels_spans(labels: &[String]) -> Vec<Span<'static>> {
-    labels.iter().flat_map(|l| [span(format!("[{l}]"), palette::LABEL), Span::raw(" ")]).collect()
-}
-
 fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
     state.issues.items.iter().find(|i| i.number == n)
 }
 
 // ---- tabs and key bar ------------------------------------------------------
 
-fn draw_tabs(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
+fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mut HitMap) {
     let needs = state.sessions.values().filter(|s| s.state() == SessionState::NeedsYou).count();
-    let sessions_n = state.sessions.len();
     let tabs = [
-        (Tab::Issues, format!("1 Issues {}", state.issues.items.len())),
-        (Tab::Prs, format!("2 Pull requests {}", state.prs.items.len())),
-        (
-            Tab::Sessions,
-            if needs > 0 { format!("3 Sessions {sessions_n} ▲{needs}") } else { format!("3 Sessions {sessions_n}") },
-        ),
+        (Tab::Issues, "1", "Issues", state.issues.items.len(), 0),
+        (Tab::Prs, "2", "Pull requests", state.prs.items.len(), 0),
+        (Tab::Sessions, "3", "Sessions", state.sessions.len(), needs),
     ];
-    let mut spans = Vec::new();
-    let mut x = area.x;
-    for (tab, label) in tabs {
-        let text = format!(" {label} ");
-        let w = u16::try_from(cells(&text)).unwrap_or(u16::MAX);
+    let mut spans = vec![Span::raw(" ")];
+    let mut x = area.x.saturating_add(1);
+    let mut active: (u16, u16) = (area.x, 0);
+    for (tab, key, name, count, needs) in tabs {
+        let on = tab == state.tab;
+        let mut label = vec![
+            span(format!("{key} "), palette::DIM),
+            span(name, if on { palette::ACTIVE } else { palette::PLAIN }),
+            span(format!(" {count}"), palette::DIM),
+        ];
+        if needs > 0 {
+            label.push(span(format!(" ▲{needs}"), palette::NEEDS_YOU));
+        }
+        let w = u16::try_from(spans_width(&label)).unwrap_or(u16::MAX);
         hits.targets.push((Rect::new(x, area.y, w, 1).intersection(area), HitTarget::Tab(tab)));
-        spans.push(span(text, if tab == state.tab { palette::SELECTED } else { palette::PLAIN }));
-        spans.push(Span::raw(" "));
-        x = x.saturating_add(w + 1);
+        if on {
+            active = (x, w);
+        }
+        spans.extend(label);
+        spans.push(Span::raw("   "));
+        x = x.saturating_add(w).saturating_add(3);
     }
     let status = match state.tab {
         Tab::Issues => feed_status(&state.issues),
         Tab::Prs => feed_status(&state.prs),
         Tab::Sessions => None,
     };
-    if let Some((text, style)) = status {
-        let used = usize::from(x.saturating_sub(area.x));
-        let room = usize::from(area.width).saturating_sub(used + 1);
-        spans.push(span(fit(&text, room), style));
-    }
+    let (text, style) = status.unwrap_or_else(|| (state.context.repo_name.clone(), palette::DIM));
+    let used = usize::from(x.saturating_sub(area.x));
+    let room = usize::from(area.width).saturating_sub(used + 1);
+    let text = fit(&text, room);
+    spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
+    spans.push(span(text, style));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+
+    let total = usize::from(rule.width);
+    let before = usize::from(active.0.saturating_sub(rule.x)).min(total);
+    let on = usize::from(active.1).min(total - before);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            span("─".repeat(before), palette::DIM),
+            span("━".repeat(on), palette::ACCENT),
+            span("─".repeat(total - before - on), palette::DIM),
+        ])),
+        rule,
+    );
 }
 
 fn feed_status<T>(feed: &Feed<T>) -> Option<(String, Style)> {
@@ -207,55 +266,74 @@ fn feed_status<T>(feed: &Feed<T>) -> Option<(String, Style)> {
 }
 
 fn draw_keys(frame: &mut Frame, area: Rect, state: &State) {
-    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    let hint = |spans: &mut Vec<Span<'static>>, k: &str, d: &str| {
+        spans.extend([span(k.to_string(), palette::ACCENT), span(format!(" {d}   "), palette::DIM)]);
+    };
     match &state.focus {
         Focus::Filter => {
-            spans.push(span("/ ", palette::KEY));
+            spans.push(span("/ ", palette::ACCENT));
             spans.push(Span::raw(state.filter.clone()));
-            spans.push(span("▏", palette::DIM));
-            spans.push(span("   enter keep   esc clear", palette::DIM));
+            spans.push(span("▏   ", palette::DIM));
+            hint(&mut spans, "enter", "keep");
+            hint(&mut spans, "esc", "clear");
         }
         Focus::Dialog(_) => {
-            for (k, d) in [("ctrl-s", "start"), ("esc", "cancel"), ("tab", "next field")] {
-                spans.extend([span(k, palette::KEY), span(format!(" {d}  "), palette::DIM)]);
+            for (k, d) in [("ctrl-s", "start"), ("tab", "next field"), ("←/→", "change"), ("esc", "cancel")] {
+                hint(&mut spans, k, d);
             }
         }
         Focus::List => {
             if !state.filter.is_empty() {
-                spans.push(span(format!("filter: {}  ", state.filter), palette::LABEL));
+                spans.push(span(format!("/{}   ", state.filter), palette::LABEL));
             }
             for (k, d) in app::key_bar(state) {
-                spans.extend([span(k, palette::KEY), span(format!(" {d}  "), palette::DIM)]);
+                hint(&mut spans, k, d);
             }
         }
     }
     if let Some(toast) = &state.toast {
-        let used: usize = spans.iter().map(Span::width).sum();
-        let room = usize::from(area.width).saturating_sub(used + 1);
+        let room = usize::from(area.width).saturating_sub(spans_width(&spans) + 1);
         let style = if toast.text.contains("failed") { palette::ERROR } else { palette::PLAIN };
-        spans.push(span(fit(&one_line(&toast.text), room), style));
+        let text = fit(&one_line(&toast.text), room);
+        spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
+        spans.push(span(text, style));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 // ---- list ------------------------------------------------------------------
 
+fn row_number(key: RowKey) -> String {
+    match key {
+        RowKey::Issue(n) | RowKey::Session(n) => format!("#{}", n.0),
+        RowKey::Pr(n) => format!("#{}", n.0),
+    }
+}
+
 fn draw_list(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, hits: &mut HitMap) {
+    let area = Rect { width: area.width.saturating_sub(1), ..area };
     let rows = app::visible_rows(state);
     let selected = app::selected_row(state);
     if rows.is_empty() {
-        frame.render_widget(Paragraph::new(span(empty_text(state), palette::DIM)), area);
+        frame.render_widget(Paragraph::new(span(format!("  {}", empty_text(state)), palette::DIM)), area);
         return;
     }
-    let height = usize::from(area.height);
+    let number_width = rows.iter().map(|k| row_number(*k).len()).max().unwrap_or(0);
+    let visible = usize::from(area.height / ROW_HEIGHT).max(1);
     let at = selected.and_then(|k| rows.iter().position(|r| *r == k)).unwrap_or(0);
-    let top = (at + 1).saturating_sub(height);
-    for (i, key) in rows.iter().enumerate().skip(top).take(height) {
-        let y = area.y + u16::try_from(i - top).unwrap_or(0);
-        let rect = Rect::new(area.x, y, area.width, 1);
-        let line = list_row(state, *key, now, area.width, selected == Some(*key));
-        frame.render_widget(Paragraph::new(line), rect);
+    let top = (at + 1).saturating_sub(visible);
+    let mut y = area.y;
+    for key in rows.iter().skip(top).take(visible) {
+        let height = area.bottom().saturating_sub(y).min(ROW_HEIGHT);
+        if height == 0 {
+            break;
+        }
+        let rect = Rect::new(area.x, y, area.width, height);
+        let lines = list_row(state, *key, now, area.width, number_width, selected == Some(*key));
+        frame.render_widget(Paragraph::new(lines.to_vec()), rect);
         hits.targets.push((rect, HitTarget::Row(*key)));
+        y = y.saturating_add(ROW_HEIGHT);
     }
 }
 
@@ -272,49 +350,56 @@ fn empty_text(state: &State) -> String {
     }
 }
 
-fn list_row(state: &State, key: RowKey, now: jiff::Timestamp, width: u16, selected: bool) -> Line<'static> {
-    match key {
+/// Line 1: marker, number, title, and the state at the right edge.
+/// Line 2: the quiet facts (author, age, labels or branch) under the title.
+fn list_row(
+    state: &State,
+    key: RowKey,
+    now: jiff::Timestamp,
+    width: u16,
+    number_width: usize,
+    selected: bool,
+) -> [Line<'static>; 2] {
+    let (title, right, meta): (String, Span<'static>, Vec<Span<'static>>) = match key {
         RowKey::Issue(n) => {
-            let Some(i) = issue_of(state, n) else { return Line::raw("") };
-            let left = vec![span(format!("#{} ", n.0), palette::NUMBER), Span::raw(one_line(&i.title))];
-            let mut right = labels_spans(&i.labels);
-            let starting = state.starting.contains(&n);
-            right.push(badge(state.sessions.get(&n), starting));
-            right.push(span(format!(" {:>3}", age(i.created_at, now)), palette::DIM));
-            row_line(width, left, right, selected)
+            let Some(i) = issue_of(state, n) else { return [Line::raw(""), Line::raw("")] };
+            let mut facts = format!("{} · {}", i.author, age(i.created_at, now));
+            if !i.labels.is_empty() {
+                facts.push_str(&format!(" · {}", i.labels.join(", ")));
+            }
+            (one_line(&i.title), badge(state.sessions.get(&n), state.starting.contains(&n)), vec![span(facts, palette::DIM)])
         }
         RowKey::Pr(n) => {
-            let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return Line::raw("") };
-            let left = vec![span(format!("#{} ", n.0), palette::NUMBER), Span::raw(one_line(&p.title))];
-            let right = vec![
-                checks_span(p.checks),
-                Span::raw(" "),
-                pr_state_span(p.state),
-                span(format!(" {:>3}", age(p.created_at, now)), palette::DIM),
-            ];
-            row_line(width, left, right, selected)
+            let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return [Line::raw(""), Line::raw("")] };
+            let mut meta = vec![span(format!("{} · {}", p.author, age(p.created_at, now)), palette::DIM)];
+            if p.checks != Checks::None {
+                meta.extend([span(" · ", palette::DIM), checks_span(p.checks), span(format!(" {}", checks_word(p.checks)), palette::DIM)]);
+            }
+            (one_line(&p.title), pr_state_span(p.state), meta)
         }
         RowKey::Session(n) => {
             let session = state.sessions.get(&n);
-            let title = match (issue_of(state, n), session) {
-                (Some(i), _) => one_line(&i.title),
-                (None, Some(s)) => s.branch.as_str().to_string(),
-                (None, None) => String::new(),
-            };
-            let left = vec![span(format!("#{} ", n.0), palette::NUMBER), Span::raw(title)];
-            let right = vec![badge(session, state.starting.contains(&n))];
-            row_line(width, left, right, selected)
+            let title = issue_of(state, n).map(|i| one_line(&i.title));
+            let branch = session.map(|s| s.branch.as_str().to_string());
+            let meta = if title.is_some() { branch.clone().unwrap_or_default() } else { String::new() };
+            (title.or(branch).unwrap_or_default(), badge(session, state.starting.contains(&n)), vec![span(meta, palette::DIM)])
         }
-    }
+    };
+    let marker = || if selected { span("▌ ", palette::ACCENT) } else { Span::raw("  ") };
+    let number = span(format!("{:<number_width$}  ", row_number(key)), palette::DIM);
+    let title = span(title, if selected { palette::HEADING } else { palette::PLAIN });
+    let mut second = vec![marker(), Span::raw(" ".repeat(number_width + 2))];
+    second.extend(meta);
+    [row_line(width, vec![marker(), number, title], vec![right]), row_line(width, second, Vec::new())]
 }
 
 // ---- detail ----------------------------------------------------------------
 
 fn draw_detail(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp) {
-    let block = Block::new().borders(Borders::LEFT).border_style(palette::DIM);
+    let block = Block::new().borders(Borders::LEFT).border_style(palette::DIM).padding(Padding::horizontal(2));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let inner = Rect { x: inner.x + 1, width: inner.width.saturating_sub(1), ..inner };
+    let inner = Rect { width: inner.width.min(DETAIL_MAX_WIDTH), ..inner };
     let Some(key) = app::selected_row(state) else { return };
     match key {
         RowKey::Issue(n) => draw_issue_detail(frame, inner, state, n, now),
@@ -334,13 +419,54 @@ fn last_n(lines: &[String], n: usize) -> &[String] {
     &lines[lines.len().saturating_sub(n)..]
 }
 
+fn labels_line(labels: &[String]) -> Line<'static> {
+    Line::from(labels.iter().flat_map(|l| [span(l.clone(), palette::LABEL), Span::raw("  ")]).collect::<Vec<_>>())
+}
+
+/// A light Markdown pass for issue bodies: headings are bold without their
+/// `#` marks, code fences become a dim gutter, and runs of blank lines
+/// collapse to one. Everything else is shown as written.
+fn body_lines(body: &str) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    let mut in_code = false;
+    let mut last_blank = true;
+    for raw in body.lines().take(300) {
+        let line = raw.trim_end();
+        if line.trim_start().starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            out.push(Line::from(vec![span("│ ", palette::DIM), Span::raw(line.to_string())]));
+            last_blank = false;
+            continue;
+        }
+        if line.is_empty() {
+            if !last_blank {
+                out.push(Line::raw(""));
+            }
+            last_blank = true;
+            continue;
+        }
+        last_blank = false;
+        let heading = line.trim_start_matches('#');
+        if heading.len() < line.len() && heading.starts_with(' ') {
+            out.push(Line::from(span(heading.trim().to_string(), palette::HEADING)));
+        } else {
+            out.push(Line::raw(line.to_string()));
+        }
+    }
+    out
+}
+
 fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, now: jiff::Timestamp) {
     let Some(i) = issue_of(state, n) else { return };
     let mut lines: Vec<Line<'static>> = vec![
-        Line::from(vec![span(format!("#{} ", n.0), palette::NUMBER), span(i.title.clone(), palette::HEADING)]),
+        Line::from(span(i.title.clone(), palette::HEADING)),
         Line::from(span(
             format!(
-                "opened {} ago by {} · {} comment{}",
+                "#{} · opened {} ago by {} · {} comment{}",
+                n.0,
                 age(i.created_at, now),
                 i.author,
                 i.comment_count,
@@ -348,30 +474,31 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
             ),
             palette::DIM,
         )),
-        Line::from(labels_spans(&i.labels)),
-        Line::raw(""),
     ];
-    let session = state.sessions.get(&n);
-    match (session, state.starting.contains(&n)) {
-        (Some(s), _) => {
-            lines.push(Line::from(vec![badge(Some(s), false), span(format!("  {}", s.branch.as_str()), palette::DIM)]));
-            lines.extend(last_n(tail_lines(state, s), 3).iter().map(|l| Line::from(span(format!("  {}", fit(l, usize::from(area.width).saturating_sub(2))), palette::DIM))));
-            lines.push(Line::from(vec![span("a", palette::KEY), span(" attach or resume   ", palette::DIM), span("x", palette::KEY), span(" stop", palette::DIM)]));
-        }
-        (None, true) => lines.push(Line::from(badge(None, true))),
-        (None, false) => lines.push(Line::from(vec![span("s", palette::KEY), Span::raw(" Start Claude session")])),
+    if !i.labels.is_empty() {
+        lines.push(labels_line(&i.labels));
     }
     lines.push(Line::raw(""));
-    lines.extend(i.body.lines().take(200).map(|l| Line::raw(l.to_string())));
+    match (state.sessions.get(&n), state.starting.contains(&n)) {
+        (Some(s), _) => {
+            lines.push(field("session", vec![badge(Some(s), false), span(format!("  {}", s.branch.as_str()), palette::DIM)]));
+            let width = usize::from(area.width).saturating_sub(2);
+            lines.extend(last_n(tail_lines(state, s), 3).iter().map(|l| Line::from(vec![span("│ ", palette::DIM), span(fit(l, width), palette::DIM)])));
+            lines.push(Line::raw(""));
+        }
+        (None, true) => lines.extend([field("session", vec![badge(None, true)]), Line::raw("")]),
+        (None, false) => {}
+    }
+    lines.extend(body_lines(&i.body));
     let linked: Vec<&PullRequest> = state.prs.items.iter().filter(|p| p.closes.contains(&n)).collect();
     if !linked.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::from(span("Linked pull requests", palette::HEADING)));
         for p in linked {
             lines.push(Line::from(vec![
-                span(format!("#{} ", p.number.0), palette::NUMBER),
+                span(format!("#{}  ", p.number.0), palette::DIM),
                 Span::raw(one_line(&p.title)),
-                Span::raw(" "),
+                Span::raw("  "),
                 checks_span(p.checks),
                 Span::raw(" "),
                 pr_state_span(p.state),
@@ -383,29 +510,21 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
 
 fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain::PrNumber, now: jiff::Timestamp) {
     let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return };
-    let checks = match p.checks {
-        Checks::Pass => "checks passing",
-        Checks::Fail => "checks failing",
-        Checks::Pending => "checks running",
-        Checks::None => "no checks",
-    };
     let mut lines = vec![
-        Line::from(vec![span(format!("#{} ", n.0), palette::NUMBER), span(p.title.clone(), palette::HEADING)]),
-        Line::from(vec![
-            pr_state_span(p.state),
-            Span::raw(" · "),
-            checks_span(p.checks),
-            Span::raw(format!(" {checks}")),
-        ]),
-        Line::from(span(format!("opened {} ago by {}", age(p.created_at, now), p.author), palette::DIM)),
-        Line::from(format!("{} → {}", p.head, p.base)),
-        Line::from(vec![span(format!("+{}", p.additions), palette::PASS), Span::raw(" "), span(format!("-{}", p.deletions), palette::FAIL)]),
+        Line::from(span(p.title.clone(), palette::HEADING)),
+        Line::from(span(format!("#{} · opened {} ago by {}", n.0, age(p.created_at, now), p.author), palette::DIM)),
+        Line::raw(""),
+        field("state", vec![pr_state_span(p.state)]),
+        field("checks", vec![checks_span(p.checks), Span::raw(format!(" {}", checks_word(p.checks)))]),
+        field("branch", vec![Span::raw(format!("{} → {}", p.head, p.base))]),
+        field("diff", vec![span(format!("+{}", p.additions), palette::PASS), Span::raw(" "), span(format!("-{}", p.deletions), palette::FAIL)]),
     ];
-    for c in &p.closes {
-        lines.push(Line::from(format!("closes #{}", c.0)));
+    if !p.closes.is_empty() {
+        let closes = p.closes.iter().map(|c| format!("#{}", c.0)).collect::<Vec<_>>().join(", ");
+        lines.push(field("closes", vec![Span::raw(closes)]));
     }
     if let Some(s) = state.sessions.values().find(|s| s.branch.as_str() == p.head) {
-        lines.push(Line::from(vec![Span::raw(format!("session #{} ", s.issue.0)), badge(Some(s), false)]));
+        lines.push(field("session", vec![Span::raw(format!("#{} ", s.issue.0)), badge(Some(s), false)]));
     }
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
@@ -417,40 +536,34 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
         return;
     };
     let title = issue_of(state, n).map_or_else(|| s.branch.as_str().to_string(), |i| i.title.clone());
+    let width = usize::from(area.width);
     let mut head = vec![
-        Line::from(vec![span(format!("#{} ", n.0), palette::NUMBER), span(title, palette::HEADING)]),
-        Line::from(vec![badge(Some(s), false), span(format!("  {}", s.branch.as_str()), palette::DIM)]),
-        Line::from(span(format!("worktree {}", s.worktree.as_path().display()), palette::DIM)),
-        Line::from(span(
-            s.skill.as_ref().map_or_else(|| "automatic skill".to_string(), |k| format!("skill {}", k.as_str())),
-            palette::DIM,
-        )),
+        Line::from(span(fit(&title, width), palette::HEADING)),
+        Line::from(span(format!("#{}", n.0), palette::DIM)),
+        Line::raw(""),
+        field("state", vec![badge(Some(s), false)]),
+        field("branch", vec![Span::raw(s.branch.as_str().to_string())]),
+        field("worktree", vec![Span::raw(s.worktree.as_path().display().to_string())]),
+        field("skill", vec![Span::raw(s.skill.as_ref().map_or_else(|| "automatic".to_string(), |k| k.as_str().to_string()))]),
     ];
     if let Some(p) = app::pr_for_session(state, s) {
-        head.push(Line::from(vec![
-            Span::raw(format!("PR #{} ", p.number.0)),
-            checks_span(p.checks),
-            Span::raw(" "),
-            pr_state_span(p.state),
-        ]));
+        head.push(field("pr", vec![Span::raw(format!("#{} ", p.number.0)), checks_span(p.checks), Span::raw(" "), pr_state_span(p.state)]));
     }
-    let head_h = u16::try_from(head.len() + 1).unwrap_or(u16::MAX).min(area.height);
+    head.push(Line::raw(""));
+    head.push(Line::from(span(format!("output {}", "─".repeat(width.saturating_sub(7))), palette::DIM)));
+    let head_h = u16::try_from(head.len()).unwrap_or(u16::MAX).min(area.height);
     let [top, rest] = Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(head), top);
-    let width = usize::from(rest.width);
     let tail: Vec<Line<'static>> = last_n(tail_lines(state, s), usize::from(rest.height))
         .iter()
         .map(|l| Line::raw(fit(l, width)))
         .collect();
-    let pad = usize::from(rest.height).saturating_sub(tail.len());
-    let mut lines: Vec<Line<'static>> = vec![Line::raw(""); pad];
-    lines.extend(tail);
-    frame.render_widget(Paragraph::new(lines), rest);
+    frame.render_widget(Paragraph::new(tail), rest);
 }
 
 // ---- dialog ----------------------------------------------------------------
 
-/// The exact commands the dialog will run, for the "Runs:" preview.
+/// The exact commands the dialog will run, for the "Runs" preview.
 fn preview(state: &State, dialog: &StartDialog, config: &Config) -> Vec<String> {
     let branch = dialog.branch.lines().join("");
     let skill = dialog.choices.get(dialog.skill).cloned().flatten();
@@ -474,17 +587,21 @@ fn styled_input(source: &tui_textarea::TextArea<'static>, focused: bool) -> tui_
     let mut input = source.clone();
     input.set_style(palette::PLAIN);
     input.set_cursor_line_style(palette::PLAIN);
-    input.set_cursor_style(if focused { palette::SELECTED } else { palette::PLAIN });
+    input.set_cursor_style(if focused { palette::CURSOR } else { palette::PLAIN });
     input
 }
 
 fn field_label(text: &str, focused: bool) -> Line<'static> {
-    Line::from(span(text.to_string(), if focused { palette::KEY } else { palette::DIM }))
+    if focused {
+        Line::from(vec![span("› ", palette::ACCENT), span(text.to_string(), palette::ACTIVE)])
+    } else {
+        Line::from(span(format!("  {text}"), palette::DIM))
+    }
 }
 
 fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, config: &Config) {
-    let width = screen.width.min(100);
-    let height = screen.height.min(24);
+    let width = screen.width.min(96);
+    let height = screen.height.min(28);
     let area = Rect::new(
         screen.x + (screen.width - width) / 2,
         screen.y + (screen.height.saturating_sub(height)) / 2,
@@ -492,59 +609,77 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
         height,
     );
     frame.render_widget(Clear, area);
-    let block = Block::bordered().title(format!(" Start session for #{} {} ", d.issue.0, fit(&d.title, 50)));
+    frame.buffer_mut().set_style(area, palette::PLAIN);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(palette::DIM)
+        .title(span(format!(" Start session for #{} {} ", d.issue.0, fit(&d.title, 50)), palette::HEADING))
+        .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
-    let [branch_l, branch, skill, mode, prompt_l, prompt, runs, error] = Layout::vertical([
+    let [branch_l, branch, _, skill, _, mode, _, prompt_l, prompt, _, runs, error] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(2),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(3),
+        Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
     ])
     .areas(inner);
+    let indent = |r: Rect| Rect { x: r.x.saturating_add(2), width: r.width.saturating_sub(2), ..r };
     let focus = |f: DialogField| d.field == f;
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
-    frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), branch);
+    frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
 
     let chosen = d.choices.get(d.skill).cloned().flatten();
     let hint = match (&chosen, &d.skill_reason) {
-        (Some(_), Some(label)) => format!("default from the [{label}] label"),
+        (Some(_), Some(label)) => format!("default from the {label} label"),
         (None, _) => "no /skill prefix; the pstack session hook decides".to_string(),
         _ => "the skill goes at the start of the prompt".to_string(),
     };
     let name = chosen.as_ref().map_or("automatic", |s| s.as_str());
     frame.render_widget(
         Paragraph::new(vec![
-            field_label("Skill  (left/right)", focus(DialogField::Skill)),
-            Line::from(vec![Span::raw(format!("< {name} >  ")), span(hint, palette::DIM)]),
+            field_label("Skill", focus(DialogField::Skill)),
+            Line::from(vec![
+                span("  ‹ ", palette::DIM),
+                Span::raw(name.to_string()),
+                span(" ›   ", palette::DIM),
+                span(hint, palette::DIM),
+            ]),
         ]),
         skill,
     );
-    let radio = |on: bool, text: &str| format!("({}) {text}", if on { "•" } else { " " });
+    let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
+        if on {
+            vec![span("● ", palette::ACCENT), Span::raw(text.to_string())]
+        } else {
+            vec![span(format!("○ {text}"), palette::DIM)]
+        }
+    };
+    let mut modes = vec![Span::raw("  ")];
+    modes.extend(radio(d.mode == Mode::PlanFirst, "Plan first, then wait for approval"));
+    modes.push(Span::raw("    "));
+    modes.extend(radio(d.mode == Mode::Implement, "Implement directly"));
     frame.render_widget(
-        Paragraph::new(vec![
-            field_label("Mode  (left/right)", focus(DialogField::Mode)),
-            Line::raw(format!(
-                "{}   {}",
-                radio(d.mode == Mode::PlanFirst, "Plan first, then wait for approval"),
-                radio(d.mode == Mode::Implement, "Implement directly")
-            )),
-        ]),
+        Paragraph::new(vec![field_label("Mode", focus(DialogField::Mode)), Line::from(modes)]),
         mode,
     );
-    frame.render_widget(Paragraph::new(field_label("Prompt  (enter adds a line)", focus(DialogField::Prompt))), prompt_l);
-    frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), prompt);
+    frame.render_widget(Paragraph::new(field_label("Prompt", focus(DialogField::Prompt))), prompt_l);
+    frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), indent(prompt));
 
-    let mut run_lines = vec![Line::from(span("Runs", palette::DIM))];
-    let width = usize::from(runs.width).saturating_sub(2);
-    run_lines.extend(preview(state, d, config).iter().map(|c| Line::from(span(format!("  {}", fit(c, width)), palette::DIM))));
+    let mut run_lines = vec![Line::from(span("  Runs", palette::DIM))];
+    let width = usize::from(runs.width).saturating_sub(4);
+    run_lines.extend(preview(state, d, config).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))));
     frame.render_widget(Paragraph::new(run_lines), runs);
     if let Some(e) = &d.error {
-        frame.render_widget(Paragraph::new(span(e.clone(), palette::ERROR)), error);
+        frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
     }
 }
 
@@ -626,14 +761,15 @@ mod tests {
         let _ = app::update(state, Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)), config);
     }
 
-    fn is_ansi16(c: Color) -> bool {
-        !matches!(c, Color::Rgb(..) | Color::Indexed(_))
+    fn in_palette(c: Color) -> bool {
+        use palette::{AQUA, BLUE, FG, GRAY, GREEN, ORANGE, PURPLE, RED, YELLOW};
+        [FG, GRAY, RED, GREEN, YELLOW, BLUE, PURPLE, AQUA, ORANGE].contains(&c)
     }
 
     /// Every screen the app can show: no cell has a background, and every
-    /// foreground is one of the 16 ANSI colors or the terminal default.
+    /// foreground is a Gruvbox palette color.
     #[test]
-    fn no_cell_has_a_background_or_a_non_ansi_color() {
+    fn no_cell_has_a_background_and_every_foreground_is_gruvbox() {
         let (mut state, config) = full_state();
         let mut screens: Vec<(String, Buffer)> = Vec::new();
         for (name, key) in [("issues", '1'), ("prs", '2'), ("sessions", '3')] {
@@ -649,19 +785,20 @@ mod tests {
             for cell in buf.content() {
                 assert_eq!(cell.bg, Color::Reset, "{name}: background at {:?}", cell.symbol());
                 assert_eq!(cell.underline_color, Color::Reset, "{name}: underline color");
-                assert!(is_ansi16(cell.fg), "{name}: fg {:?}", cell.fg);
+                assert!(in_palette(cell.fg), "{name}: fg {:?} at {:?}", cell.fg, cell.symbol());
             }
         }
     }
 
     #[test]
-    fn selection_uses_reversed_and_nothing_else() {
+    fn selection_is_an_accent_marker_on_both_lines_of_one_row() {
         let (state, config) = full_state();
         let buf = render(&state, &config, 100, 30);
-        let reversed: Vec<_> = buf.content().iter().filter(|c| c.modifier.contains(Modifier::REVERSED)).collect();
-        assert!(!reversed.is_empty());
-        let row_of = |c: &&ratatui::buffer::Cell| c.symbol().to_string();
-        assert!(reversed.iter().any(|c| row_of(c) == "#"), "the selected row is reversed");
+        let width = usize::from(buf.area.width);
+        let marked: Vec<usize> = buf.content().iter().enumerate().filter(|(_, c)| c.symbol() == "▌").map(|(i, _)| i / width).collect();
+        assert_eq!(marked, [2, 3], "the first row is selected, and it is two lines tall");
+        assert!(buf.content().iter().all(|c| !c.modifier.contains(Modifier::REVERSED)), "no reversed block outside a text cursor");
+        assert!(buf.content().iter().filter(|c| c.symbol() == "▌").all(|c| c.fg == palette::ORANGE));
     }
 
     #[test]
@@ -672,9 +809,9 @@ mod tests {
             "1 Issues 2",
             "2 Pull requests 1",
             "3 Sessions 1 ▲1",
-            "#3 Retry queue",
+            "#3  Retry queue",
             "▲ needs you",
-            "[bug]",
+            "bug, p1",
             "fake output",
             "First line of the body.",
             "Linked pull requests",
@@ -688,15 +825,16 @@ mod tests {
     }
 
     #[test]
-    fn sessions_detail_anchors_the_tail_at_the_bottom() {
+    fn sessions_detail_shows_the_facts_and_the_tail_under_the_output_rule() {
         let (mut state, config) = full_state();
         send(&mut state, &config, KeyCode::Char('3'));
         let screen = text(&render(&state, &config, 120, 24));
         assert!(screen.contains("worktree /w/orbit-3"));
-        assert!(screen.contains("automatic skill"));
+        assert!(screen.contains("skill    automatic"));
         let lines: Vec<&str> = screen.lines().collect();
-        let last_tail = lines.iter().rposition(|l| l.contains("second line")).expect("tail drawn");
-        assert_eq!(last_tail, lines.len() - 2, "the newest tail line sits just above the key bar");
+        let rule = lines.iter().position(|l| l.contains("output ─")).expect("output rule drawn");
+        assert!(lines[rule + 1].contains("fake output"));
+        assert!(lines[rule + 2].contains("second line"));
     }
 
     #[test]
@@ -705,7 +843,7 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('j'));
         send(&mut state, &config, KeyCode::Char('s'));
         let screen = text(&render(&state, &config, 120, 30));
-        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "< pstack:technical-writing >", "default from the [docs] label", "Implement directly", "Runs", "git worktree add ../orbit-2 -b docs/2-docs origin/main", "claude \"/pstack:technical-writing Implement GitHub issue #2: Docs", "ctrl-s start"] {
+        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "‹ pstack:technical-writing ›", "default from the docs label", "Implement directly", "Runs", "$ git worktree add ../orbit-2 -b docs/2-docs origin/main", "claude \"/pstack:technical-writing Implement GitHub issue #2: Docs", "ctrl-s start"] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
     }
@@ -719,7 +857,7 @@ mod tests {
         let tabs = hits.targets.iter().filter(|(_, t)| matches!(t, HitTarget::Tab(_))).count();
         let rows: Vec<_> = hits.targets.iter().filter_map(|(r, t)| match t { HitTarget::Row(k) => Some((r.y, *k)), _ => None }).collect();
         assert_eq!(tabs, 3);
-        assert_eq!(rows, [(1, RowKey::Issue(IssueNumber(3))), (2, RowKey::Issue(IssueNumber(2)))]);
+        assert_eq!(rows, [(2, RowKey::Issue(IssueNumber(3))), (4, RowKey::Issue(IssueNumber(2)))]);
     }
 
     #[test]
