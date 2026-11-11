@@ -1,0 +1,187 @@
+[
+ {
+  "additions": 791,
+  "author": {
+   "id": "U_kgDODkNYcg",
+   "is_bot": false,
+   "login": "LoganBaird-Levenick",
+   "name": "Logan Baird-Levenick"
+  },
+  "baseRefName": "master",
+  "closingIssuesReferences": [
+   {
+    "id": "I_kwDOBv62x856PRl3",
+    "number": 711,
+    "repository": {
+     "id": "MDEwOlJlcG9zaXRvcnkxMTczNTYyMzE=",
+     "name": "hyperfine",
+     "owner": {
+      "id": "MDQ6VXNlcjQyMDkyNzY=",
+      "login": "sharkdp"
+     }
+    },
+    "url": "https://github.com/sharkdp/hyperfine/issues/711"
+   }
+  ],
+  "createdAt": "2026-11-08T00:07:11Z",
+  "deletions": 22,
+  "headRefName": "feature/711-hardware-metadata",
+  "isDraft": false,
+  "number": 1028,
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-08T00:07:26Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/sharkdp/hyperfine/actions/runs/42428301740/job/128571301697",
+    "name": "Extract crate metadata",
+    "startedAt": "2026-11-08T00:07:19Z",
+    "status": "COMPLETED",
+    "workflowName": "CICD"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-08T00:07:30Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/sharkdp/hyperfine/actions/runs/42428301740/job/128571301367",
+    "name": "Ensure 'cargo fmt' has been run",
+    "startedAt": "2026-11-08T00:07:19Z",
+    "status": "COMPLETED",
+    "workflowName": "CICD"
+   }
+  ],
+  "title": "feat(export): report CPU, memory and disk in JSON metadata",
+  "url": "https://github.com/sharkdp/hyperfine/pull/1028"
+ },
+ {
+  "additions": 1,
+  "author": {
+   "id": "MDQ6VXNlcjUxMDkwNjc2",
+   "is_bot": false,
+   "login": "cyncui",
+   "name": "cynthia"
+  },
+  "baseRefName": "master",
+  "closingIssuesReferences": [
+   {
+    "id": "I_kwDOBv62x88AAAABWIDYdg",
+    "number": 1001,
+    "repository": {
+     "id": "MDEwOlJlcG9zaXRvcnkxMTczNTYyMzE=",
+     "name": "hyperfine",
+     "owner": {
+      "id": "MDQ6VXNlcjQyMDkyNzY=",
+      "login": "sharkdp"
+     }
+    },
+    "url": "https://github.com/sharkdp/hyperfine/issues/1001"
+   }
+  ],
+  "createdAt": "2026-10-09T16:07:08Z",
+  "deletions": 0,
+  "headRefName": "test-clicolor-environment",
+  "isDraft": false,
+  "number": 1002,
+  "state": "MERGED",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-09T16:07:17Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/sharkdp/hyperfine/actions/runs/37956769130/job/113909149092",
+    "name": "Extract crate metadata",
+    "startedAt": "2026-10-09T16:07:14Z",
+    "status": "COMPLETED",
+    "workflowName": "CICD"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-10-09T16:07:21Z",
+    "conclusion": "SUCCESS",
+    "detailsUrl": "https://github.com/sharkdp/hyperfine/actions/runs/37956769130/job/113909148754",
+    "name": "Ensure 'cargo fmt' has been run",
+    "startedAt": "2026-10-09T16:07:14Z",
+    "status": "COMPLETED",
+    "workflowName": "CICD"
+   }
+  ],
+  "title": "test(integration): ignore ambient forced color",
+  "url": "https://github.com/sharkdp/hyperfine/pull/1002"
+ },
+ {
+  "additions": 4835,
+  "author": {
+   "id": "MDQ6VXNlcjE2MTE1MTA=",
+   "is_bot": false,
+   "login": "williammartin",
+   "name": "William Martin"
+  },
+  "baseRefName": "williammartin-multiaccount-draft-07-explain",
+  "closingIssuesReferences": [],
+  "createdAt": "2026-11-03T21:20:00Z",
+  "deletions": 1,
+  "headRefName": "williammartin-multiaccount-draft-08-evaluation",
+  "isDraft": true,
+  "number": 14927,
+  "state": "OPEN",
+  "statusCheckRollup": [
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-03T21:29:08Z",
+    "conclusion": "SKIPPED",
+    "detailsUrl": "https://github.com/cli/cli/actions/runs/41722208901/job/126217657403",
+    "name": "label-external",
+    "startedAt": "2026-11-03T21:29:09Z",
+    "status": "COMPLETED",
+    "workflowName": "PR Triaging"
+   },
+   {
+    "__typename": "CheckRun",
+    "completedAt": "2026-11-03T21:27:04Z",
+    "conclusion": "FAILURE",
+    "detailsUrl": "https://github.com/cli/cli/actions/runs/41720844033/job/126212878432",
+    "name": "build (windows-latest)",
+    "startedAt": "2026-11-03T21:20:11Z",
+    "status": "COMPLETED",
+    "workflowName": "Unit and Integration Tests"
+   }
+  ],
+  "title": "Add guided multi-account setup and evaluation",
+  "url": "https://github.com/cli/cli/pull/14927"
+ },
+ {
+  "additions": 13779,
+  "author": {
+   "id": "MDQ6VXNlcjIwMDY2NTg=",
+   "is_bot": false,
+   "login": "maxbeizer",
+   "name": "Max Beizer"
+  },
+  "baseRefName": "trunk",
+  "closingIssuesReferences": [
+   {
+    "id": "I_kwDODKw3uc6Bgqqu",
+    "number": 8798,
+    "repository": {
+     "id": "MDEwOlJlcG9zaXRvcnkyMTI2MTMwNDk=",
+     "name": "cli",
+     "owner": {
+      "id": "MDEyOk9yZ2FuaXphdGlvbjU5NzA0NzEx",
+      "login": "cli"
+     }
+    },
+    "url": "https://github.com/cli/cli/issues/8798"
+   }
+  ],
+  "createdAt": "2026-08-01T16:12:06Z",
+  "deletions": 4437,
+  "headRefName": "maxbeizer-fix-project-scope-error",
+  "isDraft": true,
+  "number": 14035,
+  "state": "OPEN",
+  "statusCheckRollup": [],
+  "title": "Fix project scope errors during issue creation",
+  "url": "https://github.com/cli/cli/pull/14035"
+ }
+]
