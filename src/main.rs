@@ -17,6 +17,7 @@
 //!   update, draw. gh latency never blocks a frame.
 
 mod app;
+mod clipboard;
 mod config;
 mod domain;
 mod github;
@@ -31,7 +32,7 @@ mod sort;
 mod testutil;
 mod ui;
 
-use app::{Cmd, Context, Job, Msg};
+use app::{Cmd, Context, Job, Msg, OpenWith};
 use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use session::{AttachPlan, Workspace};
 use std::process::ExitCode;
@@ -76,7 +77,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &
     let (tx, rx) = mpsc::channel::<Msg>();
     let writer = spawn_writer(ws.clone(), tx.clone());
     let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let context = Context { repo_name, base: ws.base().to_string() };
+    let over_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    let open_with = if over_ssh { OpenWith::Clipboard } else { OpenWith::Browser };
+    let context = Context { repo_name, base: ws.base().to_string(), open_with };
     let (mut state, mut cmds) = app::init(Instant::now(), config, context);
     let mut pending: Vec<Msg> = Vec::new();
     loop {
@@ -84,6 +87,11 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &
             match cmd {
                 Cmd::Quit => return Ok(()),
                 Cmd::Attach(id) => pending.push(Msg::Attached(attach(terminal, ws, &id))),
+                Cmd::Copy { target, text } => {
+                    let inside_tmux = std::env::var_os("TMUX").is_some();
+                    let result = clipboard::copy(&text, inside_tmux, ws.repo_root()).map(|()| text);
+                    pending.push(Msg::Copied { target, result });
+                }
                 Cmd::Job(job) => dispatch_job(ws, job, &tx, &writer),
             }
         }
@@ -162,6 +170,10 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         Job::Open(target) => spawn_read(ws, tx, move |ws| Msg::Opened {
             target,
             result: github::open_in_browser(ws.repo_root(), target).map_err(|e| e.to_string()),
+        }),
+        Job::FetchPageUrl(target) => spawn_read(ws, tx, move |ws| Msg::PageUrl {
+            target,
+            result: github::page_url(ws.repo_root(), target).map_err(|e| e.to_string()),
         }),
         Job::Tail(id) => spawn_read(ws, tx, move |ws| {
             let result = ws.tail(&id, app::TAIL_LINES).map_err(|e| e.to_string());

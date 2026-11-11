@@ -151,6 +151,16 @@ pub struct Context {
     pub repo_name: String,
     /// `origin/main`
     pub base: String,
+    pub open_with: OpenWith,
+}
+
+/// What `o` does with a page. Over SSH, `gh --web` opens a browser on the
+/// remote machine, so dispatch copies the URL to the local clipboard instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum OpenWith {
+    #[default]
+    Browser,
+    Clipboard,
 }
 
 pub struct State {
@@ -279,6 +289,14 @@ pub enum Msg {
         target: GithubRef,
         result: Result<(), String>,
     },
+    PageUrl {
+        target: GithubRef,
+        result: Result<String, String>,
+    },
+    Copied {
+        target: GithubRef,
+        result: Result<String, String>,
+    },
     Sent {
         issue: IssueNumber,
         result: Result<(), String>,
@@ -296,6 +314,11 @@ pub enum Cmd {
     Job(Job),
     /// Runs on the main thread: `AttachPlan::Suspend` must own the terminal.
     Attach(WindowId),
+    /// Runs on the main thread: the copy writes to the terminal.
+    Copy {
+        target: GithubRef,
+        text: String,
+    },
     Quit,
 }
 
@@ -314,6 +337,8 @@ pub enum Job {
     /// Open the page in the browser. No inflight flag: two presses may open
     /// two tabs, which is what the user asked for.
     Open(GithubRef),
+    /// Look up the page URL, for `OpenWith::Clipboard`.
+    FetchPageUrl(GithubRef),
     /// Type a line into the session's Claude prompt and submit it.
     Send {
         issue: IssueNumber,
@@ -403,6 +428,7 @@ pub enum When {
     SessionExited,
     /// The selection has an open, non-draft PR.
     Mergeable,
+    OpenWith(OpenWith),
 }
 
 pub struct BarEntry {
@@ -445,7 +471,14 @@ pub static BINDINGS: &[Binding] = &[
     },
     Binding { keys: &[Key::Char('x')], action: Action::Stop, bar: &[bar("x", "stop", When::SessionLive)] },
     Binding { keys: &[Key::Char('m')], action: Action::Merge, bar: &[bar("m", "merge", When::Mergeable)] },
-    Binding { keys: &[Key::Char('o')], action: Action::Open, bar: &[bar("o", "open on GitHub", When::Always)] },
+    Binding {
+        keys: &[Key::Char('o')],
+        action: Action::Open,
+        bar: &[
+            bar("o", "open on GitHub", When::OpenWith(OpenWith::Browser)),
+            bar("o", "copy URL", When::OpenWith(OpenWith::Clipboard)),
+        ],
+    },
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
     Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
@@ -468,6 +501,7 @@ pub fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
         When::SessionLive => matches!(session, Some(SessionState::Running | SessionState::NeedsYou)),
         When::SessionExited => session == Some(SessionState::Exited),
         When::Mergeable => merge_target(state).is_ok(),
+        When::OpenWith(with) => state.context.open_with == with,
     };
     BINDINGS.iter().flat_map(|b| b.bar).filter(|e| shown(e.when)).map(|e| (e.keys, e.desc)).collect()
 }
@@ -572,6 +606,20 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Opened { target, result } => {
             if let Err(e) = result {
                 say(state, format!("Open {target} failed: {e}"));
+            }
+            Vec::new()
+        }
+        Msg::PageUrl { target, result } => match result {
+            Ok(text) => vec![Cmd::Copy { target, text }],
+            Err(e) => {
+                say(state, format!("Copy {target} URL failed: {e}"));
+                Vec::new()
+            }
+        },
+        Msg::Copied { target, result } => {
+            match result {
+                Ok(url) => say(state, format!("Copied {url}")),
+                Err(e) => say(state, format!("Copy {target} URL failed: {e}")),
             }
             Vec::new()
         }
@@ -745,8 +793,16 @@ fn open_key(state: &mut State) -> Vec<Cmd> {
         say(state, "Nothing to open.".to_string());
         return Vec::new();
     };
-    say(state, format!("Opening {target} on GitHub"));
-    vec![Cmd::Job(Job::Open(target))]
+    match state.context.open_with {
+        OpenWith::Browser => {
+            say(state, format!("Opening {target} on GitHub"));
+            vec![Cmd::Job(Job::Open(target))]
+        }
+        OpenWith::Clipboard => {
+            say(state, format!("Copying the {target} URL"));
+            vec![Cmd::Job(Job::FetchPageUrl(target))]
+        }
+    }
 }
 
 /// The PR `m` acts on: the selected PR, or the PR of the selected issue or
@@ -1931,6 +1987,39 @@ mod tests {
         press(&mut state, &config, key('/'));
         assert!(press(&mut state, &config, key('o')).is_empty());
         assert_eq!(state.filter, "o");
+    }
+
+    #[test]
+    fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
+        let (mut state, config, _) = app();
+        state.context.open_with = OpenWith::Clipboard;
+        press(&mut state, &config, key('j'));
+        let cmds = press(&mut state, &config, key('o'));
+        assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPageUrl(GithubRef::Issue(IssueNumber(2))))]));
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copying the issue #2 URL"));
+        let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
+        assert_eq!(bar, [("o", "copy URL")]);
+
+        let target = GithubRef::Issue(IssueNumber(2));
+        let url = "https://github.com/o/r/issues/2".to_string();
+        let cmds = press(&mut state, &config, Msg::PageUrl { target, result: Ok(url.clone()) });
+        assert!(matches!(cmds.as_slice(), [Cmd::Copy { target: t, text }] if *t == target && *text == url));
+
+        press(&mut state, &config, Msg::Copied { target, result: Ok(url) });
+        assert!(
+            state.toast.as_ref().is_some_and(|t| t.text == "Copied https://github.com/o/r/issues/2"),
+            "the toast shows the URL, because a terminal can ignore OSC 52 without an error"
+        );
+    }
+
+    #[test]
+    fn a_failed_url_lookup_or_copy_shows_the_error() {
+        let (mut state, config, _) = app();
+        let target = GithubRef::Pr(PrNumber(10));
+        assert!(press(&mut state, &config, Msg::PageUrl { target, result: Err("gh down".to_string()) }).is_empty());
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: gh down"));
+        press(&mut state, &config, Msg::Copied { target, result: Err("no tmux".to_string()) });
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: no tmux"));
     }
 
     #[test]
