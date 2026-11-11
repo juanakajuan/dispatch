@@ -124,7 +124,45 @@ Rejected: the fixed-path and `pane_start_path` link of candidate 2 (a shell the 
 
 ## Implementation reconciliation
 
-*Empty until implementation starts.*
+Each item lists a change from the sketch and the reason.
+
+**Config**
+- `label_skills` is an array of `{label, skill}` objects, not an object map. Reason: table order is the priority, and a JSON object does not keep order in `serde_json`.
+- `Config` gains `claude_command: ClaudeCommand { program, args }`. Reason: a program plus args makes an empty command unrepresentable. `config::parse(text, path)` is pure and tested. `load()` only reads the file. The file uses `deny_unknown_fields`, so a typo is an error.
+- `Workspace::discover(cwd, &Config)` replaces `discover(cwd, detect_waiting)`, because it also needs `claude_command`. `Layout` drops `place` and `base` (only `Workspace` uses them) and gains `claude`.
+
+**Session**
+- `Workspace::start` returns `StartOutcome { session, warnings }`. Reason: a failed `Fetch` is a warning by decision, and the warning must reach the toast. `Msg::Started` carries the outcome.
+- `Job::Stop` and `Job::Resume` carry an `IssueNumber`, and `Workspace::stop` and `resume` take one and observe again first (the candidate 2 graft). The sketch's `Session` argument is gone.
+- `WorktreePath::planned(PathBuf)` is new. Reason: `plan_start` is pure and the target dir does not exist yet, so `from_observed` (which canonicalizes) cannot build it. The planner builds it from the canonical repo root. `repo_root` is canonicalized in `discover` and uses `--git-common-dir`, so running dispatch inside a linked worktree still names siblings `<repo>-<n>`.
+- `OpenWindow` is two tmux calls, as the measured fact required. The step doc comment says so.
+- A tagged window whose worktree directory is gone is dropped in `parse_windows` (it cannot canonicalize), not in `join`. `join` still ignores a window with no matching worktree.
+- `SetupError::NotARepo` and `NoOriginHead` carry the tool message. `WindowId::parse` is public so tests in other modules can build ids.
+- `rules::continue_args` is new, for resume. `BranchName::numbered` is new, as the valid fallback for the branch generator.
+
+**App**
+- `app::init(now, &Config, Context)`. `Context { repo_name, base }` lives in `State` for the dialog's "Runs" preview, which needs the repo dir name and the base ref.
+- `toast` is `Toast { text, shown_at: Option<Instant> }`. Reason: key messages carry no clock, so the next tick stamps the time. `Due.tail` is `Option<Instant>`, where `None` means "now", so a changed selection loads its tail on the next tick.
+- The Sessions tab lists issues in `starting` as rows, so the row shows while the worktree is made. A finished start inserts its session into `State.sessions` at once, so the row does not blink until the next observation. Every observation still replaces the map whole.
+- The key bar entries live in `Binding.bar` (a slice, each with a `When`), so one binding can show "a attach" or "a resume" by session state. Enter on the Sessions tab attaches.
+
+**proc**
+- The fake seam is a `cfg(test)` thread-local script that `proc::run` consults. Reason: signatures stay as in the sketch and no trait or parameter travels through `git` and `tmux`. Each test runs on its own thread, so scripts do not leak.
+
+**Lints**
+- `clippy.toml` sets `allow-unwrap-in-tests` and `allow-expect-in-tests`. The `deny` lints in `Cargo.toml` are unchanged, and the lib code has no `unwrap` or `expect`. No `#[allow]` exists in the source.
+
+**ui and main**
+- `tui-textarea` builds with `ratatui` 0.29 and is used as sketched. The dialog clones each `TextArea` per frame to apply palette styles, because `draw` only has `&State`.
+- `main` calls `terminal.clear()` after `ratatui::init()`. Measured: after a `kill -9`, the next run drew over the old screen, because the first draw skips blank cells.
+- A panic hook also turns mouse capture off.
+
+**Measured in the smoke run (tmux 3.8, a private server)**
+- `gh pr list --state all --limit 100 --json ...statusCheckRollup` against `sharkdp/hyperfine` returned HTTP 504 once and 558 KB on the next call. The app shows the error in the tab bar, keeps old data, and retries on the 60 s timer or `r`. The limit stays at 100.
+- A prompt that ends in `;` reached the fake `claude` as one argument with the `;` intact, through `escape_argv`. Without it, tmux treats the `;` as a separator (the sketch note held).
+- `x` closed the window and kept the worktree. `a` on the exited session respawned it with `--continue`. `a` on a live session selected the window. `git branch -D` removed the markers.
+- Not verified: that real `claude` merges the `--settings` hooks with the user's own hooks, and that the hooks set `@dispatch-waiting` in a real session. `detect_waiting` stays on by default as decided. The README says how to turn it off.
+
 
 ## Open questions and risks
 
