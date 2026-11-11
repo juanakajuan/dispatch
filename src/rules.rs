@@ -2,7 +2,7 @@
 //! no `gh`, `git`, or `tmux`.
 
 use crate::config::Config;
-use crate::domain::{BranchName, Issue, IssueNumber, Mode, SkillChoice};
+use crate::domain::{BranchName, Issue, IssueNumber, Mode, PrNumber, SkillChoice};
 use std::path::Path;
 
 /// The editable defaults the start dialog opens with.
@@ -103,6 +103,16 @@ pub fn continue_args(hooks_json: Option<&str>) -> Vec<String> {
     let mut args = vec!["--continue".to_string()];
     args.extend(settings_args(hooks_json));
     args
+}
+
+/// What `m` types into the session's Claude prompt. The agent runs the merge,
+/// so it can fix a red check or a conflict, or explain why it stopped.
+pub fn merge_prompt(pr: PrNumber) -> String {
+    format!(
+        "Merge PR #{n} with `gh pr merge {n}`, using a merge method the repo allows. \
+         If checks are failing or the branch does not merge cleanly, stop and tell me why instead of forcing it.",
+        n = pr.0
+    )
 }
 
 fn settings_args(hooks_json: Option<&str>) -> Vec<String> {

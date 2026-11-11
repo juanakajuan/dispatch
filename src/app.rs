@@ -4,7 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PullRequest, SkillChoice};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest, SkillChoice};
 use crate::rules;
 use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -162,6 +162,16 @@ pub struct State {
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
+    /// Set by a first `m`. A second `m` on the same session and PR sends the
+    /// merge request; any other key clears it.
+    pub armed_merge: Option<MergeAsk>,
+}
+
+/// Ask the agent of `issue`'s session to merge `pr`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MergeAsk {
+    pub issue: IssueNumber,
+    pub pr: PrNumber,
 }
 
 #[derive(Default)]
@@ -184,6 +194,7 @@ pub enum Msg {
     Resumed { issue: IssueNumber, result: Result<(), String> },
     Attached(Result<(), String>),
     Opened { target: GithubRef, result: Result<(), String> },
+    Sent { issue: IssueNumber, result: Result<(), String> },
 }
 
 /// Work for the shell.
@@ -209,6 +220,8 @@ pub enum Job {
     /// Open the page in the browser. No inflight flag: two presses may open
     /// two tabs, which is what the user asked for.
     Open(GithubRef),
+    /// Type a line into the session's Claude prompt and submit it.
+    Send { issue: IssueNumber, text: String },
 }
 
 pub const SESSIONS_EVERY: Duration = Duration::from_secs(2);
@@ -234,6 +247,7 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         due: Due { github: now + config.github_refresh, sessions: now + SESSIONS_EVERY, tail: None },
         hits: HitMap::default(),
         last_click: None,
+        armed_merge: None,
     };
     (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
 }
@@ -257,6 +271,7 @@ pub enum Action {
     Attach,
     Stop,
     Open,
+    Merge,
     Refresh,
     Filter,
     ClearFilter,
@@ -273,6 +288,8 @@ pub enum When {
     OnSessions,
     SessionLive,
     SessionExited,
+    /// A live session whose branch has an open, non-draft PR.
+    Mergeable,
 }
 
 pub struct BarEntry {
@@ -310,6 +327,7 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("a", "attach", When::SessionLive), bar("a", "resume", When::SessionExited)],
     },
     Binding { keys: &[Key::Char('x')], action: Action::Stop, bar: &[bar("x", "stop", When::SessionLive)] },
+    Binding { keys: &[Key::Char('m')], action: Action::Merge, bar: &[bar("m", "merge", When::Mergeable)] },
     Binding { keys: &[Key::Char('o')], action: Action::Open, bar: &[bar("o", "open on GitHub", When::Always)] },
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
@@ -327,6 +345,7 @@ pub fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
         When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
         When::SessionLive => matches!(session, Some(SessionState::Running | SessionState::NeedsYou)),
         When::SessionExited => session == Some(SessionState::Exited),
+        When::Mergeable => merge_target(state).is_ok(),
     };
     BINDINGS.iter().flat_map(|b| b.bar).filter(|e| shown(e.when)).map(|e| (e.keys, e.desc)).collect()
 }
@@ -355,10 +374,13 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Key(ev) => match &state.focus {
             Focus::Dialog(_) => dialog_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
-            Focus::List => match action_for(&ev) {
-                Some(action) => act(state, action, config),
-                None => Vec::new(),
-            },
+            Focus::List => {
+                let armed = state.armed_merge.take();
+                match action_for(&ev) {
+                    Some(action) => act(state, action, armed, config),
+                    None => Vec::new(),
+                }
+            }
         },
         Msg::Mouse(ev, now) => on_mouse(state, &ev, now, config),
         Msg::Tick(now) => tick(state, now, config),
@@ -420,6 +442,13 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Opened { target, result } => {
             if let Err(e) = result {
                 say(state, format!("Open {target} failed: {e}"));
+            }
+            Vec::new()
+        }
+        Msg::Sent { issue, result } => {
+            match result {
+                Ok(()) => say(state, format!("Asked #{} to merge its PR", issue.0)),
+                Err(e) => say(state, format!("Merge request to #{} failed: {e}", issue.0)),
             }
             Vec::new()
         }
@@ -493,7 +522,8 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
     }
 }
 
-fn act(state: &mut State, action: Action, config: &Config) -> Vec<Cmd> {
+/// `armed` is the merge a previous `m` armed; only a second `m` uses it.
+fn act(state: &mut State, action: Action, armed: Option<MergeAsk>, config: &Config) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -517,6 +547,7 @@ fn act(state: &mut State, action: Action, config: &Config) -> Vec<Cmd> {
             say(state, "No running session here.".to_string());
         }
         Action::Open => return open_key(state),
+        Action::Merge => return merge_key(state, armed),
         Action::Refresh => {
             let mut cmds = Vec::new();
             refresh_github(state, &mut cmds);
@@ -554,6 +585,39 @@ fn open_key(state: &mut State) -> Vec<Cmd> {
     };
     say(state, format!("Opening {target} on GitHub"));
     vec![Cmd::Job(Job::Open(target))]
+}
+
+/// What `m` would merge right now, or why it can not.
+fn merge_target(state: &State) -> Result<MergeAsk, String> {
+    let session = current_session(state).ok_or("No session here.")?;
+    if !matches!(session.state(), SessionState::Running | SessionState::NeedsYou) {
+        return Err(format!("#{} is not running. Press a to resume it.", session.issue.0));
+    }
+    let pr = pr_for_session(state, session).ok_or(format!("#{} has no PR yet.", session.issue.0))?;
+    match pr.state {
+        PrState::Open => Ok(MergeAsk { issue: session.issue, pr: pr.number }),
+        PrState::Draft => Err(format!("PR #{} is a draft.", pr.number.0)),
+        PrState::Merged | PrState::Closed => Err(format!("PR #{} is not open.", pr.number.0)),
+    }
+}
+
+/// `m`: the first press arms, a second press on the same target sends.
+/// Merging is hard to undo, so one stray key never does it.
+fn merge_key(state: &mut State, armed: Option<MergeAsk>) -> Vec<Cmd> {
+    let ask = match merge_target(state) {
+        Ok(ask) => ask,
+        Err(why) => {
+            say(state, why);
+            return Vec::new();
+        }
+    };
+    if armed != Some(ask) {
+        state.armed_merge = Some(ask);
+        say(state, format!("Press m again to ask #{}'s agent to merge PR #{}", ask.issue.0, ask.pr.0));
+        return Vec::new();
+    }
+    say(state, format!("Asking #{} to merge PR #{}", ask.issue.0, ask.pr.0));
+    vec![Cmd::Job(Job::Send { issue: ask.issue, text: rules::merge_prompt(ask.pr) })]
 }
 
 /// `s` or Enter on an issue, or a double-click on one.
@@ -1330,6 +1394,77 @@ mod tests {
         assert!(state.toast.is_none());
         press(&mut state, &config, Msg::Opened { target, result: Err("no browser".to_string()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Open PR #10 failed: no browser"));
+    }
+
+    fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
+        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Send { issue, text }) => Some((*issue, text.as_str())), _ => None }).collect()
+    }
+
+    #[test]
+    fn m_twice_asks_the_session_agent_to_merge_its_pr() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
+        press(&mut state, &config, key('3'));
+        assert!(key_bar(&state).contains(&("m", "merge")));
+        assert!(press(&mut state, &config, key('m')).is_empty(), "the first press only arms");
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Press m again to ask #3's agent to merge PR #10"));
+        let cmds = press(&mut state, &config, key('m'));
+        assert_eq!(sends(&cmds), [(IssueNumber(3), rules::merge_prompt(PrNumber(10)).as_str())]);
+        assert!(state.armed_merge.is_none());
+        assert!(press(&mut state, &config, key('m')).is_empty(), "a third press arms again");
+    }
+
+    #[test]
+    fn m_from_the_pr_row_reaches_the_same_session() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        press(&mut state, &config, key('2'));
+        press(&mut state, &config, key('m'));
+        assert_eq!(sends(&press(&mut state, &config, key('m'))).len(), 1);
+    }
+
+    #[test]
+    fn another_key_between_the_two_m_presses_disarms() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        press(&mut state, &config, key('3'));
+        press(&mut state, &config, key('m'));
+        press(&mut state, &config, key('r'));
+        assert!(sends(&press(&mut state, &config, key('m'))).is_empty());
+    }
+
+    #[test]
+    fn m_explains_why_it_can_not_merge() {
+        let (mut state, config, _) = app();
+        let toast = |s: &State| s.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        press(&mut state, &config, key('3'));
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "No session here.");
+
+        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "#3 is not running. Press a to resume it.");
+
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        state.prs.items[0].state = PrState::Draft;
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "PR #10 is a draft.");
+        assert!(!key_bar(&state).contains(&("m", "merge")));
+
+        state.prs.items.remove(0);
+        for _ in 0..2 {
+            assert!(press(&mut state, &config, key('m')).is_empty());
+        }
+        assert_eq!(toast(&state), "#3 has no PR yet.");
+    }
+
+    #[test]
+    fn a_sent_result_shows_a_toast() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Asked #3 to merge its PR"));
+        press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Err("gone".to_string()) });
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Merge request to #3 failed: gone"));
     }
 
     #[test]
