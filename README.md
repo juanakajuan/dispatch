@@ -39,6 +39,8 @@ dispatch then does this:
 2. It runs `git worktree add ../<repo>-<issue> -b <branch> origin/<default>`.
 3. It opens a tmux window named `#<issue>` that runs `claude [--permission-mode plan] "/<skill> <prompt>"` in the worktree.
 
+Each worktree is a new directory. Claude Code asks if you trust the directory the first time, unless you trusted a parent directory before. Attach to the session with `a` to answer. The session does not show `needs you` during this question.
+
 If dispatch runs inside tmux, the window goes into your current tmux session. If not, dispatch creates a detached session named `dispatch-<repo>`. In that case `a` suspends dispatch and runs `tmux attach`. Detach with `Ctrl-b d` to come back.
 
 ## Keys
