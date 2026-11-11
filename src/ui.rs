@@ -2,7 +2,8 @@
 //! clickable regions it drew. Layout: tab bar and its rule (2 rows),
 //! list | detail (`state.split`, 42% | 58% by default), the message row
 //! (1 to 3 rows, blank when there is no message), the centered key bar
-//! (1 row). List rows are two lines tall. The dialog is a centered overlay.
+//! (1 row). The right end of the tab bar shows how old the shown list is.
+//! List rows are two lines tall. The dialog is a centered overlay.
 
 use crate::app::{
     self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
@@ -17,6 +18,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wrap};
+use std::time::Instant;
 
 /// The whole palette. No other module builds a `Style`.
 /// Rule: Gruvbox (dark) foregrounds only; never a background color, so the
@@ -52,6 +54,7 @@ pub mod palette {
     pub const MERGED: Style = Style::new().fg(PURPLE);
     pub const LABEL: Style = Style::new().fg(BLUE);
     pub const ERROR: Style = Style::new().fg(RED);
+    pub const WARN: Style = Style::new().fg(YELLOW);
     pub const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
     pub const ITALIC: Style = Style::new().add_modifier(Modifier::ITALIC);
     pub const STRIKE: Style = Style::new().add_modifier(Modifier::CROSSED_OUT);
@@ -86,7 +89,7 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     let divider = Rect { x: detail.x.saturating_sub(1), width: 2, ..body }.intersection(body);
     hits.targets.push((divider, HitTarget::Divider));
     frame.buffer_mut().set_style(screen, palette::PLAIN);
-    draw_tabs(frame, tabs, rule, state, &mut hits);
+    draw_tabs(frame, tabs, rule, state, Instant::now(), &mut hits);
     draw_list(frame, list, state, now, &mut hits);
     draw_detail(frame, detail, state, now);
     if let Some((lines, style)) = message {
@@ -300,7 +303,7 @@ fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
 
 // ---- tabs and key bar ------------------------------------------------------
 
-fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mut HitMap) {
+fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Instant, hits: &mut HitMap) {
     let needs = state.sessions.values().filter(|s| s.state() == SessionState::NeedsYou).count();
     let tabs = [
         (Tab::Issues, "1", "Issues", state.issues.items.len(), 0),
@@ -329,17 +332,18 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mu
         spans.push(Span::raw("   "));
         x = x.saturating_add(w).saturating_add(3);
     }
-    let loading = match state.tab {
-        Tab::Issues => matches!(state.issues.status, FeedStatus::Loading),
-        Tab::Prs => matches!(state.prs.status, FeedStatus::Loading),
-        Tab::Sessions => false,
-    };
-    let text = if loading { "loading…".to_string() } else { state.context.repo_name.clone() };
     let used = usize::from(x.saturating_sub(area.x));
     let room = usize::from(area.width).saturating_sub(used + 1);
-    let text = fit(&text, room);
-    spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
-    spans.push(span(text, palette::DIM));
+    let repo = &state.context.repo_name;
+    let right = match freshness(state, now) {
+        Some((text, style)) if cells(&text) + 3 + cells(repo) <= room => {
+            vec![span(text, style), Span::raw("   "), span(repo.clone(), palette::DIM)]
+        }
+        Some((text, style)) => vec![span(fit(&text, room), style)],
+        None => vec![span(fit(repo, room), palette::DIM)],
+    };
+    spans.push(Span::raw(" ".repeat(room.saturating_sub(spans_width(&right)))));
+    spans.extend(right);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
     let total = usize::from(rule.width);
@@ -353,6 +357,33 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mu
         ])),
         rule,
     );
+}
+
+/// The age of the list on the current tab, counted from when the last
+/// response arrived. A failed fetch keeps the old items, so it gets its own
+/// warning text: stale data never reads as fresh.
+fn freshness(state: &State, now: Instant) -> Option<(String, Style)> {
+    let (status, refreshing) = match state.tab {
+        Tab::Issues => (&state.issues.status, state.inflight.issues),
+        Tab::Prs => (&state.prs.status, state.inflight.prs),
+        Tab::Sessions => return None,
+    };
+    Some(match status {
+        FeedStatus::Loading => ("loading…".to_string(), palette::DIM),
+        _ if refreshing => ("refreshing…".to_string(), palette::DIM),
+        FeedStatus::Fresh { at } => (format!("updated {} ago", since(*at, now)), palette::DIM),
+        FeedStatus::Failed { at, .. } => (format!("refresh failed {} ago", since(*at, now)), palette::WARN),
+    })
+}
+
+/// "12s", "3m", "2h". Seconds count up so the user sees the clock move.
+fn since(at: Instant, now: Instant) -> String {
+    let secs = now.saturating_duration_since(at).as_secs();
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        _ => format!("{}h", secs / 3600),
+    }
 }
 
 /// The one place for messages: the toast, or else the error of the shown
@@ -371,9 +402,9 @@ fn message(state: &State) -> Option<(String, Style)> {
 }
 
 fn feed_failure<T>(feed: &Feed<T>) -> Option<String> {
-    let FeedStatus::Failed(e) = &feed.status else { return None };
+    let FeedStatus::Failed { error, .. } = &feed.status else { return None };
     let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
-    Some(format!("gh failed{kept}: {}", one_line(e)))
+    Some(format!("gh failed{kept}: {}", one_line(error)))
 }
 
 fn draw_keys(frame: &mut Frame, area: Rect, state: &State) {
@@ -753,7 +784,7 @@ mod tests {
     use ratatui::buffer::Buffer;
     use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     fn ts(secs: i64) -> jiff::Timestamp {
         jiff::Timestamp::from_second(secs).expect("valid timestamp")
@@ -805,9 +836,11 @@ mod tests {
             issue(2, "Docs", &["docs"]),
         ];
         state.issues.items[0].body = "First line of the body.\n\n```\ncode block\n```".to_string();
-        state.issues.status = FeedStatus::Fresh;
+        state.issues.status = FeedStatus::Fresh { at: Instant::now() };
         state.prs.items = vec![pr(10, "fix/3-x", &[3])];
-        state.prs.status = FeedStatus::Fresh;
+        state.prs.status = FeedStatus::Fresh { at: Instant::now() };
+        state.inflight.issues = false;
+        state.inflight.prs = false;
         let id = WindowId::parse("@3").expect("id");
         state.sessions.insert(
             IssueNumber(3),
@@ -925,7 +958,7 @@ mod tests {
             (PrState::Closed, Checks::Pass, " ", palette::FG),
         ] {
             let fresh = vec![PullRequest { state: pr_state, checks, ..pr(10, "fix/3-x", &[3]) }];
-            let _ = app::update(&mut state, Msg::Prs(Ok(fresh)), &config);
+            let _ = app::update(&mut state, Msg::Prs { result: Ok(fresh), at: Instant::now() }, &config);
             assert_eq!(mark(&state).0, (want.to_string(), color), "{pr_state:?} {checks:?}");
         }
         let screen = text(&render(&state, &config, 100, 20));
@@ -1099,7 +1132,7 @@ mod tests {
     #[test]
     fn a_failed_feed_shows_on_the_message_row() {
         let (mut state, config) = full_state();
-        state.issues.status = FeedStatus::Failed("rate limited".to_string());
+        state.issues.status = FeedStatus::Failed { error: "rate limited".to_string(), at: Instant::now() };
         let screen = text(&render(&state, &config, 100, 20));
         let row = screen.lines().nth(18).unwrap_or_default();
         assert!(row.contains("gh failed, showing old data: rate limited"), "missing failure in\n{screen}");
@@ -1111,6 +1144,60 @@ mod tests {
         assert_eq!(wrap_text("aa bb cc", 5, 3), ["aa bb", "cc"]);
         assert_eq!(wrap_text("aa bb cc dd", 2, 2), ["aa", "b…"]);
         assert_eq!(wrap_text("abcdefgh", 4, 3), ["abc…"]);
+    }
+
+    #[test]
+    fn since_counts_seconds_then_minutes_then_hours() {
+        let at = Instant::now();
+        for (secs, want) in [(0, "0s"), (12, "12s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h"), (7300, "2h")] {
+            assert_eq!(since(at, at + Duration::from_secs(secs)), want, "{secs}s");
+        }
+        assert_eq!(since(at + Duration::from_secs(5), at), "0s", "a response stamped after now is not negative");
+    }
+
+    /// The tab row's right end, and the style of its first character.
+    fn freshness_on_screen(state: &State, config: &Config) -> (String, Style) {
+        let buf = render(state, config, 120, 20);
+        let row = text(&buf).lines().next().unwrap_or_default().to_string();
+        let words = ["loading", "refreshing", "updated", "refresh failed"];
+        let Some(x) = words.iter().filter_map(|w| row.find(w)).min() else { return (row.trim().to_string(), palette::PLAIN) };
+        let column = row[..x].chars().count();
+        let cell = &buf[(u16::try_from(column).expect("x"), 0)];
+        (row[x..].trim_end().to_string(), Style::new().fg(cell.fg))
+    }
+
+    fn ago(secs: u64) -> Instant {
+        Instant::now().checked_sub(Duration::from_secs(secs)).expect("uptime above a minute")
+    }
+
+    #[test]
+    fn the_tab_row_shows_how_old_the_list_is_and_each_fetch_state() {
+        let (mut state, config) = full_state();
+        state.issues.status = FeedStatus::Fresh { at: ago(12) };
+        assert_eq!(freshness_on_screen(&state, &config), ("updated 12s ago   orbit".to_string(), palette::DIM));
+
+        state.inflight.issues = true;
+        assert_eq!(freshness_on_screen(&state, &config), ("refreshing…   orbit".to_string(), palette::DIM));
+
+        state.inflight.issues = false;
+        state.issues.status = FeedStatus::Failed { error: "offline".to_string(), at: ago(40) };
+        assert_eq!(freshness_on_screen(&state, &config), ("refresh failed 40s ago   orbit".to_string(), palette::WARN));
+
+        state.prs.status = FeedStatus::Fresh { at: ago(125) };
+        send(&mut state, &config, KeyCode::Char('2'));
+        assert_eq!(freshness_on_screen(&state, &config).0, "updated 2m ago   orbit", "each tab shows its own feed");
+
+        send(&mut state, &config, KeyCode::Char('3'));
+        let row = freshness_on_screen(&state, &config).0;
+        assert!(row.starts_with("1 Issues") && row.ends_with(" orbit"), "sessions are not fetched from GitHub, so no age: {row:?}");
+    }
+
+    #[test]
+    fn a_narrow_tab_row_keeps_the_age_and_drops_the_repo_name() {
+        let (mut state, config) = full_state();
+        state.issues.status = FeedStatus::Fresh { at: ago(12) };
+        let row = text(&render(&state, &config, 72, 10)).lines().next().unwrap_or_default().to_string();
+        assert!(row.trim_end().ends_with("updated 12s ago") && !row.contains("orbit"), "row: {row:?}");
     }
 
     #[test]

@@ -24,6 +24,15 @@ Then run `dispatch` in the checkout.
 
 There are three tabs: Issues, Pull requests, and Sessions. The list is on the left and the details are on the right.
 
+dispatch fetches the issues and the pull requests every 60 seconds. Press `r` to fetch them now. On the Issues and Pull requests tabs, the right end of the tab row shows how old the list is:
+
+| Text | Meaning |
+|---|---|
+| `loading…` | The first fetch has not finished |
+| `updated 12s ago` gray | The last fetch worked. The time counts from when the response arrived |
+| `refreshing…` | A fetch is running. The list stays until the new data arrives |
+| `refresh failed 40s ago` yellow | The last fetch failed. The list shows the data from the last fetch that worked, and the message row shows the error |
+
 To start a session, select an issue and press `s`, press Enter, or double-click it. A dialog opens with these fields:
 
 - Branch, for example `fix/142-retry-queue-drops-jobs`.
@@ -76,7 +85,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `x` | Stop the session. The window closes. The worktree stays |
 | `m` | Merge the session's open PR. Press `m` twice to confirm. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
-| `r` | Refresh |
+| `r` | Fetch the issues and pull requests now |
 | `/` | Filter. Enter keeps it, Esc clears it |
 | `<` / `>` | Move the border between the list and the details left or right by 5% |
 | `=` | Put the border back where it started |

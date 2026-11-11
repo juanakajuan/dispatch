@@ -146,8 +146,14 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         Job::Merge(ask) => {
             let _ = writer.send(WriteJob::Merge(ask));
         }
-        Job::FetchIssues => spawn_read(ws, tx, |ws| Msg::Issues(github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string()))),
-        Job::FetchPrs => spawn_read(ws, tx, |ws| Msg::Prs(github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string()))),
+        Job::FetchIssues => spawn_read(ws, tx, |ws| {
+            let result = github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string());
+            Msg::Issues { result, at: Instant::now() }
+        }),
+        Job::FetchPrs => spawn_read(ws, tx, |ws| {
+            let result = github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string());
+            Msg::Prs { result, at: Instant::now() }
+        }),
         Job::ObserveSessions => spawn_read(ws, tx, |ws| Msg::Sessions(ws.observe().map_err(|e| e.to_string()))),
         Job::Open(target) => spawn_read(ws, tx, move |ws| Msg::Opened {
             target,

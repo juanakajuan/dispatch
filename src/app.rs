@@ -46,10 +46,11 @@ pub struct Feed<T> {
     pub status: FeedStatus,
 }
 
+/// `at` is when the response arrived, not when the request was sent.
 pub enum FeedStatus {
     Loading,
-    Fresh,
-    Failed(String),
+    Fresh { at: Instant },
+    Failed { error: String, at: Instant },
 }
 
 /// Where keys go. One enum, so "dialog open while typing a filter" can not
@@ -196,8 +197,9 @@ pub enum Msg {
     Key(KeyEvent),
     Mouse(MouseEvent, Instant),
     Tick(Instant),
-    Issues(Result<Vec<Issue>, String>),
-    Prs(Result<Vec<PullRequest>, String>),
+    /// `at` is stamped by the worker when `gh` returns.
+    Issues { result: Result<Vec<Issue>, String>, at: Instant },
+    Prs { result: Result<Vec<PullRequest>, String>, at: Instant },
     Sessions(Result<Sessions, String>),
     Tail { window: WindowId, result: Result<Vec<String>, String> },
     Started { issue: IssueNumber, result: Result<StartOutcome, String> },
@@ -415,14 +417,14 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         },
         Msg::Mouse(ev, now) => on_mouse(state, &ev, now),
         Msg::Tick(now) => tick(state, now, config),
-        Msg::Issues(result) => {
+        Msg::Issues { result, at } => {
             state.inflight.issues = false;
-            apply_feed(&mut state.issues, result);
+            apply_feed(&mut state.issues, result, at);
             Vec::new()
         }
-        Msg::Prs(result) => {
+        Msg::Prs { result, at } => {
             state.inflight.prs = false;
-            apply_feed(&mut state.prs, result);
+            apply_feed(&mut state.prs, result, at);
             Vec::new()
         }
         Msg::Sessions(result) => {
@@ -526,13 +528,13 @@ fn observe_now(state: &mut State) -> Vec<Cmd> {
     vec![Cmd::Job(Job::ObserveSessions)]
 }
 
-fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>) {
+fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>, at: Instant) {
     match result {
         Ok(items) => {
             feed.items = items;
-            feed.status = FeedStatus::Fresh;
+            feed.status = FeedStatus::Fresh { at };
         }
-        Err(e) => feed.status = FeedStatus::Failed(e),
+        Err(error) => feed.status = FeedStatus::Failed { error, at },
     }
 }
 
@@ -1064,9 +1066,9 @@ mod tests {
         let (mut state, _) = init(now, &config, Context::default());
         state.issues = Feed {
             items: vec![issue(3, "Retry queue drops jobs", &["bug"]), issue(2, "Docs for plugins", &["docs"]), issue(1, "Add json output", &["feature"])],
-            status: FeedStatus::Fresh,
+            status: FeedStatus::Fresh { at: now },
         };
-        state.prs = Feed { items: vec![pr(10, "fix/3-x", &[3]), pr(11, "other", &[])], status: FeedStatus::Fresh };
+        state.prs = Feed { items: vec![pr(10, "fix/3-x", &[3]), pr(11, "other", &[])], status: FeedStatus::Fresh { at: now } };
         state.inflight = Inflight::default();
         (state, config, now)
     }
@@ -1210,16 +1212,35 @@ mod tests {
     }
 
     #[test]
-    fn issues_error_keeps_the_old_items() {
-        let (mut state, config, _) = app();
+    fn issues_error_keeps_the_old_items_and_stamps_the_failure() {
+        let (mut state, config, now) = app();
         state.inflight.issues = true;
-        press(&mut state, &config, Msg::Issues(Err("offline".to_string())));
+        let failed = now + Duration::from_secs(5);
+        press(&mut state, &config, Msg::Issues { result: Err("offline".to_string()), at: failed });
         assert_eq!(state.issues.items.len(), 3);
-        assert!(matches!(&state.issues.status, FeedStatus::Failed(m) if m == "offline"));
+        assert!(matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed));
         assert!(!state.inflight.issues);
-        press(&mut state, &config, Msg::Issues(Ok(vec![issue(9, "new", &[])])));
+        let arrived = now + Duration::from_secs(9);
+        press(&mut state, &config, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
         assert_eq!(state.issues.items.len(), 1);
-        assert!(matches!(state.issues.status, FeedStatus::Fresh));
+        assert!(matches!(state.issues.status, FeedStatus::Fresh { at } if at == arrived));
+    }
+
+    #[test]
+    fn new_data_resets_the_refresh_time_on_the_timer_and_after_r() {
+        let (mut state, config, _) = app();
+        let due = state.due.github;
+        let cmds = press(&mut state, &config, Msg::Tick(due));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        let first = due + Duration::from_secs(2);
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: first });
+        assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == first));
+
+        let cmds = press(&mut state, &config, key('r'));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        let second = first + Duration::from_secs(30);
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: second });
+        assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
     }
 
     fn hit_state() -> (State, Config, Instant) {
