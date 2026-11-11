@@ -195,6 +195,17 @@ pub(super) fn kill_window(id: &WindowId) -> Result<(), String> {
     }
 }
 
+/// Types `text` into the pane and submits it, as if the user did:
+/// `tmux send-keys -t <id> -l -- <text>` then `tmux send-keys -t <id> Enter`.
+/// Two calls, so Claude reads the text as typing and Enter as a submit rather
+/// than one paste with a newline in it.
+pub(super) fn send_line(id: &WindowId, text: &str) -> Result<(), String> {
+    let mut args: Vec<String> = ["send-keys", "-t", id.as_str(), "-l", "--"].map(String::from).to_vec();
+    args.extend(escape_argv(&[text.to_string()]));
+    tmux(&args)?;
+    tmux(["send-keys", "-t", id.as_str(), "Enter"]).map(|_| ())
+}
+
 pub(super) fn capture(id: &WindowId, lines: u16) -> Result<Vec<String>, String> {
     let start = format!("-{lines}");
     let text = tmux(["capture-pane", "-p", "-J", "-t", id.as_str(), "-S", start.as_str()])?;
@@ -291,6 +302,14 @@ mod tests {
         assert!(kill_window(&id).is_ok());
         fake::install(|_| Err(fake::fail("tmux", 1, "other")));
         assert!(kill_window(&id).is_err());
+    }
+
+    #[test]
+    fn send_line_types_the_text_literally_then_presses_enter() {
+        fake::install(|_| Ok(String::new()));
+        let id = WindowId::parse("@9").expect("id");
+        send_line(&id, "merge -it;").expect("ok");
+        assert_eq!(fake::calls(), ["tmux send-keys -t @9 -l -- merge -it\\;", "tmux send-keys -t @9 Enter"]);
     }
 
     #[test]

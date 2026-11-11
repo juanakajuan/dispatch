@@ -307,6 +307,16 @@ impl Workspace {
         }
     }
 
+    /// Types `text` into the session's Claude prompt and submits it. Observes
+    /// again first, like `stop`, and refuses a dead pane, where the keys would
+    /// go nowhere.
+    pub fn send(&self, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
+        match self.observe()?.remove(&issue).and_then(|s| s.window) {
+            Some(w) if w.alive => Ok(tmux::send_line(&w.id, text)?),
+            _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
+        }
+    }
+
     /// Last `lines` lines of the pane as plain text (`capture-pane -p -J`, no
     /// `-e`, so no escape codes reach the UI). Works on dead panes too.
     pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {

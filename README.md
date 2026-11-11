@@ -53,6 +53,7 @@ If dispatch runs inside tmux, the window goes into your current tmux session. If
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
+| `m` | Ask the session's agent to merge its open PR. Press `m` twice to confirm |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Refresh |
 | `/` | Filter. Enter keeps it, Esc clears it |
