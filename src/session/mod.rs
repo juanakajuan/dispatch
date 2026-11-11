@@ -335,6 +335,7 @@ impl Workspace {
 
     /// Last `lines` lines of the pane as plain text (`capture-pane -p -J`, no
     /// `-e`, so no escape codes reach the UI). Works on dead panes too.
+    #[expect(clippy::unused_self, reason = "keeps every session operation a `Workspace` method")]
     pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {
         Ok(tmux::capture(window, lines)?)
     }
@@ -434,15 +435,15 @@ enum Step {
 ///
 /// | observed                                              | plan                              |
 /// |-------------------------------------------------------|-----------------------------------|
-/// | session for issue, window alive                       | AlreadyRunning                    |
-/// | session for issue, no window or dead window           | [OpenWindow]                      |
-/// | a branch marked for issue, no worktree (crash)        | [AddWorktree create=false, Mark, OpenWindow] using that branch |
-/// | worktree at target dir, branch unmarked (crash)       | [Mark, OpenWindow]                |
-/// | target dir exists, not a worktree                     | Conflict PathTaken                |
-/// | req.branch marked for another issue                   | Conflict BranchBelongsTo          |
-/// | req.branch checked out elsewhere                      | Conflict BranchCheckedOut         |
-/// | req.branch exists, unmarked, free                     | [AddWorktree create=false, Mark, OpenWindow] |
-/// | nothing exists                                        | [Fetch, AddWorktree create=true, Mark, OpenWindow] |
+/// | session for issue, window alive                       | `AlreadyRunning`                    |
+/// | session for issue, no window or dead window           | [`OpenWindow`]                      |
+/// | a branch marked for issue, no worktree (crash)        | [`AddWorktree` create=false, Mark, `OpenWindow`] using that branch |
+/// | worktree at target dir, branch unmarked (crash)       | [Mark, `OpenWindow`]                |
+/// | target dir exists, not a worktree                     | Conflict `PathTaken`                |
+/// | req.branch marked for another issue                   | Conflict `BranchBelongsTo`          |
+/// | req.branch checked out elsewhere                      | Conflict `BranchCheckedOut`         |
+/// | req.branch exists, unmarked, free                     | [`AddWorktree` create=false, Mark, `OpenWindow`] |
+/// | nothing exists                                        | [Fetch, `AddWorktree` create=true, Mark, `OpenWindow`] |
 ///
 /// A created branch starts from the default branch, or from `origin/<branch>`
 /// when `req.from` is `StartFrom::Origin`.
@@ -502,7 +503,7 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
 
 /// Claude hooks passed with `--settings` when `detect_waiting` is on.
 /// `$TMUX_PANE` is in every pane's environment, and hooks inherit it.
-/// Notification and Stop set the flag; UserPromptSubmit and PreToolUse clear it.
+/// Notification and Stop set the flag; `UserPromptSubmit` and `PreToolUse` clear it.
 const WAITING_HOOKS: &str = r#"{"hooks":{
   "Notification":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
   "Stop":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
@@ -845,6 +846,7 @@ mod tests {
     // ---- the step runner through the proc fake ----
 
     #[derive(Default)]
+    #[expect(clippy::struct_excessive_bools, reason = "one independent flag per fake world fact")]
     struct Sim {
         added: bool,
         marked: bool,
@@ -862,7 +864,7 @@ mod tests {
             if call.starts_with("git worktree list") {
                 let mut t = format!("worktree {}\nHEAD x\nbranch refs/heads/main\n\n", base.join("orbit").display());
                 if s.added {
-                    t.push_str(&format!("worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display()));
+                    t = format!("{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display());
                 }
                 Ok(t)
             } else if call.starts_with("git config --get-regexp") {

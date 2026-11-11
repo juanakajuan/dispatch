@@ -16,6 +16,7 @@ pulldown-cmark = { version = "0.13", default-features = false }  # Markdown in i
 unsafe_code = "forbid"
 
 [lints.clippy]
+pedantic = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "deny"
 as_conversions = "deny"

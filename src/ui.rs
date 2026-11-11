@@ -517,7 +517,7 @@ fn list_row(
             let Some(i) = issue_of(state, n) else { return [Line::raw(""), Line::raw("")] };
             let mut facts = format!("{} · {}", i.author, age(i.created_at, now));
             if !i.labels.is_empty() {
-                facts.push_str(&format!(" · {}", i.labels.join(", ")));
+                facts = format!("{facts} · {}", i.labels.join(", "));
             }
             (
                 one_line(&i.title),
@@ -956,7 +956,7 @@ mod tests {
     fn text(buf: &Buffer) -> String {
         buf.content()
             .chunks(usize::from(buf.area.width))
-            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .map(|row| row.iter().map(ratatui::buffer::Cell::symbol).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
     }

@@ -57,7 +57,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            github_refresh: Duration::from_secs(60),
+            github_refresh: Duration::from_mins(1),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
             split: Split::DEFAULT,

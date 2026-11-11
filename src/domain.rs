@@ -50,6 +50,10 @@ impl BranchName {
             (name.starts_with('/'), "a leading /"),
             (name.ends_with('/'), "a trailing /"),
             (name.ends_with('.'), "a trailing ."),
+            #[expect(
+                clippy::case_sensitive_file_extension_comparisons,
+                reason = "git ref names are case-sensitive and `.lock` is no file extension"
+            )]
             (name.ends_with(".lock"), "a trailing .lock"),
             (name.contains(".."), ".."),
             (name.contains("//"), "//"),

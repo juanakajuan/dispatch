@@ -87,6 +87,7 @@ const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, Dialog
 /// One flag per job kind. The tick only schedules a job whose flag is clear,
 /// so a slow `gh` never stacks up a second call.
 #[derive(Default)]
+#[expect(clippy::struct_excessive_bools, reason = "one independent flag per job kind")]
 pub struct Inflight {
     pub issues: bool,
     pub prs: bool,
@@ -227,7 +228,7 @@ impl Sorts {
         }
     }
 
-    pub fn label(&self, tab: Tab) -> &'static str {
+    pub fn label(self, tab: Tab) -> &'static str {
         match tab {
             Tab::Issues => self.issues.label(),
             Tab::Prs => self.prs.label(),
@@ -489,6 +490,7 @@ fn action_for(ev: &KeyEvent) -> Option<Action> {
 // ---- the reducer -------------------------------------------------------------
 
 /// The reducer.
+#[expect(clippy::too_many_lines, reason = "one flat match over every `Msg` reads better split no further")]
 pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
     match msg {
         Msg::Key(ev) if ev.kind == KeyEventKind::Release => Vec::new(),
@@ -498,12 +500,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
-                    Some(action) => act(state, action, armed, config),
+                    Some(action) => act(state, action, armed.as_ref(), config),
                     None => Vec::new(),
                 }
             }
         },
-        Msg::Mouse(ev, now) => on_mouse(state, &ev, now),
+        Msg::Mouse(ev, now) => on_mouse(state, ev, now),
         Msg::Tick(now) => tick(state, now, config),
         Msg::Issues { result, at } => {
             state.inflight.issues = false;
@@ -673,7 +675,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 }
 
 /// `armed` is what a previous `m` armed; only the next `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<Armed>, config: &Config) -> Vec<Cmd> {
+fn act(state: &mut State, action: Action, armed: Option<&Armed>, config: &Config) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -728,12 +730,11 @@ fn attach_key(state: &mut State) -> Vec<Cmd> {
         return Vec::new();
     };
     let issue = session.issue;
-    match (&session.window, session.state()) {
-        (Some(w), SessionState::Running | SessionState::NeedsYou) => vec![Cmd::Attach(w.id.clone())],
-        _ => {
-            say(state, format!("Resuming #{} with claude --continue", issue.0));
-            vec![Cmd::Job(Job::Resume(issue))]
-        }
+    if let (Some(w), SessionState::Running | SessionState::NeedsYou) = (&session.window, session.state()) {
+        vec![Cmd::Attach(w.id.clone())]
+    } else {
+        say(state, format!("Resuming #{} with claude --continue", issue.0));
+        vec![Cmd::Job(Job::Resume(issue))]
     }
 }
 
@@ -794,7 +795,7 @@ fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, String> {
 /// is hard to undo and a new session is a big step, so one stray key never
 /// does either. The first press says what the PR list expects; the job
 /// checks GitHub again before it acts.
-fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
+fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let pr = match merge_target(state) {
         Ok(pr) => pr,
         Err(why) => {
@@ -803,10 +804,10 @@ fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
         }
     };
     let n = pr.number;
-    if let Some(Armed::Fix { pr, req }) = armed.clone()
-        && pr == n
+    if let Some(Armed::Fix { pr, req }) = armed
+        && *pr == n
     {
-        return start_fix(state, req);
+        return start_fix(state, req.clone());
     }
     let (new_session_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
         (MergePlan::Handoff(problem), fix) => {
@@ -829,7 +830,7 @@ fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
         (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, format!("Press m again to merge PR #{}", n.0)),
     };
     let ask = MergeAsk { pr: n, new_session_ok };
-    if armed != Some(Armed::Merge(ask)) {
+    if armed != Some(&Armed::Merge(ask)) {
         state.armed = Some(Armed::Merge(ask));
         say(state, expect);
         return Vec::new();
@@ -1005,7 +1006,7 @@ fn select(state: &mut State, key: RowKey) {
     state.due.tail = None;
 }
 
-fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant) -> Vec<Cmd> {
+fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
     // Before the focus gate, so a drag can not stay stuck behind a dialog.
     if matches!(ev.kind, MouseEventKind::Up(_) | MouseEventKind::Down(_)) {
         state.dragging_split = false;
@@ -1093,10 +1094,10 @@ fn dialog_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
         Some(Key::Code(KeyCode::Tab)) => dialog.field = step_field(dialog.field, 1),
         Some(Key::Code(KeyCode::BackTab)) => dialog.field = step_field(dialog.field, FIELDS.len() - 1),
         Some(Key::Code(KeyCode::Down)) if dialog.field != DialogField::Prompt => {
-            dialog.field = step_field(dialog.field, 1)
+            dialog.field = step_field(dialog.field, 1);
         }
         Some(Key::Code(KeyCode::Up)) if dialog.field != DialogField::Prompt => {
-            dialog.field = step_field(dialog.field, FIELDS.len() - 1)
+            dialog.field = step_field(dialog.field, FIELDS.len() - 1);
         }
         Some(Key::Code(KeyCode::Left | KeyCode::Right) | Key::Char(' ')) if dialog.field == DialogField::Mode => {
             dialog.mode = match dialog.mode {
@@ -1519,7 +1520,7 @@ mod tests {
     fn double_click_inside_the_window_opens_the_dialog_and_outside_only_selects() {
         let (mut state, config, now) = hit_state();
         press(&mut state, &config, click(5, 3, now));
-        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK - Duration::from_millis(1)));
+        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK.saturating_sub(Duration::from_millis(1))));
         assert_eq!(dialog(&state).issue, IssueNumber(2));
 
         let (mut state, config, now) = hit_state();
@@ -1588,12 +1589,12 @@ mod tests {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.inflight.tail = true;
-        let stale = WindowId::parse("@99").expect("id");
-        press(&mut state, &config, Msg::Tail { window: stale, result: Ok(vec!["old".to_string()]) });
+        let old_window = WindowId::parse("@99").expect("id");
+        press(&mut state, &config, Msg::Tail { window: old_window, result: Ok(vec!["old".to_string()]) });
         assert!(state.tail.is_none());
         assert!(!state.inflight.tail);
-        let current = WindowId::parse("@3").expect("id");
-        press(&mut state, &config, Msg::Tail { window: current, result: Ok(vec!["new".to_string()]) });
+        let new_window = WindowId::parse("@3").expect("id");
+        press(&mut state, &config, Msg::Tail { window: new_window, result: Ok(vec!["new".to_string()]) });
         assert_eq!(state.tail.as_ref().map(|t| t.lines.clone()), Some(vec!["new".to_string()]));
     }
 
@@ -1753,7 +1754,11 @@ mod tests {
         let from = state.due.github_sent;
         assert_eq!(github_fetches(&press(state, config, msg)), 0, "the next tick fetches, not the event");
         assert_eq!(
-            github_fetches(&press(state, config, Msg::Tick(from + GITHUB_COOLDOWN - Duration::from_millis(1)))),
+            github_fetches(&press(
+                state,
+                config,
+                Msg::Tick(from + GITHUB_COOLDOWN.saturating_sub(Duration::from_millis(1)))
+            )),
             0,
             "cooldown"
         );

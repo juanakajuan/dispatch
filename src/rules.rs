@@ -21,7 +21,7 @@ pub fn start_defaults(issue: &Issue) -> StartDefaults {
 /// `fix/142-retry-queue-drops-jobs`. Prefix from the first matching label
 /// (bug -> fix, docs/documentation -> docs, chore -> chore, else feat).
 /// Slug: lowercase ASCII alnum words, first 4, joined by `-`.
-/// Always yields a valid BranchName (the slug can be empty: `feat/142`).
+/// Always yields a valid `BranchName` (the slug can be empty: `feat/142`).
 pub fn branch_for(issue: &Issue) -> BranchName {
     let prefix = issue
         .labels
@@ -109,6 +109,7 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
     }
     match (pr.mergeability, pr.checks) {
         (Mergeability::Conflict, _) => MergePlan::Handoff(MergeProblem::Conflict),
+        #[expect(clippy::match_same_arms, reason = "order matters: `Pending` must refuse before `Unstable` hands off")]
         (_, Checks::Fail) => MergePlan::Handoff(MergeProblem::ChecksFailing),
         (_, Checks::Pending) => {
             MergePlan::Refuse(format!("PR #{n} has checks that are still running. Press m again when they finish."))
@@ -266,7 +267,7 @@ mod tests {
 
     #[test]
     fn merge_plan_merges_clean_prs_and_hands_off_problems() {
-        let plan = |mergeability, checks| merge_plan(&PullRequest { mergeability, checks, ..pr(10, "h", &[]) });
+        let plan = |mergeability, checks| merge_plan(&PullRequest { checks, mergeability, ..pr(10, "h", &[]) });
         assert_eq!(plan(Mergeability::Clean, Checks::Pass), MergePlan::Direct);
         assert_eq!(plan(Mergeability::Clean, Checks::None), MergePlan::Direct);
         assert_eq!(plan(Mergeability::Conflict, Checks::Pending), MergePlan::Handoff(MergeProblem::Conflict));

@@ -145,14 +145,19 @@ fn escape_argv(argv: &[String]) -> Vec<String> {
 /// Two calls, because a chained `set-option -w` after `new-window -d` tags the
 /// current window, not the new one (measured on tmux 3.8):
 ///
-/// Inside:   tmux new-window -d -P -F '#{window_id}' -t <session_id>: -c <dir> -n <name> -- <argv..>
+/// Inside:   tmux new-window -d -P -F '#{`window_id`}' -t <`session_id>`: -c <dir> -n <name> -- <argv..>
 /// Detached: the same with `-t =<name>:`, or `new-session -d -s <name>` when
 ///           `has-session -t =<name>` fails.
 /// Then:     tmux set-option -w -t <id> @dispatch-worktree <dir> ; set-option -w -t <id> remain-on-exit on
 ///
 /// A crash between the calls leaves an untagged window. That is accepted.
 /// Returns the new window id from `-P -F`.
-pub(super) fn open_window(place: &Place, dir: &WorktreePath, name: &str, argv: &[String]) -> Result<WindowId, String> {
+pub(super) fn open_window(
+    place: &Place,
+    dir: &WorktreePath,
+    name: &str,
+    command: &[String],
+) -> Result<WindowId, String> {
     let dir_text = dir.as_path().to_string_lossy().into_owned();
     let mut args: Vec<String> = Vec::new();
     let new_session = match place {
@@ -166,7 +171,7 @@ pub(super) fn open_window(place: &Place, dir: &WorktreePath, name: &str, argv: &
         _ => args.extend(["new-window", "-d", "-t"].map(String::from).into_iter().chain([place.window_parent()])),
     }
     args.extend(["-P", "-F", "#{window_id}", "-c", &dir_text, "-n", name, "--"].map(String::from));
-    args.extend(escape_argv(argv));
+    args.extend(escape_argv(command));
     let id = WindowId::parse(&tmux(&args)?)?;
     let tag = |args: [&str; 5]| args.map(String::from);
     let mut tags: Vec<String> = tag(["set-option", "-w", "-t", id.as_str(), "@dispatch-worktree"]).to_vec();
@@ -179,11 +184,11 @@ pub(super) fn open_window(place: &Place, dir: &WorktreePath, name: &str, argv: &
 
 /// For `Workspace::resume` on a dead pane: tmux respawn-window -k -t <id> -c <dir> -- <argv..>.
 /// Keeps the window id and its tags.
-pub(super) fn respawn(id: &WindowId, dir: &WorktreePath, argv: &[String]) -> Result<(), String> {
+pub(super) fn respawn(id: &WindowId, dir: &WorktreePath, command: &[String]) -> Result<(), String> {
     let mut args: Vec<String> = ["respawn-window", "-k", "-t", id.as_str(), "-c"].map(String::from).to_vec();
     args.push(dir.as_path().to_string_lossy().into_owned());
     args.push("--".to_string());
-    args.extend(escape_argv(argv));
+    args.extend(escape_argv(command));
     tmux(&args).map(|_| ())
 }
 

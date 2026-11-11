@@ -162,7 +162,7 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
 }
 
 /// `mergeable` is MERGEABLE, CONFLICTING, or UNKNOWN. `mergeStateStatus` is
-/// CLEAN, HAS_HOOKS, DIRTY, BEHIND, BLOCKED, UNSTABLE, DRAFT, or UNKNOWN. A
+/// CLEAN, `HAS_HOOKS`, DIRTY, BEHIND, BLOCKED, UNSTABLE, DRAFT, or UNKNOWN. A
 /// value GitHub adds later reads as `Unknown`, so dispatch waits rather than
 /// merges.
 fn mergeability(mergeable: &str, status: &str) -> Mergeability {
@@ -177,7 +177,7 @@ fn mergeability(mergeable: &str, status: &str) -> Mergeability {
 }
 
 /// Any failure -> Fail, else any not completed -> Pending, else Pass.
-/// Empty -> Checks::None.
+/// Empty -> `Checks::None`.
 fn rollup(items: &[WireCheck]) -> Checks {
     let outcomes: Vec<Checks> = items
         .iter()
@@ -273,8 +273,8 @@ struct WireIssueRef {
 }
 
 /// Real output mixes two shapes, told apart by `__typename`:
-/// CheckRun {status: "COMPLETED"|"IN_PROGRESS"|.., conclusion: "SUCCESS"|"FAILURE"|""}
-/// StatusContext {state: "SUCCESS"|"PENDING"|"FAILURE"|"ERROR"}.
+/// `CheckRun` {status: "`COMPLETED"|"IN_PROGRESS`"|.., conclusion: "SUCCESS"|"FAILURE"|""}
+/// `StatusContext` {state: "SUCCESS"|"PENDING"|"FAILURE"|"ERROR"}.
 #[derive(serde::Deserialize)]
 #[serde(tag = "__typename")]
 enum WireCheck {

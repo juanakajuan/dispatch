@@ -114,8 +114,8 @@ fn pr_urgency(pr: &PullRequest) -> u8 {
 
 /// Equal keys fall back to the number, in the mode's own direction, so the
 /// order never depends on the order `gh` returned.
-fn by_number<N: Ord>(ascending: bool, a: N, b: N) -> Ordering {
-    if ascending { a.cmp(&b) } else { b.cmp(&a) }
+fn by_number<N: Ord>(ascending: bool, a: &N, b: &N) -> Ordering {
+    if ascending { a.cmp(b) } else { b.cmp(a) }
 }
 
 pub fn issues(rows: &mut [&Issue], sort: IssueSort, session: impl Fn(IssueNumber) -> Option<SessionState>) {
@@ -130,7 +130,7 @@ pub fn issues(rows: &mut [&Issue], sort: IssueSort, session: impl Fn(IssueNumber
             IssueSort::Comments => b.comment_count.cmp(&a.comment_count),
         };
         let ascending = matches!(sort, IssueSort::Oldest | IssueSort::Number);
-        primary.then_with(|| by_number(ascending, a.number, b.number))
+        primary.then_with(|| by_number(ascending, &a.number, &b.number))
     });
 }
 
@@ -145,7 +145,7 @@ pub fn prs(rows: &mut [&PullRequest], sort: PrSort) {
             PrSort::Number => Ordering::Equal,
         };
         let ascending = matches!(sort, PrSort::Oldest | PrSort::Number);
-        primary.then_with(|| by_number(ascending, a.number, b.number))
+        primary.then_with(|| by_number(ascending, &a.number, &b.number))
     });
 }
 
@@ -199,9 +199,8 @@ mod tests {
     #[test]
     fn issues_that_need_you_come_first_then_running_then_the_rest_newest_first() {
         let session = |n: IssueNumber| match n.0 {
-            1 => Some(SessionState::Running),
+            1 | 3 => Some(SessionState::Running),
             4 => Some(SessionState::NeedsYou),
-            3 => Some(SessionState::Running),
             2 => Some(SessionState::Exited),
             _ => None,
         };
@@ -260,7 +259,6 @@ mod tests {
     #[test]
     fn sessions_sort_by_number_as_a_number_and_by_state_in_attention() {
         let state = |n: IssueNumber| match n.0 {
-            9 => Some(SessionState::Exited),
             10 => Some(SessionState::Running),
             100 => Some(SessionState::NeedsYou),
             _ => Some(SessionState::Exited),
