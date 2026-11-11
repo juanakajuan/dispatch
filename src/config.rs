@@ -8,11 +8,13 @@
 //! {
 //!   "detect_waiting": true,
 //!   "claude_command": ["claude"],
-//!   "split": 42
+//!   "split": 42,
+//!   "icons": "unicode"
 //! }
 //! ```
 
 use crate::domain::Split;
+use crate::glyphs::IconSet;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -48,6 +50,8 @@ pub struct Config {
     /// Where the list | detail border starts, and where `=` puts it back.
     /// Resizes stay in memory; dispatch never writes this file.
     pub split: Split,
+    /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
+    pub icons: IconSet,
 }
 
 impl Default for Config {
@@ -57,6 +61,7 @@ impl Default for Config {
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
             split: Split::DEFAULT,
+            icons: IconSet::default(),
         }
     }
 }
@@ -89,6 +94,7 @@ struct ConfigFile {
     detect_waiting: Option<bool>,
     claude_command: Option<Vec<String>>,
     split: Option<u64>,
+    icons: Option<IconSet>,
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -109,6 +115,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     }
     if let Some(percent) = file.split {
         config.split = Split::from_percent(percent).ok_or(ConfigError::BadSplit(percent))?;
+    }
+    if let Some(icons) = file.icons {
+        config.icons = icons;
     }
     Ok(config)
 }
@@ -148,6 +157,7 @@ mod tests {
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
         assert_eq!(c.split, Split::DEFAULT);
+        assert_eq!(c.icons, IconSet::Unicode);
     }
 
     #[test]
@@ -159,12 +169,13 @@ mod tests {
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30}"#)
+        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#)
             .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
         assert_eq!(c.split.list_width(100), 30);
+        assert_eq!(c.icons, IconSet::NerdFont);
     }
 
     #[test]
@@ -177,6 +188,7 @@ mod tests {
         assert!(matches!(parse_str(r#"{"split":95}"#), Err(ConfigError::BadSplit(95))));
         assert!(matches!(parse_str(r#"{"split":-1}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"split":"42"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"icons":"emoji"}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]
