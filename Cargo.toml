@@ -1,0 +1,21 @@
+[package]
+name = "dispatch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.29"          # pulls crossterm backend
+crossterm = "0.28"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"              # optional user config only
+tui-textarea = "0.7"      # branch + prompt editing in the start dialog
+jiff = "0.2"              # parse gh createdAt, render "3h" ages
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+as_conversions = "deny"
