@@ -19,6 +19,7 @@ mod app;
 mod config;
 mod domain;
 mod github;
+mod markdown;
 mod proc;
 mod rules;
 mod session;
