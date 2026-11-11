@@ -260,10 +260,11 @@ mod tests {
         let id = open_window(&place, &dir, "#142", &["claude".to_string(), "go;".to_string()]).expect("ok");
         assert_eq!(id.as_str(), "@7");
         let calls = fake::calls();
-        assert_eq!(calls[0], "tmux new-window -d -t $3: -P -F #{window_id} -c /tmp -n #142 -- claude go\\;");
+        let tmp = dir.as_path().display();
+        assert_eq!(calls[0], format!("tmux new-window -d -t $3: -P -F #{{window_id}} -c {tmp} -n #142 -- claude go\\;"));
         assert_eq!(
             calls[1],
-            "tmux set-option -w -t @7 @dispatch-worktree /tmp ; set-option -w -t @7 remain-on-exit on"
+            format!("tmux set-option -w -t @7 @dispatch-worktree {tmp} ; set-option -w -t @7 remain-on-exit on")
         );
     }
 
