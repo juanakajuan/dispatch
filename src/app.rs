@@ -92,6 +92,12 @@ pub struct Inflight {
 
 pub struct Due {
     pub github: Instant,
+    /// Set by an event that likely changed GitHub data. A tick fetches once
+    /// no fetch is in flight and `GITHUB_COOLDOWN` has passed since
+    /// `github_sent`, so a burst of events makes one fetch.
+    pub github_soon: bool,
+    /// When the last tick sent a GitHub fetch.
+    pub github_sent: Instant,
     pub sessions: Instant,
     /// `None` means "as soon as possible": set when the selection changes.
     pub tail: Option<Instant>,
@@ -201,6 +207,8 @@ pub enum Msg {
     Opened { target: GithubRef, result: Result<(), String> },
     Sent { issue: IssueNumber, result: Result<(), String> },
     Merged { ask: MergeAsk, result: Result<MergeOutcome, String> },
+    /// The terminal got focus back, often after a merge or comment in the browser.
+    FocusGained,
 }
 
 /// Work for the shell.
@@ -237,6 +245,7 @@ pub const TAIL_EVERY: Duration = Duration::from_secs(1);
 pub const TAIL_LINES: u16 = 60;
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const TOAST_FOR: Duration = Duration::from_secs(5);
+const GITHUB_COOLDOWN: Duration = Duration::from_secs(5);
 
 pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>) {
     let state = State {
@@ -252,7 +261,13 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         tail: None,
         toast: None,
         inflight: Inflight { issues: true, prs: true, sessions: true, tail: false },
-        due: Due { github: now + config.github_refresh, sessions: now + SESSIONS_EVERY, tail: None },
+        due: Due {
+            github: now + config.github_refresh,
+            github_soon: false,
+            github_sent: now,
+            sessions: now + SESSIONS_EVERY,
+            tail: None,
+        },
         hits: HitMap::default(),
         last_click: None,
         split: config.split,
@@ -413,7 +428,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Sessions(result) => {
             state.inflight.sessions = false;
             match result {
-                Ok(sessions) => state.sessions = sessions,
+                Ok(sessions) => {
+                    if state.sessions.iter().any(|(n, s)| went_idle(s.state(), sessions.get(n).map(Session::state))) {
+                        state.due.github_soon = true;
+                    }
+                    state.sessions = sessions;
+                }
                 Err(e) => say(state, format!("sessions: {e}")),
             }
             Vec::new()
@@ -435,6 +455,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
                         None => format!("Started #{}", issue.0),
                     };
                     state.sessions.insert(issue, outcome.session);
+                    state.due.github_soon = true;
                     say(state, text);
                 }
                 Err(e) => say(state, format!("Start #{} failed: {e}", issue.0)),
@@ -442,6 +463,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             observe_now(state)
         }
         Msg::Stopped { issue, result } => {
+            state.due.github_soon = true;
             match result {
                 Ok(()) => say(state, format!("Stopped #{}", issue.0)),
                 Err(e) => say(state, format!("Stop #{} failed: {e}", issue.0)),
@@ -475,7 +497,21 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             }
             observe_now(state)
         }
+        Msg::FocusGained => {
+            state.due.github_soon = true;
+            Vec::new()
+        }
     }
+}
+
+/// True when a session's Claude stopped working: it waits for you, or it
+/// exited. That is usually when it has just opened or pushed a PR.
+fn went_idle(before: SessionState, after: Option<SessionState>) -> bool {
+    matches!(
+        (before, after),
+        (SessionState::Running, Some(SessionState::NeedsYou | SessionState::Exited) | None)
+            | (SessionState::NeedsYou, Some(SessionState::Exited) | None)
+    )
 }
 
 fn say(state: &mut State, text: String) {
@@ -509,8 +545,15 @@ fn tick(state: &mut State, now: Instant, config: &Config) -> Vec<Cmd> {
         }
     }
     let mut cmds = Vec::new();
-    if now >= state.due.github {
+    let idle = !state.inflight.issues && !state.inflight.prs;
+    let soon = state.due.github_soon && idle && now >= state.due.github_sent + GITHUB_COOLDOWN;
+    if soon || now >= state.due.github {
+        // A fetch already in flight may predate the event, so `soon` waits for it.
+        if idle {
+            state.due.github_soon = false;
+        }
         state.due.github = now + config.github_refresh;
+        state.due.github_sent = now;
         refresh_github(state, &mut cmds);
     }
     if now >= state.due.sessions {
@@ -1418,6 +1461,95 @@ mod tests {
         assert!(press(&mut state, &config, key('r')).is_empty());
         assert!(matches!(press(&mut state, &config, key('q')).as_slice(), [Cmd::Quit]));
         assert!(matches!(press(&mut state, &config, ctrl('c')).as_slice(), [Cmd::Quit]));
+    }
+
+    fn github_fetches(cmds: &[Cmd]) -> usize {
+        cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::FetchIssues | Job::FetchPrs))).count()
+    }
+
+    /// Sends `msg`, then checks that the GitHub fetch waits for the cooldown,
+    /// goes out once, and pushes the 60 s timer back.
+    fn assert_triggers_one_refresh(state: &mut State, config: &Config, msg: Msg) {
+        let from = state.due.github_sent;
+        assert_eq!(github_fetches(&press(state, config, msg)), 0, "the next tick fetches, not the event");
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(from + GITHUB_COOLDOWN - Duration::from_millis(1)))), 0, "cooldown");
+        let at = from + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at))), 2);
+        assert_eq!(state.due.github, at + config.github_refresh, "the timer starts again");
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))), 0, "inflight, and no new event");
+        press(state, config, Msg::Issues(Ok(Vec::new())));
+        press(state, config, Msg::Prs(Ok(Vec::new())));
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))), 0, "one event, one fetch");
+    }
+
+    #[test]
+    fn a_start_or_a_stop_refreshes_github() {
+        let (mut state, config, _) = app();
+        let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: Vec::new() };
+        assert_triggers_one_refresh(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+        assert_triggers_one_refresh(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+
+        let (mut state, config, now) = app();
+        press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0, "a failed start changes nothing");
+    }
+
+    #[test]
+    fn a_session_that_goes_idle_or_exits_refreshes_github() {
+        let observe = |sessions: Vec<Session>| Msg::Sessions(Ok(sessions.into_iter().map(|s| (s.issue, s)).collect()));
+        let running = || session(3, Some((true, false)));
+        let needs_you = || session(3, Some((true, true)));
+        let exited = || session(3, Some((false, false)));
+        for (before, after) in [(running(), Some(needs_you())), (running(), Some(exited())), (needs_you(), Some(exited())), (running(), None)] {
+            let (mut state, config, _) = app();
+            state.sessions.insert(IssueNumber(3), before);
+            assert_triggers_one_refresh(&mut state, &config, observe(after.into_iter().collect()));
+        }
+        for (before, after) in [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())] {
+            let (mut state, config, now) = app();
+            state.sessions.insert(IssueNumber(3), before);
+            press(&mut state, &config, observe(vec![after]));
+            assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0);
+        }
+    }
+
+    #[test]
+    fn focus_gained_refreshes_github() {
+        let (mut state, config, _) = app();
+        assert_triggers_one_refresh(&mut state, &config, Msg::FocusGained);
+    }
+
+    #[test]
+    fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more() {
+        let (mut state, config, now) = app();
+        for _ in 0..3 {
+            press(&mut state, &config, Msg::FocusGained);
+            press(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+        }
+        let at = now + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(at))), 2);
+
+        // This fetch may have started before the change, so another one follows it.
+        press(&mut state, &config, Msg::FocusGained);
+        let later = at + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "waits for the fetch in flight");
+        press(&mut state, &config, Msg::Issues(Ok(Vec::new())));
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "PRs still in flight");
+        press(&mut state, &config, Msg::Prs(Ok(Vec::new())));
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 2);
+    }
+
+    #[test]
+    fn the_timer_firing_during_a_fetch_keeps_the_pending_event() {
+        let (mut state, config, now) = app();
+        state.inflight.issues = true;
+        press(&mut state, &config, Msg::FocusGained);
+        state.due.github = now + GITHUB_COOLDOWN;
+        let cmds = press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN));
+        assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
+        press(&mut state, &config, Msg::Issues(Ok(Vec::new())));
+        press(&mut state, &config, Msg::Prs(Ok(Vec::new())));
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))), 2, "the issues fetch predated the event");
     }
 
     #[test]
