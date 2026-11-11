@@ -115,11 +115,11 @@ impl WorktreePath {
         std::fs::canonicalize(raw).ok().map(WorktreePath)
     }
 
-    /// For a dir that a start plan will create. The caller builds it from an
-    /// already canonical parent, so the result is canonical without touching
-    /// the filesystem and the planner stays pure.
-    pub fn planned(canonical_parent: &std::path::Path, name: &std::ffi::OsStr) -> WorktreePath {
-        WorktreePath(canonical_parent.join(name))
+    /// For a dir that a start plan will create. The caller builds `path` from
+    /// an already canonical parent, so it is canonical without touching the
+    /// filesystem and the planner stays pure.
+    pub fn planned(path: PathBuf) -> WorktreePath {
+        WorktreePath(path)
     }
     pub fn as_path(&self) -> &std::path::Path {
         &self.0
