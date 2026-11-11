@@ -338,7 +338,19 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, hits: &mu
     let used = usize::from(x.saturating_sub(area.x));
     let room = usize::from(area.width).saturating_sub(used + 1);
     let text = fit(&text, room);
-    spans.push(Span::raw(" ".repeat(room.saturating_sub(cells(&text)))));
+    let room = room.saturating_sub(cells(&text));
+    let sort = vec![
+        span("S", palette::ACCENT),
+        span(format!(" sort: {}", state.sort.label(state.tab)), palette::DIM),
+        Span::raw("   "),
+    ];
+    let sort_width = spans_width(&sort);
+    if sort_width <= room {
+        spans.push(Span::raw(" ".repeat(room - sort_width)));
+        spans.extend(sort);
+    } else {
+        spans.push(Span::raw(" ".repeat(room)));
+    }
     spans.push(span(text, palette::DIM));
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
@@ -1111,6 +1123,19 @@ mod tests {
         assert_eq!(wrap_text("aa bb cc", 5, 3), ["aa bb", "cc"]);
         assert_eq!(wrap_text("aa bb cc dd", 2, 2), ["aa", "b…"]);
         assert_eq!(wrap_text("abcdefgh", 4, 3), ["abc…"]);
+    }
+
+    #[test]
+    fn the_tab_row_shows_the_shown_tabs_sort_mode_when_it_fits() {
+        let (mut state, config) = full_state();
+        let top = |state: &State, w| text(&render(state, &config, w, 24)).lines().next().unwrap_or_default().to_string();
+        assert!(top(&state, 120).ends_with("S sort: attention   orbit "), "{}", top(&state, 120));
+        let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)), &config);
+        assert!(top(&state, 120).contains("S sort: newest"));
+        send(&mut state, &config, KeyCode::Char('2'));
+        assert!(top(&state, 120).contains("S sort: attention"), "each tab has its own mode");
+        let narrow = top(&state, 60);
+        assert!(!narrow.contains("sort") && narrow.ends_with("orbit "), "{narrow}");
     }
 
     #[test]

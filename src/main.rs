@@ -25,6 +25,7 @@ mod merge;
 mod proc;
 mod rules;
 mod session;
+mod sort;
 #[cfg(test)]
 mod testutil;
 mod ui;

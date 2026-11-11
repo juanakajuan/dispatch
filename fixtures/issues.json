@@ -167,6 +167,7 @@
   ],
   "number": 14386,
   "title": "`gh issue create` issue type supports old behavior",
+  "updatedAt": "2026-10-04T12:33:40Z",
   "url": "https://github.com/cli/cli/issues/14386"
  },
  {
@@ -198,6 +199,7 @@
   "labels": [],
   "number": 1023,
   "title": "Run benchmark commands in a different CWD",
+  "updatedAt": "2026-11-04T00:36:22Z",
   "url": "https://github.com/sharkdp/hyperfine/issues/1023"
  },
  {
@@ -213,6 +215,7 @@
   "labels": [],
   "number": 1017,
   "title": "`--command-name` rejects a name that starts with `-`",
+  "updatedAt": "2026-10-29T14:42:07Z",
   "url": "https://github.com/sharkdp/hyperfine/issues/1017"
  }
 ]

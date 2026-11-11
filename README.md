@@ -70,6 +70,7 @@ If more than one PR closes the issue, the row shows the most advanced one: merge
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Refresh |
 | `/` | Filter. Enter keeps it, Esc clears it |
+| `S` | Change the sort order of the tab. See [Order](#order) |
 | `<` / `>` | Move the border between the list and the details left or right by 5% |
 | `=` | Put the border back where it started |
 | `q`, Ctrl-C | Quit |
@@ -81,6 +82,29 @@ Mouse: a click selects a row or a tab. A double-click on an issue opens the star
 The border is the same on all three tabs. Each side keeps at least 24 columns for the list and 30 for the details. On a terminal too narrow for both, the panes share the width and the border does not move. A resize lasts until you quit. To change where the border starts, set `split` in the config.
 
 The Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+
+## Order
+
+Each tab opens in the `attention` order. Items that need you come first:
+
+- **Issues.** Issues whose session shows `needs you`, then issues with a running session, then all other issues. In each group, the newest issue comes first.
+- **Pull requests.** Open PRs with failing checks or a merge conflict, then other open PRs, then drafts, then merged PRs, then closed PRs. In each group, the newest PR comes first.
+- **Sessions.** Sessions that show `needs you`, then running sessions, then exited sessions. In each group, the lowest issue number comes first, so `#9` comes before `#10`.
+
+A session that is starting counts as running.
+
+Press `S` to change the order of the tab that you see. Each tab keeps its own order. The right end of the tab row shows the order, for example `S sort: newest`. The order applies to the rows that the `/` filter keeps. The selected row stays selected.
+
+| Order | Issues | Pull requests | Sessions |
+|---|---|---|---|
+| `attention` | yes | yes | yes |
+| `newest` (newest created first) | yes | yes | no |
+| `oldest` (oldest created first) | yes | yes | no |
+| `recently updated` (last updated first) | yes | yes | no |
+| `number` (lowest number first) | yes | yes | yes |
+| `most comments` | yes | no | no |
+
+`S` goes through the orders from top to bottom, then starts again at `attention`.
 
 ## Merge
 

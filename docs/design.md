@@ -48,6 +48,7 @@ Module map (about 2.3k lines with tests):
 | module | owns | public surface |
 |---|---|---|
 | `domain` | validated types: `IssueNumber`, `PrNumber`, `BranchName`, `WorktreePath`, `Issue`, `PullRequest`, `Checks` | types and their `parse` |
+| `sort` | the order of each tab's rows, one sort enum per tab | `issues`, `prs`, `sessions`, `IssueSort`, `PrSort`, `SessionSort` |
 | `rules` | pure product rules: branch slug, prompt, `claude` argv, worktree dir, filter | pure functions |
 | `config` | optional TOML, validated into `Config` | `load()` |
 | `github` | `gh` calls and private wire structs | `fetch_issues`, `fetch_prs` |

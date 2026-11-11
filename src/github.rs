@@ -18,7 +18,7 @@ impl fmt::Display for FetchError {
 pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
     let json = proc::run(
         "gh",
-        ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels,author,createdAt,comments,body,url"],
+        ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels,author,createdAt,updatedAt,comments,body,url"],
         repo_root,
     )
     .map_err(|e| FetchError(e.to_string()))?;
@@ -26,7 +26,7 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
 }
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
+const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
 
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
     let json = proc::run("gh", ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], repo_root)
@@ -79,8 +79,8 @@ pub fn open_in_browser(repo_root: &Path, target: GithubRef) -> Result<(), FetchE
     proc::run("gh", [kind, "view", &number.to_string(), "--web"], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
-fn timestamp(raw: &str, what: &str) -> Result<jiff::Timestamp, FetchError> {
-    raw.parse().map_err(|e| FetchError(format!("{what}: bad createdAt {raw:?}: {e}")))
+fn timestamp(raw: &str, field: &str, what: &str) -> Result<jiff::Timestamp, FetchError> {
+    raw.parse().map_err(|e| FetchError(format!("{what}: bad {field} {raw:?}: {e}")))
 }
 
 fn login(author: Option<WireAuthor>) -> String {
@@ -92,9 +92,11 @@ fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
     let wire: Vec<WireIssue> = serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh issue list output: {e}")))?;
     wire.into_iter()
         .map(|w| {
+            let what = format!("issue #{}", w.number);
             Ok(Issue {
                 number: IssueNumber(w.number),
-                created_at: timestamp(&w.created_at, &format!("issue #{}", w.number))?,
+                created_at: timestamp(&w.created_at, "createdAt", &what)?,
+                updated_at: timestamp(&w.updated_at, "updatedAt", &what)?,
                 title: w.title,
                 labels: w.labels.into_iter().map(|l| l.name).collect(),
                 author: login(w.author),
@@ -121,9 +123,11 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
         ("CLOSED", _) => PrState::Closed,
         (other, _) => return Err(FetchError(format!("PR #{} has unknown state {other:?}", w.number))),
     };
+    let what = format!("PR #{}", w.number);
     Ok(PullRequest {
         number: PrNumber(w.number),
-        created_at: timestamp(&w.created_at, &format!("PR #{}", w.number))?,
+        created_at: timestamp(&w.created_at, "createdAt", &what)?,
+        updated_at: timestamp(&w.updated_at, "updatedAt", &what)?,
         title: w.title,
         state,
         author: login(w.author),
@@ -195,6 +199,7 @@ struct WireIssue {
     #[serde(default)]
     author: Option<WireAuthor>,
     created_at: String,
+    updated_at: String,
     comments: Vec<serde::de::IgnoredAny>,
     body: String,
     url: String,
@@ -220,6 +225,7 @@ struct WirePr {
     #[serde(default)]
     author: Option<WireAuthor>,
     created_at: String,
+    updated_at: String,
     head_ref_name: String,
     head_ref_oid: String,
     base_ref_name: String,
@@ -291,6 +297,7 @@ mod tests {
         assert_eq!(open.closes, [IssueNumber(711)]);
         assert_eq!(open.head, "feature/711-hardware-metadata");
         assert_eq!(open.base, "master");
+        assert_eq!(pr(1002).updated_at.to_string(), "2026-10-12T08:33:48Z");
         assert_eq!(pr(1002).state, PrState::Merged);
         let draft = pr(14927);
         assert_eq!((draft.state, draft.checks), (PrState::Draft, Checks::Fail));
@@ -312,7 +319,7 @@ mod tests {
     #[test]
     fn mixed_check_shapes_parse_by_typename() {
         let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"author":{"login":"a"},
-            "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
@@ -338,7 +345,7 @@ mod tests {
     fn view_pr_reads_one_pr_with_the_list_fields() {
         proc::fake::install(|_| {
             Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
-                "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
+                "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
                 "closingIssuesReferences":[{"number":3}],"url":"u"}"#
                 .to_string())
@@ -379,6 +386,7 @@ mod tests {
         assert_eq!(issues[1].comment_count, 1);
         assert!(issues[1].labels.is_empty());
         assert_eq!(first.created_at.to_string(), "2026-09-08T10:31:38Z");
+        assert_eq!(first.updated_at.to_string(), "2026-10-04T12:33:40Z");
         assert_eq!(first.author, "A4-Tacks");
         assert!(first.url.starts_with("https://github.com/"));
     }
@@ -405,5 +413,8 @@ mod tests {
         assert!(parse_issues("nope").is_err());
         let bad_date = ISSUES.replace("\"createdAt\": \"2", "\"createdAt\": \"x2");
         assert!(parse_issues(&bad_date).is_err());
+        let bad_update = PRS.replacen("\"updatedAt\": \"2", "\"updatedAt\": \"x2", 1);
+        let err = parse_prs(&bad_update).expect_err("must fail");
+        assert!(err.0.contains("#1028") && err.0.contains("updatedAt"), "{err}");
     }
 }
