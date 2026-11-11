@@ -4,7 +4,9 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split};
+use crate::domain::{
+    BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split,
+};
 use crate::merge::MergeOutcome;
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::session::{Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
@@ -85,6 +87,7 @@ const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, Dialog
 /// One flag per job kind. The tick only schedules a job whose flag is clear,
 /// so a slow `gh` never stacks up a second call.
 #[derive(Default)]
+#[expect(clippy::struct_excessive_bools, reason = "one independent flag per job kind")]
 pub struct Inflight {
     pub issues: bool,
     pub prs: bool,
@@ -225,7 +228,7 @@ impl Sorts {
         }
     }
 
-    pub fn label(&self, tab: Tab) -> &'static str {
+    pub fn label(self, tab: Tab) -> &'static str {
         match tab {
             Tab::Issues => self.issues.label(),
             Tab::Prs => self.prs.label(),
@@ -246,17 +249,44 @@ pub enum Msg {
     Mouse(MouseEvent, Instant),
     Tick(Instant),
     /// `at` is stamped by the worker when `gh` returns.
-    Issues { result: Result<Vec<Issue>, String>, at: Instant },
-    Prs { result: Result<Vec<PullRequest>, String>, at: Instant },
+    Issues {
+        result: Result<Vec<Issue>, String>,
+        at: Instant,
+    },
+    Prs {
+        result: Result<Vec<PullRequest>, String>,
+        at: Instant,
+    },
     Sessions(Result<Sessions, String>),
-    Tail { window: WindowId, result: Result<Vec<String>, String> },
-    Started { issue: IssueNumber, result: Result<StartOutcome, String> },
-    Stopped { issue: IssueNumber, result: Result<(), String> },
-    Resumed { issue: IssueNumber, result: Result<(), String> },
+    Tail {
+        window: WindowId,
+        result: Result<Vec<String>, String>,
+    },
+    Started {
+        issue: IssueNumber,
+        result: Result<StartOutcome, String>,
+    },
+    Stopped {
+        issue: IssueNumber,
+        result: Result<(), String>,
+    },
+    Resumed {
+        issue: IssueNumber,
+        result: Result<(), String>,
+    },
     Attached(Result<(), String>),
-    Opened { target: GithubRef, result: Result<(), String> },
-    Sent { issue: IssueNumber, result: Result<(), String> },
-    Merged { ask: MergeAsk, result: Result<MergeOutcome, String> },
+    Opened {
+        target: GithubRef,
+        result: Result<(), String>,
+    },
+    Sent {
+        issue: IssueNumber,
+        result: Result<(), String>,
+    },
+    Merged {
+        ask: MergeAsk,
+        result: Result<MergeOutcome, String>,
+    },
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
 }
@@ -285,7 +315,10 @@ pub enum Job {
     /// two tabs, which is what the user asked for.
     Open(GithubRef),
     /// Type a line into the session's Claude prompt and submit it.
-    Send { issue: IssueNumber, text: String },
+    Send {
+        issue: IssueNumber,
+        text: String,
+    },
     /// Check the PR again, then merge it or report what the agent must fix.
     Merge(MergeAsk),
 }
@@ -390,7 +423,11 @@ const fn bar(keys: &'static str, desc: &'static str, when: When) -> BarEntry {
 
 /// The one table behind both key handling and the key bar.
 pub static BINDINGS: &[Binding] = &[
-    Binding { keys: &[Key::Char('j'), Key::Code(KeyCode::Down)], action: Action::Down, bar: &[bar("j/k", "move", When::Always)] },
+    Binding {
+        keys: &[Key::Char('j'), Key::Code(KeyCode::Down)],
+        action: Action::Down,
+        bar: &[bar("j/k", "move", When::Always)],
+    },
     Binding { keys: &[Key::Char('k'), Key::Code(KeyCode::Up)], action: Action::Up, bar: &[] },
     Binding { keys: &[Key::Char('1')], action: Action::GoTab(Tab::Issues), bar: &[bar("1-3", "tabs", When::Always)] },
     Binding { keys: &[Key::Char('2')], action: Action::GoTab(Tab::Prs), bar: &[] },
@@ -453,6 +490,7 @@ fn action_for(ev: &KeyEvent) -> Option<Action> {
 // ---- the reducer -------------------------------------------------------------
 
 /// The reducer.
+#[expect(clippy::too_many_lines, reason = "one flat match over every `Msg` reads better split no further")]
 pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
     match msg {
         Msg::Key(ev) if ev.kind == KeyEventKind::Release => Vec::new(),
@@ -462,12 +500,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
-                    Some(action) => act(state, action, armed, config),
+                    Some(action) => act(state, action, armed.as_ref(), config),
                     None => Vec::new(),
                 }
             }
         },
-        Msg::Mouse(ev, now) => on_mouse(state, &ev, now),
+        Msg::Mouse(ev, now) => on_mouse(state, ev, now),
         Msg::Tick(now) => tick(state, now, config),
         Msg::Issues { result, at } => {
             state.inflight.issues = false;
@@ -637,7 +675,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 }
 
 /// `armed` is what a previous `m` armed; only the next `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<Armed>, config: &Config) -> Vec<Cmd> {
+fn act(state: &mut State, action: Action, armed: Option<&Armed>, config: &Config) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -653,7 +691,8 @@ fn act(state: &mut State, action: Action, armed: Option<Armed>, config: &Config)
         },
         Action::Attach => return attach_key(state),
         Action::Stop => {
-            let live = current_session(state).filter(|s| matches!(s.state(), SessionState::Running | SessionState::NeedsYou));
+            let live =
+                current_session(state).filter(|s| matches!(s.state(), SessionState::Running | SessionState::NeedsYou));
             if let Some(issue) = live.map(|s| s.issue) {
                 say(state, format!("Stopping #{}", issue.0));
                 return vec![Cmd::Job(Job::Stop(issue))];
@@ -691,12 +730,11 @@ fn attach_key(state: &mut State) -> Vec<Cmd> {
         return Vec::new();
     };
     let issue = session.issue;
-    match (&session.window, session.state()) {
-        (Some(w), SessionState::Running | SessionState::NeedsYou) => vec![Cmd::Attach(w.id.clone())],
-        _ => {
-            say(state, format!("Resuming #{} with claude --continue", issue.0));
-            vec![Cmd::Job(Job::Resume(issue))]
-        }
+    if let (Some(w), SessionState::Running | SessionState::NeedsYou) = (&session.window, session.state()) {
+        vec![Cmd::Attach(w.id.clone())]
+    } else {
+        say(state, format!("Resuming #{} with claude --continue", issue.0));
+        vec![Cmd::Job(Job::Resume(issue))]
     }
 }
 
@@ -720,7 +758,9 @@ fn merge_target(state: &State) -> Result<&PullRequest, String> {
             state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).or_else(|| lead_pr(state, n)),
             format!("#{} has no PR yet.", n.0),
         ),
-        RowKey::Session(n) => (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), format!("#{} has no PR yet.", n.0)),
+        RowKey::Session(n) => {
+            (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), format!("#{} has no PR yet.", n.0))
+        }
     };
     let pr = pr.ok_or(missing)?;
     match pr.state {
@@ -755,7 +795,7 @@ fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, String> {
 /// is hard to undo and a new session is a big step, so one stray key never
 /// does either. The first press says what the PR list expects; the job
 /// checks GitHub again before it acts.
-fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
+fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let pr = match merge_target(state) {
         Ok(pr) => pr,
         Err(why) => {
@@ -764,17 +804,21 @@ fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
         }
     };
     let n = pr.number;
-    if let Some(Armed::Fix { pr, req }) = armed.clone()
-        && pr == n
+    if let Some(Armed::Fix { pr, req }) = armed
+        && *pr == n
     {
-        return start_fix(state, req);
+        return start_fix(state, req.clone());
     }
     let (new_session_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
         (MergePlan::Handoff(problem), fix) => {
             let sentence = rules::problem_sentence(n, &pr.base, problem);
             match fix {
-                Ok(Fixer::Agent(i)) => (false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0)),
-                Ok(Fixer::NewSession(i)) => (true, format!("{sentence} Press m again to start a session for #{} that fixes it.", i.0)),
+                Ok(Fixer::Agent(i)) => {
+                    (false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0))
+                }
+                Ok(Fixer::NewSession(i)) => {
+                    (true, format!("{sentence} Press m again to start a session for #{} that fixes it.", i.0))
+                }
                 Err(why) => {
                     say(state, format!("{sentence} {why}"));
                     return Vec::new();
@@ -786,7 +830,7 @@ fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
         (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, format!("Press m again to merge PR #{}", n.0)),
     };
     let ask = MergeAsk { pr: n, new_session_ok };
-    if armed != Some(Armed::Merge(ask)) {
+    if armed != Some(&Armed::Merge(ask)) {
         state.armed = Some(Armed::Merge(ask));
         say(state, expect);
         return Vec::new();
@@ -802,8 +846,14 @@ fn start_fix(state: &mut State, req: StartRequest) -> Vec<Cmd> {
     vec![Cmd::Job(Job::Start(req))]
 }
 
-fn fix_request(issue: IssueNumber, pr: &PullRequest, problem: MergeProblem, method: MergeMethod) -> Result<StartRequest, String> {
-    let branch = BranchName::parse(&pr.head).map_err(|e| format!("PR #{} has the branch name {:?}: {e:?}", pr.number.0, pr.head))?;
+fn fix_request(
+    issue: IssueNumber,
+    pr: &PullRequest,
+    problem: MergeProblem,
+    method: MergeMethod,
+) -> Result<StartRequest, String> {
+    let branch = BranchName::parse(&pr.head)
+        .map_err(|e| format!("PR #{} has the branch name {:?}: {e:?}", pr.number.0, pr.head))?;
     Ok(StartRequest {
         issue,
         branch,
@@ -862,7 +912,10 @@ fn handoff(state: &mut State, ask: MergeAsk, pr: &PullRequest, problem: MergePro
     let issue = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
             say(state, format!("{sentence} Asking #{}'s agent to fix it.", i.0));
-            return vec![Cmd::Job(Job::Send { issue: i, text: rules::handoff_prompt(pr.number, &pr.base, problem, method) })];
+            return vec![Cmd::Job(Job::Send {
+                issue: i,
+                text: rules::handoff_prompt(pr.number, &pr.base, problem, method),
+            })];
         }
         Ok(Fixer::NewSession(i)) => i,
         Err(why) => {
@@ -953,7 +1006,7 @@ fn select(state: &mut State, key: RowKey) {
     state.due.tail = None;
 }
 
-fn on_mouse(state: &mut State, ev: &MouseEvent, now: Instant) -> Vec<Cmd> {
+fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
     // Before the focus gate, so a drag can not stay stuck behind a dialog.
     if matches!(ev.kind, MouseEventKind::Up(_) | MouseEventKind::Down(_)) {
         state.dragging_split = false;
@@ -1035,11 +1088,17 @@ fn dialog_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
         Some(Key::Code(KeyCode::Esc)) => state.focus = Focus::List,
         Some(Key::Ctrl('s')) => return confirm_dialog(state),
         Some(Key::Code(KeyCode::Enter)) if dialog.field != DialogField::Prompt => return confirm_dialog(state),
-        Some(Key::Code(KeyCode::Enter)) if ev.modifiers.contains(KeyModifiers::CONTROL) => return confirm_dialog(state),
+        Some(Key::Code(KeyCode::Enter)) if ev.modifiers.contains(KeyModifiers::CONTROL) => {
+            return confirm_dialog(state);
+        }
         Some(Key::Code(KeyCode::Tab)) => dialog.field = step_field(dialog.field, 1),
         Some(Key::Code(KeyCode::BackTab)) => dialog.field = step_field(dialog.field, FIELDS.len() - 1),
-        Some(Key::Code(KeyCode::Down)) if dialog.field != DialogField::Prompt => dialog.field = step_field(dialog.field, 1),
-        Some(Key::Code(KeyCode::Up)) if dialog.field != DialogField::Prompt => dialog.field = step_field(dialog.field, FIELDS.len() - 1),
+        Some(Key::Code(KeyCode::Down)) if dialog.field != DialogField::Prompt => {
+            dialog.field = step_field(dialog.field, 1);
+        }
+        Some(Key::Code(KeyCode::Up)) if dialog.field != DialogField::Prompt => {
+            dialog.field = step_field(dialog.field, FIELDS.len() - 1);
+        }
         Some(Key::Code(KeyCode::Left | KeyCode::Right) | Key::Char(' ')) if dialog.field == DialogField::Mode => {
             dialog.mode = match dialog.mode {
                 Mode::PlanFirst => Mode::Implement,
@@ -1077,13 +1136,7 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
         dialog.field = DialogField::Prompt;
         return Vec::new();
     }
-    let req = StartRequest {
-        issue: dialog.issue,
-        branch,
-        mode: dialog.mode,
-        prompt,
-        from: StartFrom::Base,
-    };
+    let req = StartRequest { issue: dialog.issue, branch, mode: dialog.mode, prompt, from: StartFrom::Base };
     let n = req.issue;
     state.starting.insert(n);
     state.focus = Focus::List;
@@ -1221,7 +1274,15 @@ mod tests {
     }
 
     fn click(col: u16, row: u16, at: Instant) -> Msg {
-        Msg::Mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: col, row, modifiers: KeyModifiers::NONE }, at)
+        Msg::Mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: col,
+                row,
+                modifiers: KeyModifiers::NONE,
+            },
+            at,
+        )
     }
 
     fn session(n: u32, window: Option<(bool, bool)>) -> Session {
@@ -1229,7 +1290,11 @@ mod tests {
             issue: IssueNumber(n),
             branch: BranchName::parse(&format!("fix/{n}-x")).expect("branch"),
             worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
-            window: window.map(|(alive, waiting)| Window { id: WindowId::parse(&format!("@{n}")).expect("id"), alive, waiting }),
+            window: window.map(|(alive, waiting)| Window {
+                id: WindowId::parse(&format!("@{n}")).expect("id"),
+                alive,
+                waiting,
+            }),
         }
     }
 
@@ -1240,7 +1305,11 @@ mod tests {
         let config = Config::default();
         let (mut state, _) = init(now, &config, Context::default());
         state.issues = Feed {
-            items: vec![issue(3, "Retry queue drops jobs", &["bug"]), issue(2, "Docs for plugins", &["docs"]), issue(1, "Add json output", &["feature"])],
+            items: vec![
+                issue(3, "Retry queue drops jobs", &["bug"]),
+                issue(2, "Docs for plugins", &["docs"]),
+                issue(1, "Add json output", &["feature"]),
+            ],
             status: FeedStatus::Fresh { at: now },
         };
         let newer = jiff::Timestamp::from_second(60).expect("in range");
@@ -1262,7 +1331,12 @@ mod tests {
     }
 
     fn starts(cmds: &[Cmd]) -> Vec<&StartRequest> {
-        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Start(r)) => Some(r), _ => None }).collect()
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::Start(r)) => Some(r),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -1395,7 +1469,9 @@ mod tests {
         let failed = now + Duration::from_secs(5);
         press(&mut state, &config, Msg::Issues { result: Err("offline".to_string()), at: failed });
         assert_eq!(state.issues.items.len(), 3);
-        assert!(matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed));
+        assert!(
+            matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed)
+        );
         assert!(!state.inflight.issues);
         let arrived = now + Duration::from_secs(9);
         press(&mut state, &config, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
@@ -1444,7 +1520,7 @@ mod tests {
     fn double_click_inside_the_window_opens_the_dialog_and_outside_only_selects() {
         let (mut state, config, now) = hit_state();
         press(&mut state, &config, click(5, 3, now));
-        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK - Duration::from_millis(1)));
+        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK.saturating_sub(Duration::from_millis(1))));
         assert_eq!(dialog(&state).issue, IssueNumber(2));
 
         let (mut state, config, now) = hit_state();
@@ -1513,12 +1589,12 @@ mod tests {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.inflight.tail = true;
-        let stale = WindowId::parse("@99").expect("id");
-        press(&mut state, &config, Msg::Tail { window: stale, result: Ok(vec!["old".to_string()]) });
+        let old_window = WindowId::parse("@99").expect("id");
+        press(&mut state, &config, Msg::Tail { window: old_window, result: Ok(vec!["old".to_string()]) });
         assert!(state.tail.is_none());
         assert!(!state.inflight.tail);
-        let current = WindowId::parse("@3").expect("id");
-        press(&mut state, &config, Msg::Tail { window: current, result: Ok(vec!["new".to_string()]) });
+        let new_window = WindowId::parse("@3").expect("id");
+        press(&mut state, &config, Msg::Tail { window: new_window, result: Ok(vec!["new".to_string()]) });
         assert_eq!(state.tail.as_ref().map(|t| t.lines.clone()), Some(vec!["new".to_string()]));
     }
 
@@ -1529,7 +1605,10 @@ mod tests {
         assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(_)))));
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
         let cmds = press(&mut state, &config, Msg::Tick(now));
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(id)) if id.as_str() == "@3")), "dead panes have a tail too");
+        assert!(
+            cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(id)) if id.as_str() == "@3")),
+            "dead panes have a tail too"
+        );
     }
 
     #[test]
@@ -1611,7 +1690,10 @@ mod tests {
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.starting.insert(IssueNumber(2));
         press(&mut state, &config, key('3'));
-        assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(1))]);
+        assert_eq!(
+            visible_rows(&state),
+            [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(1))]
+        );
         press(&mut state, &config, key('/'));
         for c in "docs".chars() {
             press(&mut state, &config, key(c));
@@ -1635,7 +1717,8 @@ mod tests {
     fn a_finished_start_shows_its_session_at_once_with_its_warning() {
         let (mut state, config, _) = app();
         state.starting.insert(IssueNumber(3));
-        let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: vec!["fetch failed".to_string()] };
+        let outcome =
+            StartOutcome { session: session(3, Some((true, false))), warnings: vec!["fetch failed".to_string()] };
         press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
         assert!(state.sessions.contains_key(&IssueNumber(3)));
         assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("fetch failed")));
@@ -1670,14 +1753,30 @@ mod tests {
     fn assert_triggers_one_refresh(state: &mut State, config: &Config, msg: Msg) {
         let from = state.due.github_sent;
         assert_eq!(github_fetches(&press(state, config, msg)), 0, "the next tick fetches, not the event");
-        assert_eq!(github_fetches(&press(state, config, Msg::Tick(from + GITHUB_COOLDOWN - Duration::from_millis(1)))), 0, "cooldown");
+        assert_eq!(
+            github_fetches(&press(
+                state,
+                config,
+                Msg::Tick(from + GITHUB_COOLDOWN.saturating_sub(Duration::from_millis(1)))
+            )),
+            0,
+            "cooldown"
+        );
         let at = from + GITHUB_COOLDOWN;
         assert_eq!(github_fetches(&press(state, config, Msg::Tick(at))), 2);
         assert_eq!(state.due.github, at + config.github_refresh, "the timer starts again");
-        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))), 0, "inflight, and no new event");
+        assert_eq!(
+            github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))),
+            0,
+            "inflight, and no new event"
+        );
         press(state, config, Msg::Issues { result: Ok(Vec::new()), at });
         press(state, config, Msg::Prs { result: Ok(Vec::new()), at });
-        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))), 0, "one event, one fetch");
+        assert_eq!(
+            github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))),
+            0,
+            "one event, one fetch"
+        );
     }
 
     #[test]
@@ -1689,7 +1788,11 @@ mod tests {
 
         let (mut state, config, now) = app();
         press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0, "a failed start changes nothing");
+        assert_eq!(
+            github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))),
+            0,
+            "a failed start changes nothing"
+        );
     }
 
     #[test]
@@ -1698,12 +1801,19 @@ mod tests {
         let running = || session(3, Some((true, false)));
         let needs_you = || session(3, Some((true, true)));
         let exited = || session(3, Some((false, false)));
-        for (before, after) in [(running(), Some(needs_you())), (running(), Some(exited())), (needs_you(), Some(exited())), (running(), None)] {
+        for (before, after) in [
+            (running(), Some(needs_you())),
+            (running(), Some(exited())),
+            (needs_you(), Some(exited())),
+            (running(), None),
+        ] {
             let (mut state, config, _) = app();
             state.sessions.insert(IssueNumber(3), before);
             assert_triggers_one_refresh(&mut state, &config, observe(after.into_iter().collect()));
         }
-        for (before, after) in [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())] {
+        for (before, after) in
+            [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())]
+        {
             let (mut state, config, now) = app();
             state.sessions.insert(IssueNumber(3), before);
             press(&mut state, &config, observe(vec![after]));
@@ -1747,7 +1857,11 @@ mod tests {
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
         press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
         press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))), 2, "the issues fetch predated the event");
+        assert_eq!(
+            github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))),
+            2,
+            "the issues fetch predated the event"
+        );
     }
 
     #[test]
@@ -1767,7 +1881,12 @@ mod tests {
     }
 
     fn opens(cmds: &[Cmd]) -> Vec<GithubRef> {
-        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Open(t)) => Some(*t), _ => None }).collect()
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::Open(t)) => Some(*t),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -1783,7 +1902,11 @@ mod tests {
 
         state.sessions.insert(IssueNumber(7), session(7, Some((true, false))));
         press(&mut state, &config, key('3'));
-        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Issue(IssueNumber(7))], "an issue not in the list still opens");
+        assert_eq!(
+            opens(&press(&mut state, &config, key('o'))),
+            [GithubRef::Issue(IssueNumber(7))],
+            "an issue not in the list still opens"
+        );
     }
 
     #[test]
@@ -1821,11 +1944,21 @@ mod tests {
     }
 
     fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
-        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Send { issue, text }) => Some((*issue, text.as_str())), _ => None }).collect()
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::Send { issue, text }) => Some((*issue, text.as_str())),
+                _ => None,
+            })
+            .collect()
     }
 
     fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
-        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Merge(ask)) => Some(*ask), _ => None }).collect()
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::Merge(ask)) => Some(*ask),
+                _ => None,
+            })
+            .collect()
     }
 
     fn toast(state: &State) -> String {
@@ -1874,7 +2007,10 @@ mod tests {
         press(&mut state, &config, key('j'));
         press(&mut state, &config, key('m'));
         assert_eq!(toast(&state), "Press m again to merge PR #11");
-        assert_eq!(merges(&press(&mut state, &config, key('m'))), [MergeAsk { pr: PrNumber(11), new_session_ok: false }]);
+        assert_eq!(
+            merges(&press(&mut state, &config, key('m'))),
+            [MergeAsk { pr: PrNumber(11), new_session_ok: false }]
+        );
     }
 
     #[test]
@@ -1884,7 +2020,10 @@ mod tests {
         state.prs.items[0].mergeability = Mergeability::Conflict;
         press(&mut state, &config, key('3'));
         press(&mut state, &config, key('m'));
-        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it.");
+        assert_eq!(
+            toast(&state),
+            "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it."
+        );
         assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK], "the job decides, not the cached list");
     }
 
@@ -1893,7 +2032,10 @@ mod tests {
         let (mut state, config, _) = app();
         state.prs.items[0].mergeability = Mergeability::Conflict;
         press(&mut state, &config, key('m'));
-        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it.");
+        assert_eq!(
+            toast(&state),
+            "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it."
+        );
         assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK_FIX]);
     }
 
@@ -1904,8 +2046,14 @@ mod tests {
         let started = starts(&cmds);
         assert_eq!(started.len(), 1);
         let req = started[0];
-        assert_eq!((req.issue, req.branch.as_str(), req.mode, req.from), (IssueNumber(3), "fix/3-x", Mode::Implement, StartFrom::Origin));
-        assert_eq!(req.prompt, rules::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
+        assert_eq!(
+            (req.issue, req.branch.as_str(), req.mode, req.from),
+            (IssueNumber(3), "fix/3-x", Mode::Implement, StartFrom::Origin)
+        );
+        assert_eq!(
+            req.prompt,
+            rules::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase)
+        );
         assert!(state.starting.contains(&IssueNumber(3)));
         assert_eq!((state.tab, state.selected.session), (Tab::Sessions, Some(IssueNumber(3))));
         assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
@@ -1918,7 +2066,10 @@ mod tests {
         press(&mut state, &config, key('m'));
         let cmds = press(&mut state, &config, handoff(MergeProblem::Conflict));
         assert!(cmds.is_empty(), "no session before the user agrees");
-        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it.");
+        assert_eq!(
+            toast(&state),
+            "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it."
+        );
         let started = press(&mut state, &config, key('m'));
         assert_eq!(starts(&started).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
         assert!(merges(&started).is_empty());
@@ -1951,14 +2102,18 @@ mod tests {
         press(&mut state, &config, key('2'));
         state.selected.pr = Some(PrNumber(11));
         assert!(press(&mut state, &config, key('m')).is_empty());
-        assert_eq!(toast(&state), "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it.");
+        assert_eq!(
+            toast(&state),
+            "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it."
+        );
         assert!(state.armed.is_none());
     }
 
     #[test]
     fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
         let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) });
+        let cmds =
+            press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) });
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         assert!(sends(&cmds).is_empty());
@@ -1966,7 +2121,12 @@ mod tests {
     }
 
     fn stops(cmds: &[Cmd]) -> Vec<IssueNumber> {
-        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Stop(n)) => Some(*n), _ => None }).collect()
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::Stop(n)) => Some(*n),
+                _ => None,
+            })
+            .collect()
     }
 
     fn merged_squash() -> Msg {
@@ -2028,7 +2188,8 @@ mod tests {
     #[test]
     fn a_refused_or_failed_merge_only_shows_a_toast() {
         let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Refused("wait".to_string())) });
+        let cmds =
+            press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Refused("wait".to_string())) });
         assert!(cmds.is_empty());
         assert_eq!(toast(&state), "wait");
         let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Err("not allowed".to_string()) });

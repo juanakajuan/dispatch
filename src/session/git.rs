@@ -145,7 +145,12 @@ pub(super) fn fetch(root: &Path, base: &str) -> Result<(), String> {
     text(root, ["fetch", remote, branch]).map(|_| ())
 }
 
-pub(super) fn add_worktree(root: &Path, dir: &Path, branch: &BranchName, create_from: Option<&str>) -> Result<(), String> {
+pub(super) fn add_worktree(
+    root: &Path,
+    dir: &Path,
+    branch: &BranchName,
+    create_from: Option<&str>,
+) -> Result<(), String> {
     let dir = dir.to_string_lossy();
     match create_from {
         Some(base) => text(root, ["worktree", "add", dir.as_ref(), "-b", branch.as_str(), base]),
@@ -162,6 +167,7 @@ pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proc::fake;
     use crate::testutil::temp_dir;
 
     fn branch(s: &str) -> BranchName {
@@ -186,7 +192,12 @@ mod tests {
         let got = parse_worktrees(&text);
         let summary: Vec<_> = got
             .iter()
-            .map(|w| (w.path.as_path().file_name().expect("name").to_string_lossy().into_owned(), w.branch.as_ref().map(|b| b.as_str().to_string())))
+            .map(|w| {
+                (
+                    w.path.as_path().file_name().expect("name").to_string_lossy().into_owned(),
+                    w.branch.as_ref().map(|b| b.as_str().to_string()),
+                )
+            })
             .collect();
         assert_eq!(
             summary,
@@ -218,9 +229,10 @@ mod tests {
         let linked = main.join(".claude").join("worktrees").join("1");
         std::fs::create_dir_all(main.join(".git")).expect("mkdir .git");
         std::fs::create_dir_all(&linked).expect("mkdir linked");
-        use crate::proc::fake;
         let (top, common) = (linked.display().to_string(), main.join(".git").display().to_string());
-        fake::install(move |call| Ok(if call.contains("--show-toplevel") { top.clone() } else { format!("{common}\n") }));
+        fake::install(move |call| {
+            Ok(if call.contains("--show-toplevel") { top.clone() } else { format!("{common}\n") })
+        });
         let dirs = repo_dirs(&linked).expect("dirs");
         assert_eq!(dirs.root, main);
         assert_eq!(dirs.common, main.join(".git"));
@@ -240,7 +252,6 @@ mod tests {
 
     #[test]
     fn fetch_splits_remote_and_branch() {
-        use crate::proc::fake;
         fake::install(|_| Ok(String::new()));
         fetch(Path::new("/"), "origin/main").expect("ok");
         assert_eq!(fake::calls(), ["git fetch origin main"]);
@@ -248,7 +259,6 @@ mod tests {
 
     #[test]
     fn marker_list_exit_one_is_empty() {
-        use crate::proc::fake;
         fake::install(|_| Err(fake::fail("git", 1, "")));
         assert!(list_markers(Path::new("/")).expect("ok").is_empty());
     }

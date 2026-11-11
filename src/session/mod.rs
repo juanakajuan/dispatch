@@ -189,14 +189,16 @@ impl fmt::Display for SetupError {
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
     pub fn discover(cwd: &std::path::Path, config: &Config) -> Result<Workspace, SetupError> {
-        let git::RepoDirs { root: repo_root, common: git_common_dir } = git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
+        let git::RepoDirs { root: repo_root, common: git_common_dir } =
+            git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
         crate::proc::run("tmux", ["-V"], &repo_root).map_err(|e| match e {
             crate::proc::ProcError::Spawn { .. } => SetupError::TmuxMissing,
             other => SetupError::Command(other.to_string()),
         })?;
         let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
-        let place = tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
+        let place =
+            tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
         Ok(Workspace {
             repo_root,
             git_common_dir,
@@ -256,10 +258,9 @@ impl Workspace {
             StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
             StartPlan::Steps(steps) => {
                 let warnings = self.run_steps(steps)?;
-                let session = self
-                    .observe()?
-                    .remove(&req.issue)
-                    .ok_or_else(|| SessionError::Command(format!("session for #{} is not visible after start", req.issue.0)))?;
+                let session = self.observe()?.remove(&req.issue).ok_or_else(|| {
+                    SessionError::Command(format!("session for #{} is not visible after start", req.issue.0))
+                })?;
                 Ok(StartOutcome { session, warnings })
             }
         }
@@ -334,6 +335,7 @@ impl Workspace {
 
     /// Last `lines` lines of the pane as plain text (`capture-pane -p -J`, no
     /// `-e`, so no escape codes reach the UI). Works on dead panes too.
+    #[expect(clippy::unused_self, reason = "keeps every session operation a `Workspace` method")]
     pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {
         Ok(tmux::capture(window, lines)?)
     }
@@ -369,11 +371,11 @@ fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[tmux::Wi
     for w in by_path {
         let Some(branch) = &w.branch else { continue };
         let Some(&issue) = markers.get(branch) else { continue };
-        let window = windows
-            .iter()
-            .filter(|o| o.worktree == w.path)
-            .min_by_key(|o| o.dead)
-            .map(|o| Window { id: o.id.clone(), alive: !o.dead, waiting: o.waiting });
+        let window = windows.iter().filter(|o| o.worktree == w.path).min_by_key(|o| o.dead).map(|o| Window {
+            id: o.id.clone(),
+            alive: !o.dead,
+            waiting: o.waiting,
+        });
         sessions.entry(issue).or_insert_with(|| Session {
             issue,
             branch: branch.clone(),
@@ -433,15 +435,15 @@ enum Step {
 ///
 /// | observed                                              | plan                              |
 /// |-------------------------------------------------------|-----------------------------------|
-/// | session for issue, window alive                       | AlreadyRunning                    |
-/// | session for issue, no window or dead window           | [OpenWindow]                      |
-/// | a branch marked for issue, no worktree (crash)        | [AddWorktree create=false, Mark, OpenWindow] using that branch |
-/// | worktree at target dir, branch unmarked (crash)       | [Mark, OpenWindow]                |
-/// | target dir exists, not a worktree                     | Conflict PathTaken                |
-/// | req.branch marked for another issue                   | Conflict BranchBelongsTo          |
-/// | req.branch checked out elsewhere                      | Conflict BranchCheckedOut         |
-/// | req.branch exists, unmarked, free                     | [AddWorktree create=false, Mark, OpenWindow] |
-/// | nothing exists                                        | [Fetch, AddWorktree create=true, Mark, OpenWindow] |
+/// | session for issue, window alive                       | `AlreadyRunning`                    |
+/// | session for issue, no window or dead window           | [`OpenWindow`]                      |
+/// | a branch marked for issue, no worktree (crash)        | [`AddWorktree` create=false, Mark, `OpenWindow`] using that branch |
+/// | worktree at target dir, branch unmarked (crash)       | [Mark, `OpenWindow`]                |
+/// | target dir exists, not a worktree                     | Conflict `PathTaken`                |
+/// | req.branch marked for another issue                   | Conflict `BranchBelongsTo`          |
+/// | req.branch checked out elsewhere                      | Conflict `BranchCheckedOut`         |
+/// | req.branch exists, unmarked, free                     | [`AddWorktree` create=false, Mark, `OpenWindow`] |
+/// | nothing exists                                        | [Fetch, `AddWorktree` create=true, Mark, `OpenWindow`] |
 ///
 /// A created branch starts from the default branch, or from `origin/<branch>`
 /// when `req.from` is `StartFrom::Origin`.
@@ -482,7 +484,10 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
         return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue });
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.branch.as_ref() == Some(&req.branch)) {
-        return Err(StartConflict::BranchCheckedOut { branch: req.branch.clone(), path: w.path.as_path().to_path_buf() });
+        return Err(StartConflict::BranchCheckedOut {
+            branch: req.branch.clone(),
+            path: w.path.as_path().to_path_buf(),
+        });
     }
     let mut steps = Vec::new();
     let from = (!obs.branch_exists).then(|| match req.from {
@@ -498,7 +503,7 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
 
 /// Claude hooks passed with `--settings` when `detect_waiting` is on.
 /// `$TMUX_PANE` is in every pane's environment, and hooks inherit it.
-/// Notification and Stop set the flag; UserPromptSubmit and PreToolUse clear it.
+/// Notification and Stop set the flag; `UserPromptSubmit` and `PreToolUse` clear it.
 const WAITING_HOOKS: &str = r#"{"hooks":{
   "Notification":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
   "Stop":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
@@ -639,7 +644,8 @@ mod tests {
             match step {
                 Step::Fetch(_) => {}
                 Step::AddWorktree { dir, branch, .. } => {
-                    self.worktrees.push(git::Worktree { path: WorktreePath::planned(dir.clone()), branch: Some(branch.clone()) });
+                    self.worktrees
+                        .push(git::Worktree { path: WorktreePath::planned(dir.clone()), branch: Some(branch.clone()) });
                     self.branch_exists = true;
                     self.target_dir_exists = true;
                 }
@@ -772,17 +778,27 @@ mod tests {
         let mut r = req();
         r.from = StartFrom::Origin;
         let got = steps(plan_start(&World::empty().obs(), &r, &layout()));
-        assert_eq!(got, [fetch("origin/fix/142-x"), add("fix/142-x", Some("origin/fix/142-x")), mark("fix/142-x"), open_step()]);
+        assert_eq!(
+            got,
+            [fetch("origin/fix/142-x"), add("fix/142-x", Some("origin/fix/142-x")), mark("fix/142-x"), open_step()]
+        );
         let mut w = World::empty();
         w.branch_exists = true;
         let got = steps(plan_start(&w.obs(), &r, &layout()));
-        assert_eq!(got, [add("fix/142-x", None), mark("fix/142-x"), open_step()], "an existing local branch is used as is");
+        assert_eq!(
+            got,
+            [add("fix/142-x", None), mark("fix/142-x"), open_step()],
+            "an existing local branch is used as is"
+        );
     }
 
     #[test]
     fn plan_uses_config_claude_command_hooks_and_plan_mode() {
         let mut l = layout();
-        l.claude = ClaudeCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
+        l.claude = ClaudeCommand {
+            program: "sh".to_string(),
+            args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()],
+        };
         l.hooks = Some("{}");
         let mut r = req();
         r.mode = Mode::PlanFirst;
@@ -830,6 +846,7 @@ mod tests {
     // ---- the step runner through the proc fake ----
 
     #[derive(Default)]
+    #[expect(clippy::struct_excessive_bools, reason = "one independent flag per fake world fact")]
     struct Sim {
         added: bool,
         marked: bool,
@@ -847,11 +864,15 @@ mod tests {
             if call.starts_with("git worktree list") {
                 let mut t = format!("worktree {}\nHEAD x\nbranch refs/heads/main\n\n", base.join("orbit").display());
                 if s.added {
-                    t.push_str(&format!("worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display()));
+                    t = format!("{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display());
                 }
                 Ok(t)
             } else if call.starts_with("git config --get-regexp") {
-                if s.marked { Ok("branch.fix/142-x.dispatch-issue 142\n".to_string()) } else { Err(fake::fail("git", 1, "")) }
+                if s.marked {
+                    Ok("branch.fix/142-x.dispatch-issue 142\n".to_string())
+                } else {
+                    Err(fake::fail("git", 1, ""))
+                }
             } else if call.starts_with("git show-ref") {
                 if s.added { Ok(String::new()) } else { Err(fake::fail("git", 1, "")) }
             } else if call.starts_with("tmux list-windows") {
@@ -917,7 +938,10 @@ mod tests {
         assert_eq!(ran[0], "git fetch origin main");
         assert_eq!(ran[1], format!("git worktree add {} -b fix/142-x origin/main", dir.display()));
         assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
-        assert!(ran[3].starts_with(&format!("tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p", dir.display())));
+        assert!(ran[3].starts_with(&format!(
+            "tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p",
+            dir.display()
+        )));
         assert!(ran[4].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
         let exclude = base.join("orbit/.git/info/exclude");
         assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
@@ -978,7 +1002,10 @@ mod tests {
     fn stop_kills_the_window_by_a_fresh_observation_and_keeps_the_worktree() {
         let base = temp_dir("stop");
         let ws = workspace(&base);
-        install_world(base.clone(), Rc::new(RefCell::new(Sim { added: true, marked: true, window: true, tagged: true, ..Sim::default() })));
+        install_world(
+            base.clone(),
+            Rc::new(RefCell::new(Sim { added: true, marked: true, window: true, tagged: true, ..Sim::default() })),
+        );
         std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
         ws.stop(IssueNumber(142)).expect("stop");
         let calls = fake::calls();
@@ -1018,13 +1045,17 @@ mod tests {
         let id = WindowId::parse("@4").expect("id");
         assert_eq!(
             ws.attach_plan(&id),
-            AttachPlan::Switch(["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec())
+            AttachPlan::Switch(
+                ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
+            )
         );
         ws.place = tmux::Place::Detached { session_name: "dispatch-orbit".to_string() };
         assert_eq!(
             ws.attach_plan(&id),
             AttachPlan::Suspend(
-                ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"].map(String::from).to_vec()
+                ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"]
+                    .map(String::from)
+                    .to_vec()
             )
         );
     }

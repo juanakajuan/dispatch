@@ -78,8 +78,19 @@ mod tests {
         for set in [IconSet::Unicode, IconSet::NerdFont] {
             let i = set.icons();
             for g in [
-                i.running, i.needs_you, i.exited, i.starting, i.check_pass, i.check_fail, i.check_pending,
-                i.check_none, i.pr_open, i.pr_draft, i.pr_merged, i.radio_on, i.radio_off,
+                i.running,
+                i.needs_you,
+                i.exited,
+                i.starting,
+                i.check_pass,
+                i.check_fail,
+                i.check_pending,
+                i.check_none,
+                i.pr_open,
+                i.pr_draft,
+                i.pr_merged,
+                i.radio_on,
+                i.radio_off,
             ] {
                 assert_eq!(crate::ui::cells(g), 1, "{set:?} glyph {g:?}");
             }

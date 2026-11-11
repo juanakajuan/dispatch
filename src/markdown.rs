@@ -95,7 +95,8 @@ impl Renderer {
                 self.gap = true;
             }
             Event::TaskListMarker(checked) => {
-                let marker = if checked { Span::styled("[x] ", palette::PASS) } else { Span::styled("[ ] ", palette::DIM) };
+                let marker =
+                    if checked { Span::styled("[x] ", palette::PASS) } else { Span::styled("[ ] ", palette::DIM) };
                 self.pending.push(marker);
             }
             _ => {}
@@ -176,7 +177,9 @@ impl Renderer {
                 let lines = code
                     .trim_end_matches('\n')
                     .split('\n')
-                    .map(|l| vec![Span::styled(GUTTER, palette::DIM), Span::styled(l.trim_end().to_string(), palette::PLAIN)])
+                    .map(|l| {
+                        vec![Span::styled(GUTTER, palette::DIM), Span::styled(l.trim_end().to_string(), palette::PLAIN)]
+                    })
                     .collect();
                 self.emit(lines);
                 self.gap = true;
@@ -296,7 +299,12 @@ impl Renderer {
             return;
         }
         if self.gap && !self.out.is_empty() && !self.out.last().is_some_and(is_blank) {
-            let gutter: Vec<Span<'static>> = self.containers.iter().filter(|c| matches!(c, Container::Quote { started: true })).map(|_| Span::styled("│", palette::DIM)).collect();
+            let gutter: Vec<Span<'static>> = self
+                .containers
+                .iter()
+                .filter(|c| matches!(c, Container::Quote { started: true }))
+                .map(|_| Span::styled("│", palette::DIM))
+                .collect();
             self.out.push(Line::from(gutter));
         }
         self.gap = false;
@@ -313,7 +321,8 @@ impl Renderer {
             return;
         }
         let cell_width = |c: &Vec<Span<'static>>| c.iter().map(Span::width).sum::<usize>();
-        let widths: Vec<usize> = (0..cols).map(|i| t.rows.iter().filter_map(|r| r.get(i)).map(cell_width).max().unwrap_or(0)).collect();
+        let widths: Vec<usize> =
+            (0..cols).map(|i| t.rows.iter().filter_map(|r| r.get(i)).map(cell_width).max().unwrap_or(0)).collect();
         let avail = self.avail();
         let total = widths.iter().sum::<usize>() + cells(CELL_SEPARATOR) * (cols - 1);
         let sep = || Span::styled(CELL_SEPARATOR, palette::DIM);
@@ -321,7 +330,15 @@ impl Renderer {
         for (ri, row) in t.rows.iter().enumerate() {
             let header = ri < t.header_rows;
             let styled = |c: &Vec<Span<'static>>| -> Vec<Span<'static>> {
-                c.iter().map(|s| if header { Span::styled(s.content.to_string(), s.style.patch(palette::BOLD)) } else { s.clone() }).collect()
+                c.iter()
+                    .map(|s| {
+                        if header {
+                            Span::styled(s.content.to_string(), s.style.patch(palette::BOLD))
+                        } else {
+                            s.clone()
+                        }
+                    })
+                    .collect()
             };
             if total <= avail {
                 let mut line = Vec::new();
@@ -381,7 +398,9 @@ fn words(spans: &[Span<'static>]) -> Vec<Word> {
             if seg.is_empty() {
                 continue;
             }
-            cur.get_or_insert_with(|| Word { space_before: space, space_style, parts: Vec::new() }).parts.push((seg.to_string(), s.style));
+            cur.get_or_insert_with(|| Word { space_before: space, space_style, parts: Vec::new() })
+                .parts
+                .push((seg.to_string(), s.style));
             space = false;
         }
     }
@@ -454,7 +473,11 @@ mod tests {
     }
 
     fn span_of<'a>(lines: &'a [Line<'static>], content: &str) -> &'a Span<'static> {
-        lines.iter().flat_map(|l| l.spans.iter()).find(|s| s.content == content).unwrap_or_else(|| panic!("no span {content:?} in {lines:?}"))
+        lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content == content)
+            .unwrap_or_else(|| panic!("no span {content:?} in {lines:?}"))
     }
 
     #[test]
@@ -558,7 +581,10 @@ mod tests {
 
     #[test]
     fn raw_html_never_appears() {
-        let got = texts("before <b>bold</b> after\n\n<div align=\"center\">\n<img src=\"x.png\">\n</div>\n\n<!-- comment -->\n\nend", 80);
+        let got = texts(
+            "before <b>bold</b> after\n\n<div align=\"center\">\n<img src=\"x.png\">\n</div>\n\n<!-- comment -->\n\nend",
+            80,
+        );
         assert_eq!(got, ["before bold after", "", "end"]);
     }
 
@@ -589,6 +615,11 @@ mod tests {
         for marker in ["**", "`", "- [", "](", "##", "<!--"] {
             assert!(!got.contains(marker), "{marker:?} leaked into\n{got}");
         }
-        assert!(got.contains("Describe the bug") && got.contains("retry queue") && got.contains("│ error: boom") && got.contains("[x] has logs"));
+        assert!(
+            got.contains("Describe the bug")
+                && got.contains("retry queue")
+                && got.contains("│ error: boom")
+                && got.contains("[x] has logs")
+        );
     }
 }

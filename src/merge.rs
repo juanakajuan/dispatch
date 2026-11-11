@@ -16,7 +16,11 @@ pub enum MergeOutcome {
     Queued,
     /// An agent must fix `problem`, then merge with `method`. `pr` is the PR
     /// as GitHub showed it now.
-    Handoff { problem: MergeProblem, method: MergeMethod, pr: PullRequest },
+    Handoff {
+        problem: MergeProblem,
+        method: MergeMethod,
+        pr: PullRequest,
+    },
     Refused(String),
 }
 
@@ -136,7 +140,10 @@ mod tests {
     fn failing_checks_go_to_the_agent() {
         let failed = r#"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}"#;
         world(view("MERGEABLE", "BLOCKED", failed), None, ALL_ALLOWED);
-        assert!(matches!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Handoff { problem: MergeProblem::ChecksFailing, .. })));
+        assert!(matches!(
+            merge(Path::new("/r"), PrNumber(10)),
+            Ok(MergeOutcome::Handoff { problem: MergeProblem::ChecksFailing, .. })
+        ));
         assert!(merges().is_empty());
     }
 
@@ -144,7 +151,9 @@ mod tests {
     fn pending_checks_refuse_without_reading_the_setting() {
         let running = r#"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#;
         world(view("MERGEABLE", "BLOCKED", running), Some("nonsense"), ALL_ALLOWED);
-        assert!(matches!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Refused(why)) if why.contains("still running")));
+        assert!(
+            matches!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Refused(why)) if why.contains("still running"))
+        );
         assert_eq!(fake::calls().len(), 1, "only the fresh view");
     }
 
@@ -186,7 +195,10 @@ mod tests {
             let passed = r#"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}"#;
             world(view("MERGEABLE", status, passed), None, ALL_ALLOWED);
             let outcome = merge(Path::new("/r"), PrNumber(10));
-            assert!(matches!(outcome, Ok(MergeOutcome::Handoff { problem: p, method: MergeMethod::Merge, .. }) if p == problem), "{status}");
+            assert!(
+                matches!(outcome, Ok(MergeOutcome::Handoff { problem: p, method: MergeMethod::Merge, .. }) if p == problem),
+                "{status}"
+            );
             assert!(merges().is_empty());
         }
     }

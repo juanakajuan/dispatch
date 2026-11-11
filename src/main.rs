@@ -120,7 +120,9 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 }
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
                 WriteJob::Resume(issue) => Msg::Resumed { issue, result: ws.resume(issue).map_err(|e| e.to_string()) },
-                WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) },
+                WriteJob::Send { issue, text } => {
+                    Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }
+                }
                 WriteJob::Merge(ask) => Msg::Merged { ask, result: merge::merge(ws.repo_root(), ask.pr) },
             };
             if tx.send(msg).is_err() {
@@ -181,12 +183,12 @@ fn spawn_read(ws: &Workspace, tx: &Sender<Msg>, job: impl FnOnce(&Workspace) -> 
 /// inherited stdio and wait, then restore the TUI.
 fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, window: &session::WindowId) -> Result<(), String> {
     match ws.attach_plan(window) {
-        AttachPlan::Switch(argv) => {
-            let (program, args) = argv.split_first().ok_or("empty attach command")?;
+        AttachPlan::Switch(command) => {
+            let (program, args) = command.split_first().ok_or("empty attach command")?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(|e| e.to_string())
         }
-        AttachPlan::Suspend(argv) => {
-            let (program, args) = argv.split_first().ok_or("empty attach command")?;
+        AttachPlan::Suspend(command) => {
+            let (program, args) = command.split_first().ok_or("empty attach command")?;
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
             ratatui::restore();
             let status = std::process::Command::new(program).args(args).status();

@@ -205,3 +205,35 @@ git branch -D fix/142-retry-queue-drops-jobs
 ```
 
 `git branch -D` also removes the markers in `.git/config`, so the session leaves the list. Use `--force` on `git worktree remove` if the worktree has changes you want to drop.
+
+## Check the code
+
+The project has no CI. Run the checks on your machine before you push:
+
+```
+scripts/check.sh
+```
+
+The script stops at the first failure. It runs:
+
+```
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+```
+
+`rust-toolchain.toml` pins the Rust version, so `rustup` installs the same `rustfmt` and `clippy` on each machine. To fix the format, run `cargo fmt`.
+
+To run the checks on each `git push`, turn on the hook once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+The hook checks the files in your working tree, not only the commits that you push. To skip it one time, run `git push --no-verify`.
+
+The commit that formatted all of the code is in `.git-blame-ignore-revs`. GitHub skips it in blame. To skip it in a local `git blame`, run:
+
+```
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```

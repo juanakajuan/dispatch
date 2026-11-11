@@ -1,7 +1,9 @@
 //! Pure product rules. No I/O. Every function here has unit tests that need
 //! no `gh`, `git`, or `tmux`.
 
-use crate::domain::{BranchName, Checks, Issue, IssueNumber, MergeMethod, Mergeability, Mode, PrNumber, PrState, PullRequest};
+use crate::domain::{
+    BranchName, Checks, Issue, IssueNumber, MergeMethod, Mergeability, Mode, PrNumber, PrState, PullRequest,
+};
 use std::path::Path;
 
 /// The editable defaults the start dialog opens with.
@@ -13,17 +15,13 @@ pub struct StartDefaults {
 }
 
 pub fn start_defaults(issue: &Issue) -> StartDefaults {
-    StartDefaults {
-        branch: branch_for(issue),
-        mode: Mode::Implement,
-        prompt: prompt_for(issue),
-    }
+    StartDefaults { branch: branch_for(issue), mode: Mode::Implement, prompt: prompt_for(issue) }
 }
 
 /// `fix/142-retry-queue-drops-jobs`. Prefix from the first matching label
 /// (bug -> fix, docs/documentation -> docs, chore -> chore, else feat).
 /// Slug: lowercase ASCII alnum words, first 4, joined by `-`.
-/// Always yields a valid BranchName (the slug can be empty: `feat/142`).
+/// Always yields a valid `BranchName` (the slug can be empty: `feat/142`).
 pub fn branch_for(issue: &Issue) -> BranchName {
     let prefix = issue
         .labels
@@ -111,10 +109,15 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
     }
     match (pr.mergeability, pr.checks) {
         (Mergeability::Conflict, _) => MergePlan::Handoff(MergeProblem::Conflict),
+        #[expect(clippy::match_same_arms, reason = "order matters: `Pending` must refuse before `Unstable` hands off")]
         (_, Checks::Fail) => MergePlan::Handoff(MergeProblem::ChecksFailing),
-        (_, Checks::Pending) => MergePlan::Refuse(format!("PR #{n} has checks that are still running. Press m again when they finish.")),
+        (_, Checks::Pending) => {
+            MergePlan::Refuse(format!("PR #{n} has checks that are still running. Press m again when they finish."))
+        }
         (Mergeability::Unstable, _) => MergePlan::Handoff(MergeProblem::ChecksFailing),
-        (Mergeability::Unknown, _) => MergePlan::Refuse(format!("GitHub does not know yet if PR #{n} can merge. Try again in a moment.")),
+        (Mergeability::Unknown, _) => {
+            MergePlan::Refuse(format!("GitHub does not know yet if PR #{n} can merge. Try again in a moment."))
+        }
         (Mergeability::Behind, _) => MergePlan::Handoff(MergeProblem::Behind),
         (Mergeability::Blocked, Checks::None) => MergePlan::Refuse(format!(
             "PR #{n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
@@ -236,7 +239,10 @@ mod tests {
 
     #[test]
     fn worktree_dir_is_inside_the_repo() {
-        assert_eq!(worktree_dir_for(Path::new("/a/orbit"), IssueNumber(142)), Path::new("/a/orbit/.claude/worktrees/142"));
+        assert_eq!(
+            worktree_dir_for(Path::new("/a/orbit"), IssueNumber(142)),
+            Path::new("/a/orbit/.claude/worktrees/142")
+        );
         assert!(Path::new(WORKTREES_EXCLUDE).starts_with(WORKTREES_DIR));
     }
 
@@ -261,7 +267,7 @@ mod tests {
 
     #[test]
     fn merge_plan_merges_clean_prs_and_hands_off_problems() {
-        let plan = |mergeability, checks| merge_plan(&PullRequest { mergeability, checks, ..pr(10, "h", &[]) });
+        let plan = |mergeability, checks| merge_plan(&PullRequest { checks, mergeability, ..pr(10, "h", &[]) });
         assert_eq!(plan(Mergeability::Clean, Checks::Pass), MergePlan::Direct);
         assert_eq!(plan(Mergeability::Clean, Checks::None), MergePlan::Direct);
         assert_eq!(plan(Mergeability::Conflict, Checks::Pending), MergePlan::Handoff(MergeProblem::Conflict));
@@ -269,9 +275,16 @@ mod tests {
         assert_eq!(plan(Mergeability::Unstable, Checks::Pass), MergePlan::Handoff(MergeProblem::ChecksFailing));
         assert_eq!(plan(Mergeability::Behind, Checks::Pass), MergePlan::Handoff(MergeProblem::Behind));
         assert_eq!(plan(Mergeability::Blocked, Checks::Pass), MergePlan::Handoff(MergeProblem::Blocked));
-        assert!(matches!(plan(Mergeability::Blocked, Checks::Pending), MergePlan::Refuse(why) if why.contains("still running")));
-        assert!(matches!(plan(Mergeability::Unknown, Checks::Pass), MergePlan::Refuse(why) if why.contains("Try again")));
-        assert!(matches!(plan(Mergeability::Blocked, Checks::None), MergePlan::Refuse(why) if why.contains("no checks yet")), "nothing for the agent to fix");
+        assert!(
+            matches!(plan(Mergeability::Blocked, Checks::Pending), MergePlan::Refuse(why) if why.contains("still running"))
+        );
+        assert!(
+            matches!(plan(Mergeability::Unknown, Checks::Pass), MergePlan::Refuse(why) if why.contains("Try again"))
+        );
+        assert!(
+            matches!(plan(Mergeability::Blocked, Checks::None), MergePlan::Refuse(why) if why.contains("no checks yet")),
+            "nothing for the agent to fix"
+        );
     }
 
     #[test]
@@ -288,7 +301,10 @@ mod tests {
             handoff_prompt(PrNumber(12), "main", MergeProblem::Conflict, MergeMethod::Squash),
             "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
         );
-        assert!(handoff_prompt(PrNumber(12), "main", MergeProblem::Behind, MergeMethod::Rebase).starts_with("PR #12 is behind main,"));
+        assert!(
+            handoff_prompt(PrNumber(12), "main", MergeProblem::Behind, MergeMethod::Rebase)
+                .starts_with("PR #12 is behind main,")
+        );
         assert_eq!(
             fix_session_prompt(PrNumber(12), "main", MergeProblem::ChecksFailing, MergeMethod::Merge),
             "This worktree is on the branch of PR #12. Run `gh pr checkout 12` to get its latest commits. \

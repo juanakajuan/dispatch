@@ -42,10 +42,7 @@ impl BranchName {
         if name.is_empty() {
             return Err(BranchNameError::Empty);
         }
-        if let Some(c) = name
-            .chars()
-            .find(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(*c))
-        {
+        if let Some(c) = name.chars().find(|c| c.is_whitespace() || c.is_control() || "~^:?*[\\".contains(*c)) {
             return Err(BranchNameError::BadChar(c));
         }
         let bad_sequences = [
@@ -53,6 +50,10 @@ impl BranchName {
             (name.starts_with('/'), "a leading /"),
             (name.ends_with('/'), "a trailing /"),
             (name.ends_with('.'), "a trailing ."),
+            #[expect(
+                clippy::case_sensitive_file_extension_comparisons,
+                reason = "git ref names are case-sensitive and `.lock` is no file extension"
+            )]
             (name.ends_with(".lock"), "a trailing .lock"),
             (name.contains(".."), ".."),
             (name.contains("//"), "//"),

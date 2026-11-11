@@ -57,7 +57,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            github_refresh: Duration::from_secs(60),
+            github_refresh: Duration::from_mins(1),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
             split: Split::DEFAULT,
@@ -169,8 +169,10 @@ mod tests {
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#)
-            .expect("valid");
+        let c = parse_str(
+            r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#,
+        )
+        .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
