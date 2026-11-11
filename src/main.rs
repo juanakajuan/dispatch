@@ -21,6 +21,8 @@ mod proc;
 mod rules;
 mod session;
 mod ui;
+#[cfg(test)]
+mod testutil;
 
 use app::{Cmd, Job, Msg};
 use session::Workspace;
