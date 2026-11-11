@@ -1,7 +1,7 @@
 //! `gh` adapter. Wire structs are private; callers only see domain types.
 //! `gh` infers the repo from the working directory, so no owner/name here.
 
-use crate::domain::{Checks, Issue, IssueNumber, PrNumber, PrState, PullRequest};
+use crate::domain::{Checks, GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
 use crate::proc;
 use std::fmt;
 use std::path::Path;
@@ -42,6 +42,17 @@ pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
     )
     .map_err(|e| FetchError(e.to_string()))?;
     parse_prs(&json)
+}
+
+/// Opens the issue or PR page in the browser with `gh <kind> view <n> --web`,
+/// so it follows whatever host `gh` is logged in to. `proc::run` captures the
+/// output, so nothing `gh` prints reaches the TUI.
+pub fn open_in_browser(repo_root: &Path, target: GithubRef) -> Result<(), FetchError> {
+    let (kind, number) = match target {
+        GithubRef::Issue(n) => ("issue", n.0),
+        GithubRef::Pr(n) => ("pr", n.0),
+    };
+    proc::run("gh", [kind, "view", &number.to_string(), "--web"], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
 fn timestamp(raw: &str, what: &str) -> Result<jiff::Timestamp, FetchError> {
@@ -276,6 +287,22 @@ mod tests {
         assert_eq!(first.created_at.to_string(), "2026-09-08T10:31:38Z");
         assert_eq!(first.author, "A4-Tacks");
         assert!(first.url.starts_with("https://github.com/"));
+    }
+
+    #[test]
+    fn open_in_browser_runs_gh_view_web_for_the_right_kind() {
+        proc::fake::install(|_| Ok(String::new()));
+        let root = Path::new("/r");
+        open_in_browser(root, GithubRef::Issue(IssueNumber(3))).expect("opens");
+        open_in_browser(root, GithubRef::Pr(PrNumber(10))).expect("opens");
+        assert_eq!(proc::fake::calls(), ["gh issue view 3 --web", "gh pr view 10 --web"]);
+    }
+
+    #[test]
+    fn open_in_browser_failure_carries_the_gh_error() {
+        proc::fake::install(|_| Err(proc::fake::fail("gh", 1, "no browser")));
+        let err = open_in_browser(Path::new("/r"), GithubRef::Issue(IssueNumber(3))).expect_err("fails");
+        assert!(err.0.contains("no browser"), "{err}");
     }
 
     #[test]

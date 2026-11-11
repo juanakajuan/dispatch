@@ -12,6 +12,23 @@ pub struct IssueNumber(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrNumber(pub u32);
 
+/// Something with a page on GitHub. `gh` resolves the host, so this holds
+/// the number only, never a URL.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GithubRef {
+    Issue(IssueNumber),
+    Pr(PrNumber),
+}
+
+impl std::fmt::Display for GithubRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GithubRef::Issue(n) => write!(f, "issue #{}", n.0),
+            GithubRef::Pr(n) => write!(f, "PR #{}", n.0),
+        }
+    }
+}
+
 /// A branch name that passes the subset of `git check-ref-format --branch`
 /// rules that matter here: non-empty, no whitespace or control character, no
 /// `..`, `//`, or `@{`, none of `~^:?*[\`, no leading `-` or `/`, no trailing

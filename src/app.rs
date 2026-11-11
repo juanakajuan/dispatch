@@ -4,7 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, Issue, IssueNumber, Mode, PrNumber, PullRequest, SkillChoice};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PullRequest, SkillChoice};
 use crate::rules;
 use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -25,6 +25,17 @@ pub enum RowKey {
     Issue(IssueNumber),
     Pr(PrNumber),
     Session(IssueNumber),
+}
+
+/// The page `o` opens for a row. A session row opens its issue. Exhaustive,
+/// so a new row kind does not compile until it says what `o` opens.
+impl From<RowKey> for GithubRef {
+    fn from(key: RowKey) -> GithubRef {
+        match key {
+            RowKey::Issue(n) | RowKey::Session(n) => GithubRef::Issue(n),
+            RowKey::Pr(n) => GithubRef::Pr(n),
+        }
+    }
 }
 
 /// Remote data plus its load status. `items` keeps the last good data when a
@@ -172,6 +183,7 @@ pub enum Msg {
     Stopped { issue: IssueNumber, result: Result<(), String> },
     Resumed { issue: IssueNumber, result: Result<(), String> },
     Attached(Result<(), String>),
+    Opened { target: GithubRef, result: Result<(), String> },
 }
 
 /// Work for the shell.
@@ -194,6 +206,9 @@ pub enum Job {
     Start(StartRequest),
     Stop(IssueNumber),
     Resume(IssueNumber),
+    /// Open the page in the browser. No inflight flag: two presses may open
+    /// two tabs, which is what the user asked for.
+    Open(GithubRef),
 }
 
 pub const SESSIONS_EVERY: Duration = Duration::from_secs(2);
@@ -241,6 +256,7 @@ pub enum Action {
     Enter,
     Attach,
     Stop,
+    Open,
     Refresh,
     Filter,
     ClearFilter,
@@ -294,6 +310,7 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("a", "attach", When::SessionLive), bar("a", "resume", When::SessionExited)],
     },
     Binding { keys: &[Key::Char('x')], action: Action::Stop, bar: &[bar("x", "stop", When::SessionLive)] },
+    Binding { keys: &[Key::Char('o')], action: Action::Open, bar: &[bar("o", "open on GitHub", When::Always)] },
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
     Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
@@ -400,6 +417,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             }
             observe_now(state)
         }
+        Msg::Opened { target, result } => {
+            if let Err(e) = result {
+                say(state, format!("Open {target} failed: {e}"));
+            }
+            Vec::new()
+        }
         Msg::Attached(result) => {
             if let Err(e) = result {
                 say(state, format!("attach failed: {e}"));
@@ -493,6 +516,7 @@ fn act(state: &mut State, action: Action, config: &Config) -> Vec<Cmd> {
             }
             say(state, "No running session here.".to_string());
         }
+        Action::Open => return open_key(state),
         Action::Refresh => {
             let mut cmds = Vec::new();
             refresh_github(state, &mut cmds);
@@ -519,6 +543,17 @@ fn attach_key(state: &mut State) -> Vec<Cmd> {
             vec![Cmd::Job(Job::Resume(issue))]
         }
     }
+}
+
+/// `o`: the target is fixed at the key press, so a refresh before the job
+/// runs can not change what opens.
+fn open_key(state: &mut State) -> Vec<Cmd> {
+    let Some(target) = selected_row(state).map(GithubRef::from) else {
+        say(state, "Nothing to open.".to_string());
+        return Vec::new();
+    };
+    say(state, format!("Opening {target} on GitHub"));
+    vec![Cmd::Job(Job::Open(target))]
 }
 
 /// `s` or Enter on an issue, or a double-click on one.
@@ -1232,6 +1267,7 @@ mod tests {
         let (mut state, config, _) = app();
         let names = |s: &State| key_bar(s).iter().map(|(k, d)| format!("{k} {d}")).collect::<Vec<_>>();
         assert!(names(&state).contains(&"s start session".to_string()));
+        assert!(names(&state).contains(&"o open on GitHub".to_string()));
         assert!(!names(&state).iter().any(|k| k.starts_with("x ")));
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         assert!(names(&state).contains(&"a attach".to_string()));
@@ -1240,6 +1276,60 @@ mod tests {
         assert!(names(&state).contains(&"a resume".to_string()));
         press(&mut state, &config, key('2'));
         assert!(names(&state).contains(&"enter go to issue".to_string()));
+    }
+
+    fn opens(cmds: &[Cmd]) -> Vec<GithubRef> {
+        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Open(t)) => Some(*t), _ => None }).collect()
+    }
+
+    #[test]
+    fn o_opens_the_selected_issue_pr_or_session_issue() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, key('j'));
+        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Issue(IssueNumber(2))]);
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Opening issue #2 on GitHub"));
+
+        press(&mut state, &config, key('2'));
+        press(&mut state, &config, key('j'));
+        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Pr(PrNumber(11))]);
+
+        state.sessions.insert(IssueNumber(7), session(7, Some((true, false))));
+        press(&mut state, &config, key('3'));
+        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Issue(IssueNumber(7))], "an issue not in the list still opens");
+    }
+
+    #[test]
+    fn o_on_an_empty_list_sends_nothing() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, key('3'));
+        assert!(press(&mut state, &config, key('o')).is_empty());
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Nothing to open."));
+
+        press(&mut state, &config, key('1'));
+        press(&mut state, &config, key('/'));
+        for c in "zzz".chars() {
+            press(&mut state, &config, key(c));
+        }
+        press(&mut state, &config, code(KeyCode::Enter));
+        assert!(press(&mut state, &config, key('o')).is_empty(), "a filter that hides every row");
+    }
+
+    #[test]
+    fn o_while_filtering_types_into_the_filter() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, key('/'));
+        assert!(press(&mut state, &config, key('o')).is_empty());
+        assert_eq!(state.filter, "o");
+    }
+
+    #[test]
+    fn a_failed_open_shows_the_error_and_a_success_is_quiet() {
+        let (mut state, config, _) = app();
+        let target = GithubRef::Pr(PrNumber(10));
+        assert!(press(&mut state, &config, Msg::Opened { target, result: Ok(()) }).is_empty());
+        assert!(state.toast.is_none());
+        press(&mut state, &config, Msg::Opened { target, result: Err("no browser".to_string()) });
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Open PR #10 failed: no browser"));
     }
 
     #[test]
