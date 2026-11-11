@@ -51,6 +51,9 @@ fn run() -> Result<(), String> {
     let ws = Workspace::discover(&cwd, &config).map_err(|e| e.to_string())?;
 
     let mut terminal = ratatui::init();
+    // A crashed earlier run can leave the alternate screen dirty, and the
+    // first draw only writes non-blank cells.
+    terminal.clear().map_err(|e| e.to_string())?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);

@@ -199,7 +199,10 @@ fn feed_status<T>(feed: &Feed<T>) -> Option<(String, Style)> {
     match &feed.status {
         FeedStatus::Loading => Some(("loading…".to_string(), palette::DIM)),
         FeedStatus::Fresh => None,
-        FeedStatus::Failed(e) => Some((format!("gh failed, showing old data: {}", one_line(e)), palette::ERROR)),
+        FeedStatus::Failed(e) => {
+            let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
+            Some((format!("gh failed{kept}: {}", one_line(e)), palette::ERROR))
+        }
     }
 }
 
@@ -336,7 +339,13 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(vec![span(format!("#{} ", n.0), palette::NUMBER), span(i.title.clone(), palette::HEADING)]),
         Line::from(span(
-            format!("opened {} ago by {} · {} comments", age(i.created_at, now), i.author, i.comment_count),
+            format!(
+                "opened {} ago by {} · {} comment{}",
+                age(i.created_at, now),
+                i.author,
+                i.comment_count,
+                if i.comment_count == 1 { "" } else { "s" }
+            ),
             palette::DIM,
         )),
         Line::from(labels_spans(&i.labels)),
