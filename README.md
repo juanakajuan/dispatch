@@ -66,7 +66,7 @@ If more than one PR closes the issue, the row shows the most advanced one: merge
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
-| `m` | Ask the session's agent to merge its open PR. Press `m` twice to confirm |
+| `m` | Merge the session's open PR. Press `m` twice to confirm. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Refresh |
 | `/` | Filter. Enter keeps it, Esc clears it |
@@ -81,6 +81,26 @@ Mouse: a click selects a row or a tab. A double-click on an issue opens the star
 The border is the same on all three tabs. Each side keeps at least 24 columns for the list and 30 for the details. On a terminal too narrow for both, the panes share the width and the border does not move. A resize lasts until you quit. To change where the border starts, set `split` in the config.
 
 The Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+
+## Merge
+
+Press `m` twice on a session, its issue, or its PR. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
+
+- If the PR is clean, dispatch runs `gh pr merge <n> --<method>` itself. No agent turn. The toast shows the result.
+- If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, dispatch sends the session's agent a prompt. The prompt names the problem and the merge method, for example: "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
+- If checks are still running, or GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.
+
+dispatch never passes `--delete-branch`, because the session's worktree still has the branch checked out.
+
+### Merge method
+
+The merge method is a setting of the project, kept in the repo's git config. From the checkout:
+
+```
+git config dispatch.mergeMethod squash     # merge, squash, or rebase
+```
+
+Without the setting, dispatch uses the first method the repo allows, in the order `merge`, `squash`, `rebase`. So a repo that allows one method gets that one. If the setting names a method the repo does not allow, the merge stops with a message that lists the allowed methods. dispatch reads the setting on each merge, so a change needs no restart.
 
 ## Colors
 

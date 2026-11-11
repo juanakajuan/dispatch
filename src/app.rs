@@ -5,7 +5,8 @@
 
 use crate::config::Config;
 use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest, Split};
-use crate::rules;
+use crate::merge::MergeOutcome;
+use crate::rules::{self, MergePlan};
 use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::collections::BTreeSet;
@@ -166,12 +167,12 @@ pub struct State {
     pub split: Split,
     /// True from a press on the divider to the next release.
     pub dragging_split: bool,
-    /// Set by a first `m`. A second `m` on the same session and PR sends the
-    /// merge request; any other key clears it.
+    /// Set by a first `m`. A second `m` on the same session and PR starts the
+    /// merge; any other key clears it.
     pub armed_merge: Option<MergeAsk>,
 }
 
-/// Ask the agent of `issue`'s session to merge `pr`.
+/// Merge `pr`, or ask the agent of `issue`'s session to fix and merge it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MergeAsk {
     pub issue: IssueNumber,
@@ -199,6 +200,7 @@ pub enum Msg {
     Attached(Result<(), String>),
     Opened { target: GithubRef, result: Result<(), String> },
     Sent { issue: IssueNumber, result: Result<(), String> },
+    Merged { ask: MergeAsk, result: Result<MergeOutcome, String> },
 }
 
 /// Work for the shell.
@@ -226,6 +228,8 @@ pub enum Job {
     Open(GithubRef),
     /// Type a line into the session's Claude prompt and submit it.
     Send { issue: IssueNumber, text: String },
+    /// Check the PR again, then merge it or report what the agent must fix.
+    Merge(MergeAsk),
 }
 
 pub const SESSIONS_EVERY: Duration = Duration::from_secs(2);
@@ -459,11 +463,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         }
         Msg::Sent { issue, result } => {
             match result {
-                Ok(()) => say(state, format!("Asked #{} to merge its PR", issue.0)),
+                Ok(()) => say(state, format!("Asked #{}'s agent to fix and merge its PR", issue.0)),
                 Err(e) => say(state, format!("Merge request to #{} failed: {e}", issue.0)),
             }
             Vec::new()
         }
+        Msg::Merged { ask, result } => merged(state, ask, result),
         Msg::Attached(result) => {
             if let Err(e) = result {
                 say(state, format!("attach failed: {e}"));
@@ -603,24 +608,25 @@ fn open_key(state: &mut State) -> Vec<Cmd> {
 }
 
 /// What `m` would merge right now, or why it can not.
-fn merge_target(state: &State) -> Result<MergeAsk, String> {
+fn merge_target(state: &State) -> Result<(MergeAsk, &PullRequest), String> {
     let session = current_session(state).ok_or("No session here.")?;
     if !matches!(session.state(), SessionState::Running | SessionState::NeedsYou) {
         return Err(format!("#{} is not running. Press a to resume it.", session.issue.0));
     }
     let pr = pr_for_session(state, session).ok_or(format!("#{} has no PR yet.", session.issue.0))?;
     match pr.state {
-        PrState::Open => Ok(MergeAsk { issue: session.issue, pr: pr.number }),
+        PrState::Open => Ok((MergeAsk { issue: session.issue, pr: pr.number }, pr)),
         PrState::Draft => Err(format!("PR #{} is a draft.", pr.number.0)),
         PrState::Merged | PrState::Closed => Err(format!("PR #{} is not open.", pr.number.0)),
     }
 }
 
-/// `m`: the first press arms, a second press on the same target sends.
-/// Merging is hard to undo, so one stray key never does it.
+/// `m`: the first press arms, a second press on the same target merges.
+/// Merging is hard to undo, so one stray key never does it. The first press
+/// says what the PR list expects; the job checks GitHub again before it acts.
 fn merge_key(state: &mut State, armed: Option<MergeAsk>) -> Vec<Cmd> {
-    let ask = match merge_target(state) {
-        Ok(ask) => ask,
+    let (ask, expect) = match merge_target(state) {
+        Ok((ask, pr)) => (ask, arm_text(&rules::merge_plan(pr), ask, &pr.base)),
         Err(why) => {
             say(state, why);
             return Vec::new();
@@ -628,11 +634,48 @@ fn merge_key(state: &mut State, armed: Option<MergeAsk>) -> Vec<Cmd> {
     };
     if armed != Some(ask) {
         state.armed_merge = Some(ask);
-        say(state, format!("Press m again to ask #{}'s agent to merge PR #{}", ask.issue.0, ask.pr.0));
+        say(state, expect);
         return Vec::new();
     }
-    say(state, format!("Asking #{} to merge PR #{}", ask.issue.0, ask.pr.0));
-    vec![Cmd::Job(Job::Send { issue: ask.issue, text: rules::merge_prompt(ask.pr) })]
+    say(state, format!("Checking PR #{}", ask.pr.0));
+    vec![Cmd::Job(Job::Merge(ask))]
+}
+
+/// The first `m`'s toast. A cached refusal still arms, because the list can
+/// be stale and the job asks GitHub again.
+fn arm_text(plan: &MergePlan, ask: MergeAsk, base: &str) -> String {
+    match plan {
+        MergePlan::Handoff(problem) => format!(
+            "{} Press m again to ask #{}'s agent to fix and merge it.",
+            rules::problem_sentence(ask.pr, base, *problem),
+            ask.issue.0
+        ),
+        MergePlan::Direct | MergePlan::Refuse(_) => format!("Press m again to merge PR #{}", ask.pr.0),
+    }
+}
+
+fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
+    match result {
+        Ok(MergeOutcome::Merged(method)) => {
+            say(state, format!("Merged PR #{} ({method})", ask.pr.0));
+            let mut cmds = Vec::new();
+            refresh_github(state, &mut cmds);
+            cmds
+        }
+        Ok(MergeOutcome::Handoff { problem, method, base }) => {
+            let sentence = rules::problem_sentence(ask.pr, &base, problem);
+            say(state, format!("{sentence} Asking #{}'s agent to fix it.", ask.issue.0));
+            vec![Cmd::Job(Job::Send { issue: ask.issue, text: rules::handoff_prompt(ask.pr, &base, problem, method) })]
+        }
+        Ok(MergeOutcome::Refused(why)) => {
+            say(state, why);
+            Vec::new()
+        }
+        Err(e) => {
+            say(state, format!("Merge PR #{} failed: {e}", ask.pr.0));
+            Vec::new()
+        }
+    }
 }
 
 /// `s` or Enter on an issue, or a double-click on one.
@@ -933,7 +976,8 @@ pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a Pul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::WorktreePath;
+    use crate::domain::{MergeMethod, Mergeability, WorktreePath};
+    use crate::rules::MergeProblem;
     use crate::session::Window;
     use crate::testutil::{issue, pr};
     use ratatui::layout::Rect;
@@ -1444,18 +1488,71 @@ mod tests {
         cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Send { issue, text }) => Some((*issue, text.as_str())), _ => None }).collect()
     }
 
+    fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
+        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Merge(ask)) => Some(*ask), _ => None }).collect()
+    }
+
+    fn toast(state: &State) -> String {
+        state.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    const ASK: MergeAsk = MergeAsk { issue: IssueNumber(3), pr: PrNumber(10) };
+
     #[test]
-    fn m_twice_asks_the_session_agent_to_merge_its_pr() {
+    fn m_twice_starts_a_merge_job_for_the_session_pr() {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
         press(&mut state, &config, key('3'));
         assert!(key_bar(&state).contains(&("m", "merge")));
         assert!(press(&mut state, &config, key('m')).is_empty(), "the first press only arms");
-        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Press m again to ask #3's agent to merge PR #10"));
+        assert_eq!(toast(&state), "Press m again to merge PR #10");
         let cmds = press(&mut state, &config, key('m'));
-        assert_eq!(sends(&cmds), [(IssueNumber(3), rules::merge_prompt(PrNumber(10)).as_str())]);
+        assert_eq!(merges(&cmds), [ASK]);
+        assert!(sends(&cmds).is_empty(), "no agent turn for the merge itself");
         assert!(state.armed_merge.is_none());
         assert!(press(&mut state, &config, key('m')).is_empty(), "a third press arms again");
+    }
+
+    #[test]
+    fn the_first_m_names_the_problem_the_pr_list_shows() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        state.prs.items[0].mergeability = Mergeability::Conflict;
+        press(&mut state, &config, key('3'));
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it.");
+        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK], "the job decides, not the cached list");
+    }
+
+    #[test]
+    fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
+        let (mut state, config, _) = app();
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) });
+        assert_eq!(toast(&state), "Merged PR #10 (squash)");
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        assert!(sends(&cmds).is_empty());
+    }
+
+    #[test]
+    fn a_problem_pr_sends_the_agent_a_prompt_with_the_problem_and_method() {
+        let (mut state, config, _) = app();
+        let outcome = MergeOutcome::Handoff { problem: MergeProblem::ChecksFailing, method: MergeMethod::Rebase, base: "main".to_string() };
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(outcome) });
+        let prompt = rules::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
+        assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
+        assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
+        assert_eq!(toast(&state), "PR #10 has failing checks. Asking #3's agent to fix it.");
+    }
+
+    #[test]
+    fn a_refused_or_failed_merge_only_shows_a_toast() {
+        let (mut state, config, _) = app();
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Refused("wait".to_string())) });
+        assert!(cmds.is_empty());
+        assert_eq!(toast(&state), "wait");
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Err("not allowed".to_string()) });
+        assert!(cmds.is_empty());
+        assert_eq!(toast(&state), "Merge PR #10 failed: not allowed");
     }
 
     #[test]
@@ -1464,7 +1561,7 @@ mod tests {
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         press(&mut state, &config, key('2'));
         press(&mut state, &config, key('m'));
-        assert_eq!(sends(&press(&mut state, &config, key('m'))).len(), 1);
+        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK]);
     }
 
     #[test]
@@ -1474,13 +1571,12 @@ mod tests {
         press(&mut state, &config, key('3'));
         press(&mut state, &config, key('m'));
         press(&mut state, &config, key('r'));
-        assert!(sends(&press(&mut state, &config, key('m'))).is_empty());
+        assert!(merges(&press(&mut state, &config, key('m'))).is_empty());
     }
 
     #[test]
     fn m_explains_why_it_can_not_merge() {
         let (mut state, config, _) = app();
-        let toast = |s: &State| s.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
         press(&mut state, &config, key('3'));
         press(&mut state, &config, key('m'));
         assert_eq!(toast(&state), "No session here.");
@@ -1506,7 +1602,7 @@ mod tests {
     fn a_sent_result_shows_a_toast() {
         let (mut state, config, _) = app();
         press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
-        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Asked #3 to merge its PR"));
+        assert!(state.toast.as_ref().is_some_and(|t| t.text == "Asked #3's agent to fix and merge its PR"));
         press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Err("gone".to_string()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Merge request to #3 failed: gone"));
     }

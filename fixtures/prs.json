@@ -27,6 +27,8 @@
   "deletions": 22,
   "headRefName": "feature/711-hardware-metadata",
   "isDraft": false,
+  "mergeStateStatus": "CLEAN",
+  "mergeable": "MERGEABLE",
   "number": 1028,
   "state": "OPEN",
   "statusCheckRollup": [
@@ -82,6 +84,8 @@
   "deletions": 0,
   "headRefName": "test-clicolor-environment",
   "isDraft": false,
+  "mergeStateStatus": "UNKNOWN",
+  "mergeable": "UNKNOWN",
   "number": 1002,
   "state": "MERGED",
   "statusCheckRollup": [
@@ -123,6 +127,8 @@
   "deletions": 1,
   "headRefName": "williammartin-multiaccount-draft-08-evaluation",
   "isDraft": true,
+  "mergeStateStatus": "DRAFT",
+  "mergeable": "MERGEABLE",
   "number": 14927,
   "state": "OPEN",
   "statusCheckRollup": [
@@ -178,6 +184,8 @@
   "deletions": 4437,
   "headRefName": "maxbeizer-fix-project-scope-error",
   "isDraft": true,
+  "mergeStateStatus": "DRAFT",
+  "mergeable": "MERGEABLE",
   "number": 14035,
   "state": "OPEN",
   "statusCheckRollup": [],

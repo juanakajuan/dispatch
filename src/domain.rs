@@ -155,8 +155,58 @@ pub struct PullRequest {
     pub additions: u32,
     pub deletions: u32,
     pub checks: Checks,
+    pub mergeability: Mergeability,
     pub closes: Vec<IssueNumber>,
     pub url: String,
+}
+
+/// Whether GitHub can merge an open PR, from its `mergeable` and
+/// `mergeStateStatus`. `Unknown` while GitHub still computes it, and for a PR
+/// that is not open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Mergeability {
+    Clean,
+    Conflict,
+    /// The repo requires an up-to-date branch and this one is behind its base.
+    Behind,
+    /// A branch rule, such as a required review, blocks the merge.
+    Blocked,
+    /// Mergeable, but a check that is not required fails.
+    Unstable,
+    Unknown,
+}
+
+/// The `gh pr merge` flag, without its dashes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn parse(raw: &str) -> Option<MergeMethod> {
+        match raw.trim() {
+            "merge" => Some(MergeMethod::Merge),
+            "squash" => Some(MergeMethod::Squash),
+            "rebase" => Some(MergeMethod::Rebase),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
+impl std::fmt::Display for MergeMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 /// Where the border between the list and the detail pane sits: the list
@@ -257,6 +307,16 @@ mod tests {
         for bad in ["-x", "/x", "x/", "x.", "x.lock", "a..b", "a//b", "a@{b", "@", "a/.b"] {
             assert!(matches!(BranchName::parse(bad), Err(BranchNameError::BadSequence(_))), "{bad}");
         }
+    }
+
+    #[test]
+    fn merge_method_round_trips_and_rejects_other_text() {
+        for m in [MergeMethod::Merge, MergeMethod::Squash, MergeMethod::Rebase] {
+            assert_eq!(MergeMethod::parse(m.as_str()), Some(m));
+        }
+        assert_eq!(MergeMethod::parse(" squash\n"), Some(MergeMethod::Squash));
+        assert_eq!(MergeMethod::parse("Squash"), None);
+        assert_eq!(MergeMethod::parse("fast-forward"), None);
     }
 
     #[test]

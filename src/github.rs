@@ -1,7 +1,7 @@
 //! `gh` adapter. Wire structs are private; callers only see domain types.
 //! `gh` infers the repo from the working directory, so no owner/name here.
 
-use crate::domain::{Checks, GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
+use crate::domain::{Checks, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrNumber, PrState, PullRequest};
 use crate::proc;
 use std::fmt;
 use std::path::Path;
@@ -25,23 +25,44 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
     parse_issues(&json)
 }
 
+/// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
+const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,headRefName,baseRefName,additions,deletions,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
+
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
-    let json = proc::run(
-        "gh",
-        [
-            "pr",
-            "list",
-            "--state",
-            "all",
-            "--limit",
-            "100",
-            "--json",
-            "number,title,state,isDraft,author,createdAt,headRefName,baseRefName,additions,deletions,statusCheckRollup,closingIssuesReferences,url",
-        ],
-        repo_root,
-    )
-    .map_err(|e| FetchError(e.to_string()))?;
+    let json = proc::run("gh", ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], repo_root)
+        .map_err(|e| FetchError(e.to_string()))?;
     parse_prs(&json)
+}
+
+/// One PR as GitHub sees it now, for a decision the cached list is too old for.
+pub fn view_pr(repo_root: &Path, pr: PrNumber) -> Result<PullRequest, FetchError> {
+    let json = proc::run("gh", ["pr", "view", &pr.0.to_string(), "--json", PR_FIELDS], repo_root)
+        .map_err(|e| FetchError(e.to_string()))?;
+    let wire: WirePr = serde_json::from_str(&json).map_err(|e| FetchError(format!("unexpected gh pr view output: {e}")))?;
+    pr_from_wire(wire)
+}
+
+/// The merge methods the repo allows, in the order `merge`, `squash`, `rebase`.
+pub fn allowed_merge_methods(repo_root: &Path) -> Result<Vec<MergeMethod>, FetchError> {
+    let json = proc::run("gh", ["repo", "view", "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"], repo_root)
+        .map_err(|e| FetchError(e.to_string()))?;
+    let wire: WireRepoMerge =
+        serde_json::from_str(&json).map_err(|e| FetchError(format!("unexpected gh repo view output: {e}")))?;
+    Ok([
+        (wire.merge_commit_allowed, MergeMethod::Merge),
+        (wire.squash_merge_allowed, MergeMethod::Squash),
+        (wire.rebase_merge_allowed, MergeMethod::Rebase),
+    ]
+    .into_iter()
+    .filter_map(|(allowed, method)| allowed.then_some(method))
+    .collect())
+}
+
+/// `gh pr merge <n> --<method>`. No `--delete-branch`: the session's worktree
+/// still has the branch checked out, and dispatch never deletes branches.
+pub fn merge_pr(repo_root: &Path, pr: PrNumber, method: MergeMethod) -> Result<(), FetchError> {
+    let flag = format!("--{method}");
+    proc::run("gh", ["pr", "merge", &pr.0.to_string(), &flag], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
 /// Opens the issue or PR page in the browser with `gh <kind> view <n> --web`,
@@ -86,31 +107,47 @@ fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
 /// of the four is an error naming the PR, never a silent default.
 fn parse_prs(json: &str) -> Result<Vec<PullRequest>, FetchError> {
     let wire: Vec<WirePr> = serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh pr list output: {e}")))?;
-    wire.into_iter()
-        .map(|w| {
-            let state = match (w.state.as_str(), w.is_draft) {
-                ("OPEN", true) => PrState::Draft,
-                ("OPEN", false) => PrState::Open,
-                ("MERGED", _) => PrState::Merged,
-                ("CLOSED", _) => PrState::Closed,
-                (other, _) => return Err(FetchError(format!("PR #{} has unknown state {other:?}", w.number))),
-            };
-            Ok(PullRequest {
-                number: PrNumber(w.number),
-                created_at: timestamp(&w.created_at, &format!("PR #{}", w.number))?,
-                title: w.title,
-                state,
-                author: login(w.author),
-                head: w.head_ref_name,
-                base: w.base_ref_name,
-                additions: w.additions,
-                deletions: w.deletions,
-                checks: rollup(&w.status_check_rollup),
-                closes: w.closing_issues_references.iter().map(|r| IssueNumber(r.number)).collect(),
-                url: w.url,
-            })
-        })
-        .collect()
+    wire.into_iter().map(pr_from_wire).collect()
+}
+
+fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
+    let state = match (w.state.as_str(), w.is_draft) {
+        ("OPEN", true) => PrState::Draft,
+        ("OPEN", false) => PrState::Open,
+        ("MERGED", _) => PrState::Merged,
+        ("CLOSED", _) => PrState::Closed,
+        (other, _) => return Err(FetchError(format!("PR #{} has unknown state {other:?}", w.number))),
+    };
+    Ok(PullRequest {
+        number: PrNumber(w.number),
+        created_at: timestamp(&w.created_at, &format!("PR #{}", w.number))?,
+        title: w.title,
+        state,
+        author: login(w.author),
+        head: w.head_ref_name,
+        base: w.base_ref_name,
+        additions: w.additions,
+        deletions: w.deletions,
+        checks: rollup(&w.status_check_rollup),
+        mergeability: mergeability(&w.mergeable, &w.merge_state_status),
+        closes: w.closing_issues_references.iter().map(|r| IssueNumber(r.number)).collect(),
+        url: w.url,
+    })
+}
+
+/// `mergeable` is MERGEABLE, CONFLICTING, or UNKNOWN. `mergeStateStatus` is
+/// CLEAN, HAS_HOOKS, DIRTY, BEHIND, BLOCKED, UNSTABLE, DRAFT, or UNKNOWN. A
+/// value GitHub adds later reads as `Unknown`, so dispatch waits rather than
+/// merges.
+fn mergeability(mergeable: &str, status: &str) -> Mergeability {
+    match (mergeable, status) {
+        ("CONFLICTING", _) | (_, "DIRTY") => Mergeability::Conflict,
+        (_, "CLEAN" | "HAS_HOOKS") => Mergeability::Clean,
+        (_, "BEHIND") => Mergeability::Behind,
+        (_, "BLOCKED") => Mergeability::Blocked,
+        (_, "UNSTABLE") => Mergeability::Unstable,
+        _ => Mergeability::Unknown,
+    }
 }
 
 /// Any failure -> Fail, else any not completed -> Pending, else Pass.
@@ -184,8 +221,18 @@ struct WirePr {
     additions: u32,
     deletions: u32,
     status_check_rollup: Vec<WireCheck>,
+    mergeable: String,
+    merge_state_status: String,
     closing_issues_references: Vec<WireIssueRef>,
     url: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireRepoMerge {
+    merge_commit_allowed: bool,
+    squash_merge_allowed: bool,
+    rebase_merge_allowed: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -235,7 +282,7 @@ mod tests {
     #[test]
     fn real_prs_map_state_checks_and_closes() {
         let open = pr(1028);
-        assert_eq!((open.state, open.checks), (PrState::Open, Checks::Pass));
+        assert_eq!((open.state, open.checks, open.mergeability), (PrState::Open, Checks::Pass, Mergeability::Clean));
         assert_eq!(open.closes, [IssueNumber(711)]);
         assert_eq!(open.head, "feature/711-hardware-metadata");
         assert_eq!(open.base, "master");
@@ -264,8 +311,49 @@ mod tests {
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
-            "closingIssuesReferences":[],"url":"u"}]"#;
+            "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","closingIssuesReferences":[],"url":"u"}]"#;
         assert_eq!(parse_prs(json).expect("parses")[0].checks, Checks::Pending);
+    }
+
+    #[test]
+    fn mergeability_reads_both_fields_and_waits_on_anything_new() {
+        assert_eq!(mergeability("MERGEABLE", "CLEAN"), Mergeability::Clean);
+        assert_eq!(mergeability("MERGEABLE", "HAS_HOOKS"), Mergeability::Clean);
+        assert_eq!(mergeability("CONFLICTING", "BLOCKED"), Mergeability::Conflict, "a conflict wins");
+        assert_eq!(mergeability("UNKNOWN", "DIRTY"), Mergeability::Conflict);
+        assert_eq!(mergeability("MERGEABLE", "BEHIND"), Mergeability::Behind);
+        assert_eq!(mergeability("MERGEABLE", "BLOCKED"), Mergeability::Blocked);
+        assert_eq!(mergeability("MERGEABLE", "UNSTABLE"), Mergeability::Unstable);
+        assert_eq!(mergeability("UNKNOWN", "UNKNOWN"), Mergeability::Unknown);
+        assert_eq!(mergeability("MERGEABLE", "DRAFT"), Mergeability::Unknown);
+        assert_eq!(mergeability("MERGEABLE", "SOMETHING_NEW"), Mergeability::Unknown);
+    }
+
+    #[test]
+    fn view_pr_reads_one_pr_with_the_list_fields() {
+        proc::fake::install(|_| {
+            Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
+                "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","baseRefName":"main","additions":1,"deletions":2,
+                "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
+                "closingIssuesReferences":[{"number":3}],"url":"u"}"#
+                .to_string())
+        });
+        let pr = view_pr(Path::new("/r"), PrNumber(12)).expect("parses");
+        assert_eq!((pr.number, pr.mergeability, pr.closes.as_slice()), (PrNumber(12), Mergeability::Conflict, [IssueNumber(3)].as_slice()));
+        assert_eq!(proc::fake::calls(), [format!("gh pr view 12 --json {PR_FIELDS}")]);
+    }
+
+    #[test]
+    fn allowed_merge_methods_keep_gh_order() {
+        proc::fake::install(|_| Ok(r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#.to_string()));
+        assert_eq!(allowed_merge_methods(Path::new("/r")).expect("parses"), [MergeMethod::Squash, MergeMethod::Rebase]);
+    }
+
+    #[test]
+    fn merge_pr_passes_the_method_flag_and_no_branch_delete() {
+        proc::fake::install(|_| Ok(String::new()));
+        merge_pr(Path::new("/r"), PrNumber(12), MergeMethod::Rebase).expect("merges");
+        assert_eq!(proc::fake::calls(), ["gh pr merge 12 --rebase"]);
     }
 
     #[test]
