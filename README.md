@@ -56,6 +56,14 @@ Each issue row shows the state of the pull request that closes it, between the n
 
 If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. dispatch loads the 100 newest PRs in any state, so an older merged PR does not show. Press `r` to refresh.
 
+dispatch loads issues and PRs again every 60 seconds and when you press `r`. It also loads them a few seconds after these events, because they often change GitHub data:
+
+- A session starts or stops.
+- A session's Claude goes from working to `needs you`, or exits.
+- The terminal gets focus back, for example after you merge a PR in the browser. Inside tmux, this needs `set -g focus-events on`.
+
+A burst of events makes one load, at most one each 5 seconds.
+
 ## Keys
 
 | Key | Action |

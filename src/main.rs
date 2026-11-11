@@ -30,7 +30,7 @@ mod testutil;
 mod ui;
 
 use app::{Cmd, Context, Job, Msg};
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use session::{AttachPlan, Workspace};
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -59,13 +59,13 @@ fn run() -> Result<(), String> {
     terminal.clear().map_err(|e| e.to_string())?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
         previous_hook(info);
     }));
-    let result = crossterm::execute!(std::io::stdout(), EnableMouseCapture)
+    let result = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange)
         .map_err(|e| e.to_string())
         .and_then(|()| event_loop(&mut terminal, &ws, &config));
-    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
     ratatui::restore();
     result
 }
@@ -179,11 +179,11 @@ fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, window: &sess
         }
         AttachPlan::Suspend(argv) => {
             let (program, args) = argv.split_first().ok_or("empty attach command")?;
-            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
             ratatui::restore();
             let status = std::process::Command::new(program).args(args).status();
             *terminal = ratatui::init();
-            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
             terminal.clear().map_err(|e| e.to_string())?;
             match status {
                 Ok(s) if s.success() => Ok(()),
@@ -206,6 +206,7 @@ fn poll_input(timeout: Duration) -> Result<Vec<Msg>, String> {
         match event::read().map_err(|e| e.to_string())? {
             Event::Key(key) => msgs.push(Msg::Key(key)),
             Event::Mouse(mouse) => msgs.push(Msg::Mouse(mouse, Instant::now())),
+            Event::FocusGained => msgs.push(Msg::FocusGained),
             _ => {}
         }
         wait = Duration::ZERO;
