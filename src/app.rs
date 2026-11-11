@@ -816,8 +816,14 @@ fn fix_request(issue: IssueNumber, pr: &PullRequest, problem: MergeProblem, meth
 fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
     match result {
         Ok(MergeOutcome::Merged(method)) => {
-            say(state, format!("Merged PR #{} ({method})", ask.pr.0));
             let mut cmds = Vec::new();
+            match live_session_on_pr(state, ask.pr) {
+                Some(issue) => {
+                    say(state, format!("Merged PR #{} ({method}) and stopped #{}'s session", ask.pr.0, issue.0));
+                    cmds.push(Cmd::Job(Job::Stop(issue)));
+                }
+                None => say(state, format!("Merged PR #{} ({method})", ask.pr.0)),
+            }
             refresh_github(state, &mut cmds);
             cmds
         }
@@ -837,6 +843,17 @@ fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>
             Vec::new()
         }
     }
+}
+
+/// The issue of the session with a live window on the PR's head branch. A
+/// merged PR needs no agent, so `merged` stops it like `x` does.
+fn live_session_on_pr(state: &State, pr: PrNumber) -> Option<IssueNumber> {
+    let head = &state.prs.items.iter().find(|p| p.number == pr)?.head;
+    state
+        .sessions
+        .values()
+        .find(|s| s.branch.as_str() == head && matches!(s.state(), SessionState::Running | SessionState::NeedsYou))
+        .map(|s| s.issue)
 }
 
 /// The check found `problem` on `pr`, the PR as GitHub showed it now.
@@ -1945,6 +1962,48 @@ mod tests {
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         assert!(sends(&cmds).is_empty());
+        assert!(stops(&cmds).is_empty(), "no session on the branch");
+    }
+
+    fn stops(cmds: &[Cmd]) -> Vec<IssueNumber> {
+        cmds.iter().filter_map(|c| match c { Cmd::Job(Job::Stop(n)) => Some(*n), _ => None }).collect()
+    }
+
+    fn merged_squash() -> Msg {
+        Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) }
+    }
+
+    #[test]
+    fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
+        for waiting in [false, true] {
+            let (mut state, config, _) = app();
+            state.sessions.insert(IssueNumber(3), session(3, Some((true, waiting))));
+            let cmds = press(&mut state, &config, merged_squash());
+            assert_eq!(stops(&cmds), [IssueNumber(3)]);
+            assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session");
+            assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        }
+    }
+
+    #[test]
+    fn a_direct_merge_leaves_an_exited_or_unrelated_session_alone() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+        state.sessions.insert(IssueNumber(2), session(2, Some((true, false))));
+        let cmds = press(&mut state, &config, merged_squash());
+        assert!(stops(&cmds).is_empty(), "#3's window is gone and #2 is on another branch");
+        assert_eq!(toast(&state), "Merged PR #10 (squash)");
+
+        state.sessions.insert(IssueNumber(3), session(3, None));
+        assert!(stops(&press(&mut state, &config, merged_squash())).is_empty(), "no window");
+    }
+
+    #[test]
+    fn a_queued_merge_keeps_the_session() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Queued) });
+        assert!(stops(&cmds).is_empty(), "the PR can still drop out of the queue");
     }
 
     #[test]
