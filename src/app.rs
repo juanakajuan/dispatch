@@ -894,6 +894,23 @@ pub fn current_session(state: &State) -> Option<&Session> {
     }
 }
 
+/// PRs that name issue `n` in their closing references.
+pub fn prs_closing(state: &State, n: IssueNumber) -> impl Iterator<Item = &PullRequest> {
+    state.prs.items.iter().filter(move |p| p.closes.contains(&n))
+}
+
+/// The one PR an issue row shows: merged beats open beats draft, then the
+/// newest number wins. A closed PR never shows.
+pub fn lead_pr(state: &State, n: IssueNumber) -> Option<&PullRequest> {
+    let rank = |p: &PullRequest| match p.state {
+        PrState::Merged => Some(3),
+        PrState::Open => Some(2),
+        PrState::Draft => Some(1),
+        PrState::Closed => None,
+    };
+    prs_closing(state, n).filter_map(|p| Some(((rank(p)?, p.number), p))).max_by_key(|(k, _)| *k).map(|(_, p)| p)
+}
+
 /// A PR whose head branch equals the session branch.
 pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a PullRequest> {
     state.prs.items.iter().find(|p| p.head == session.branch.as_str())
@@ -1259,6 +1276,22 @@ mod tests {
         assert_eq!(selected_row(&state), Some(RowKey::Pr(PrNumber(11))));
         press(&mut state, &config, code(KeyCode::Enter));
         assert_eq!(state.tab, Tab::Prs, "a PR without closes stays");
+    }
+
+    #[test]
+    fn lead_pr_prefers_merged_then_open_then_draft_and_skips_closed() {
+        let (mut state, _, _) = app();
+        let with = |n: u32, s: PrState| PullRequest { state: s, ..pr(n, &format!("b{n}"), &[7]) };
+        state.prs.items = vec![with(20, PrState::Closed)];
+        assert!(lead_pr(&state, IssueNumber(7)).is_none(), "a closed PR never shows");
+        state.prs.items.push(with(21, PrState::Draft));
+        assert_eq!(lead_pr(&state, IssueNumber(7)).map(|p| p.number), Some(PrNumber(21)));
+        state.prs.items.push(with(22, PrState::Open));
+        state.prs.items.push(with(23, PrState::Open));
+        assert_eq!(lead_pr(&state, IssueNumber(7)).map(|p| p.number), Some(PrNumber(23)), "newest open wins a tie");
+        state.prs.items.push(with(19, PrState::Merged));
+        assert_eq!(lead_pr(&state, IssueNumber(7)).map(|p| p.number), Some(PrNumber(19)));
+        assert!(lead_pr(&state, IssueNumber(8)).is_none());
     }
 
     #[test]

@@ -223,6 +223,20 @@ fn pr_state_span(state: PrState) -> Span<'static> {
     }
 }
 
+/// Two cells before an issue title: the state of its lead PR, or blank.
+fn pr_mark(pr: Option<&PullRequest>) -> Span<'static> {
+    let Some(p) = pr else { return Span::raw("  ") };
+    match (p.state, p.checks) {
+        (PrState::Merged, _) => span("✓ ", palette::MERGED),
+        (PrState::Draft, _) => span("◌ ", palette::DIM),
+        (PrState::Open, Checks::Pass) => span("● ", palette::PASS),
+        (PrState::Open, Checks::Fail) => span("● ", palette::FAIL),
+        (PrState::Open, Checks::Pending) => span("● ", palette::PENDING),
+        (PrState::Open, Checks::None) => span("● ", palette::PLAIN),
+        (PrState::Closed, _) => Span::raw("  "),
+    }
+}
+
 fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
     state.issues.items.iter().find(|i| i.number == n)
 }
@@ -390,6 +404,10 @@ fn list_row(
     number_width: usize,
     selected: bool,
 ) -> [Line<'static>; 2] {
+    let mark = match key {
+        RowKey::Issue(n) => vec![pr_mark(app::lead_pr(state, n))],
+        RowKey::Pr(_) | RowKey::Session(_) => Vec::new(),
+    };
     let (title, right, meta): (String, Span<'static>, Vec<Span<'static>>) = match key {
         RowKey::Issue(n) => {
             let Some(i) = issue_of(state, n) else { return [Line::raw(""), Line::raw("")] };
@@ -418,9 +436,12 @@ fn list_row(
     let marker = || if selected { span("▌ ", palette::ACCENT) } else { Span::raw("  ") };
     let number = span(format!("{:<number_width$}  ", row_number(key)), palette::DIM);
     let title = span(title, if selected { palette::HEADING } else { palette::PLAIN });
-    let mut second = vec![marker(), Span::raw(" ".repeat(number_width + 2))];
+    let mut second = vec![marker(), Span::raw(" ".repeat(number_width + 2 + spans_width(&mark)))];
     second.extend(meta);
-    [row_line(width, vec![marker(), number, title], vec![right]), row_line(width, second, Vec::new())]
+    let mut first = vec![marker(), number];
+    first.extend(mark);
+    first.push(title);
+    [row_line(width, first, vec![right]), row_line(width, second, Vec::new())]
 }
 
 // ---- detail ----------------------------------------------------------------
@@ -520,7 +541,7 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
         (None, false) => {}
     }
     lines.extend(body_lines(&i.body));
-    let linked: Vec<&PullRequest> = state.prs.items.iter().filter(|p| p.closes.contains(&n)).collect();
+    let linked: Vec<&PullRequest> = app::prs_closing(state, n).collect();
     if !linked.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::from(span("Linked pull requests", palette::HEADING)));
@@ -861,7 +882,7 @@ mod tests {
             "1 Issues 2",
             "2 Pull requests 1",
             "3 Sessions 1 ▲1",
-            "#3  Retry queue",
+            "#3  ● Retry queue",
             "▲ needs you",
             "bug, p1",
             "fake output",
@@ -874,6 +895,36 @@ mod tests {
         ] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
+    }
+
+    /// The cell that holds the PR mark on the first line of issue `n`'s row.
+    fn mark_cell(buf: &Buffer, n: u32) -> (String, Color) {
+        let screen = text(buf);
+        let (y, line) = screen.lines().enumerate().find(|(_, l)| l.contains(&format!("#{n} "))).expect("row drawn");
+        let x = line.chars().position(|c| c == '#').expect("number") + 4;
+        let cell = &buf[(u16::try_from(x).expect("x"), u16::try_from(y).expect("y"))];
+        (cell.symbol().to_string(), cell.fg)
+    }
+
+    #[test]
+    fn issue_rows_show_the_lead_pr_state_and_follow_a_refresh() {
+        let (mut state, config) = full_state();
+        let mark = |state: &State| (mark_cell(&render(state, &config, 100, 20), 3), mark_cell(&render(state, &config, 100, 20), 2));
+        assert_eq!(mark(&state), (("●".to_string(), palette::FG), (" ".to_string(), palette::FG)), "open, no checks; #2 has no PR");
+        for (pr_state, checks, want, color) in [
+            (PrState::Draft, Checks::Pass, "◌", palette::GRAY),
+            (PrState::Open, Checks::Pending, "●", palette::YELLOW),
+            (PrState::Open, Checks::Fail, "●", palette::RED),
+            (PrState::Open, Checks::Pass, "●", palette::GREEN),
+            (PrState::Merged, Checks::Fail, "✓", palette::PURPLE),
+            (PrState::Closed, Checks::Pass, " ", palette::FG),
+        ] {
+            let fresh = vec![PullRequest { state: pr_state, checks, ..pr(10, "fix/3-x", &[3]) }];
+            let _ = app::update(&mut state, Msg::Prs(Ok(fresh)), &config);
+            assert_eq!(mark(&state).0, (want.to_string(), color), "{pr_state:?} {checks:?}");
+        }
+        let screen = text(&render(&state, &config, 100, 20));
+        assert!(screen.contains("#3    Retry queue") && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
     }
 
     #[test]

@@ -43,6 +43,20 @@ Each worktree is a new directory. Claude Code asks if you trust the directory th
 
 If dispatch runs inside tmux, the window goes into your current tmux session. If not, dispatch creates a detached session named `dispatch-<repo>`. In that case `a` suspends dispatch and runs `tmux attach`. Detach with `Ctrl-b d` to come back.
 
+Each issue row shows the state of the pull request that closes it, between the number and the title:
+
+| Icon | Meaning |
+|---|---|
+| none | No PR, or only closed PRs |
+| `◌` gray | Draft PR |
+| `●` yellow | Open PR, checks running |
+| `●` red | Open PR, checks failing |
+| `●` green | Open PR, checks passing |
+| `●` white | Open PR, no checks |
+| `✓` purple | Merged PR |
+
+If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. dispatch loads the 100 newest PRs in any state, so an older merged PR does not show. Press `r` to refresh.
+
 ## Keys
 
 | Key | Action |
