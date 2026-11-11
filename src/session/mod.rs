@@ -2,11 +2,11 @@
 //!
 //! Session truth lives in git and tmux, never in a dispatch file:
 //!
-//! - git worktree list            -> which worktrees exist, and their branch
-//! - git config branch.<b>.dispatch-issue / dispatch-skill
-//!                                -> which branches dispatch made, for which issue
-//! - tmux window option @dispatch-worktree (and @dispatch-waiting)
-//!                                -> which window runs Claude in which worktree
+//! - `git worktree list`: which worktrees exist, and their branch
+//! - `git config branch.<b>.dispatch-issue` and `dispatch-skill`: which
+//!   branches dispatch made, for which issue
+//! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
+//!   window runs Claude in which worktree
 //!
 //! `observe()` reads all three and joins them on the worktree path. Nothing is
 //! cached here; `Workspace` is immutable and `Clone`, so each worker thread
@@ -231,7 +231,6 @@ impl Workspace {
     fn layout(&self) -> Layout {
         Layout {
             repo_root: self.repo_root.clone(),
-            base: self.base.clone(),
             hooks: self.detect_waiting.then_some(WAITING_HOOKS),
             claude: self.claude.clone(),
         }
@@ -374,7 +373,6 @@ struct StartObservation {
 
 struct Layout {
     repo_root: PathBuf,
-    base: String,
     hooks: Option<&'static str>,
     claude: ClaudeCommand,
 }
@@ -558,7 +556,6 @@ mod tests {
     fn layout() -> Layout {
         Layout {
             repo_root: PathBuf::from("/a/orbit"),
-            base: "origin/main".to_string(),
             hooks: None,
             claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
         }

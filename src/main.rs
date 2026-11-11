@@ -6,10 +6,12 @@
 //!   reader of crossterm events. There is no input thread, because a thread
 //!   blocked in `event::read` would steal keys from `tmux attach` while the
 //!   TUI is suspended.
-//! - Each background `Cmd` runs on its own short-lived `std::thread`, with an
-//!   owned clone of the immutable `Workspace`, and sends exactly one `Msg` back
-//!   on an mpsc channel. `Inflight` caps it at one job per kind, so at most
-//!   about six threads exist at once. No `Mutex`, no `Arc<State>`.
+//! - Each read job (`gh`, observe, tail) runs on its own short-lived
+//!   `std::thread`, with an owned clone of the immutable `Workspace`, and sends
+//!   exactly one `Msg` back on an mpsc channel. `Inflight` caps it at one job
+//!   per kind. Start, stop, and resume go through one serial writer thread,
+//!   because two concurrent `git config` writes can fail on the `.git/config`
+//!   lock. No `Mutex`, no `Arc<State>`.
 //! - The loop: drain the channel, poll input for up to 100 ms, emit a `Tick`,
 //!   update, draw. gh latency never blocks a frame.
 
@@ -20,63 +22,173 @@ mod github;
 mod proc;
 mod rules;
 mod session;
-mod ui;
 #[cfg(test)]
 mod testutil;
+mod ui;
 
-use app::{Cmd, Job, Msg};
-use session::Workspace;
+use app::{Cmd, Context, Job, Msg};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event};
+use session::{AttachPlan, Workspace};
 use std::process::ExitCode;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+const POLL: Duration = Duration::from_millis(100);
 
 fn main() -> ExitCode {
-    // TODO:
-    // let config = config::load()           -> on Err print and exit 2 (before the TUI).
-    // let ws = Workspace::discover(cwd, config.detect_waiting) -> same.
-    // let mut terminal = ratatui::init();   (installs a panic hook that restores the tty)
-    // crossterm::execute!(stdout, EnableMouseCapture)
-    // let (tx, rx) = mpsc::channel();
-    // let (mut state, mut cmds) = app::init(Instant::now());
-    // loop {
-    //     for cmd in cmds.drain(..) {
-    //         match cmd {
-    //             Cmd::Quit => break 'outer,
-    //             Cmd::Attach(id) => { let r = attach(&mut terminal, &ws, &id); pending.push(Msg::Attached(r)) }
-    //             Cmd::Job(job) => spawn_job(ws.clone(), job, tx.clone()),
-    //         }
-    //     }
-    //     terminal.draw(|f| state.hits = ui::draw(f, &state, &config))?;
-    //     let msgs = drain(&rx) ++ pending ++ poll_input(Duration::from_millis(100)) ++ [Msg::Tick(now)];
-    //     for m in msgs { cmds.extend(app::update(&mut state, m, &config)) }
-    // }
-    // DisableMouseCapture; ratatui::restore();
-    todo!()
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("dispatch: {message}");
+            ExitCode::from(2)
+        }
+    }
 }
 
-/// Runs one background job and sends its single result.
-fn spawn_job(ws: Workspace, job: Job, tx: Sender<Msg>) {
-    // TODO: std::thread::spawn(move || {
-    //   let msg = match job {
-    //     FetchIssues      => Msg::Issues(github::fetch_issues(ws.repo_root()).map_err(..)),
-    //     FetchPrs         => Msg::Prs(..),
-    //     ObserveSessions  => Msg::Sessions(ws.observe().map_err(..)),
-    //     Tail(id)         => Msg::Tail { window: id.clone(), result: ws.tail(&id, app::TAIL_LINES) },
-    //     Start(req)       => Msg::Started { issue: req.issue, result: ws.start(&req) },
-    //     Stop(s)          => Msg::Stopped { issue: s.issue, result: ws.stop(&s) },
-    //     Resume(s)        => Msg::Resumed { .. },
-    //   };
-    //   let _ = tx.send(msg); // receiver gone = app quitting; dropping is correct
-    // });
-    todo!()
+fn run() -> Result<(), String> {
+    let config = config::load().map_err(|e| e.to_string())?;
+    let cwd = std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
+    let ws = Workspace::discover(&cwd, &config).map_err(|e| e.to_string())?;
+
+    let mut terminal = ratatui::init();
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        previous_hook(info);
+    }));
+    let result = crossterm::execute!(std::io::stdout(), EnableMouseCapture)
+        .map_err(|e| e.to_string())
+        .and_then(|()| event_loop(&mut terminal, &ws, &config));
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+    ratatui::restore();
+    result
 }
 
-/// Switch: run the argv, return. Suspend: DisableMouseCapture, ratatui::restore(),
-/// run `tmux ... attach-session` with inherited stdio and wait, ratatui::init(),
-/// EnableMouseCapture, terminal.clear().
+fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &config::Config) -> Result<(), String> {
+    let (tx, rx) = mpsc::channel::<Msg>();
+    let writer = spawn_writer(ws.clone(), tx.clone());
+    let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    let context = Context { repo_name, base: ws.base().to_string() };
+    let (mut state, mut cmds) = app::init(Instant::now(), config, context);
+    let mut pending: Vec<Msg> = Vec::new();
+    loop {
+        for cmd in std::mem::take(&mut cmds) {
+            match cmd {
+                Cmd::Quit => return Ok(()),
+                Cmd::Attach(id) => pending.push(Msg::Attached(attach(terminal, ws, &id))),
+                Cmd::Job(job) => dispatch_job(ws, job, &tx, &writer),
+            }
+        }
+        let mut hits = app::HitMap::default();
+        terminal.draw(|frame| hits = ui::draw(frame, &state, config)).map_err(|e| e.to_string())?;
+        state.hits = hits;
+
+        let mut msgs: Vec<Msg> = drain(&rx);
+        msgs.append(&mut pending);
+        msgs.extend(poll_input(POLL)?);
+        msgs.push(Msg::Tick(Instant::now()));
+        for msg in msgs {
+            cmds.extend(app::update(&mut state, msg, config));
+        }
+    }
+}
+
+/// A write job, run in order on the writer thread.
+enum WriteJob {
+    Start(session::StartRequest),
+    Stop(domain::IssueNumber),
+    Resume(domain::IssueNumber),
+}
+
+fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
+    let (writer, jobs) = mpsc::channel::<WriteJob>();
+    std::thread::spawn(move || {
+        for job in jobs {
+            let msg = match job {
+                WriteJob::Start(req) => {
+                    Msg::Started { issue: req.issue, result: ws.start(&req).map_err(|e| e.to_string()) }
+                }
+                WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
+                WriteJob::Resume(issue) => Msg::Resumed { issue, result: ws.resume(issue).map_err(|e| e.to_string()) },
+            };
+            if tx.send(msg).is_err() {
+                return;
+            }
+        }
+    });
+    writer
+}
+
+fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<WriteJob>) {
+    match job {
+        Job::Start(req) => {
+            let _ = writer.send(WriteJob::Start(req));
+        }
+        Job::Stop(issue) => {
+            let _ = writer.send(WriteJob::Stop(issue));
+        }
+        Job::Resume(issue) => {
+            let _ = writer.send(WriteJob::Resume(issue));
+        }
+        Job::FetchIssues => spawn_read(ws, tx, |ws| Msg::Issues(github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string()))),
+        Job::FetchPrs => spawn_read(ws, tx, |ws| Msg::Prs(github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string()))),
+        Job::ObserveSessions => spawn_read(ws, tx, |ws| Msg::Sessions(ws.observe().map_err(|e| e.to_string()))),
+        Job::Tail(id) => spawn_read(ws, tx, move |ws| {
+            let result = ws.tail(&id, app::TAIL_LINES).map_err(|e| e.to_string());
+            Msg::Tail { window: id, result }
+        }),
+    }
+}
+
+/// One short thread per read job. A closed channel means the app is quitting,
+/// so a dropped result is correct.
+fn spawn_read(ws: &Workspace, tx: &Sender<Msg>, job: impl FnOnce(&Workspace) -> Msg + Send + 'static) {
+    let (ws, tx) = (ws.clone(), tx.clone());
+    std::thread::spawn(move || {
+        let _ = tx.send(job(&ws));
+    });
+}
+
+/// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
+/// inherited stdio and wait, then restore the TUI.
 fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, window: &session::WindowId) -> Result<(), String> {
-    todo!()
+    match ws.attach_plan(window) {
+        AttachPlan::Switch(argv) => {
+            let (program, args) = argv.split_first().ok_or("empty attach command")?;
+            proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(|e| e.to_string())
+        }
+        AttachPlan::Suspend(argv) => {
+            let (program, args) = argv.split_first().ok_or("empty attach command")?;
+            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+            ratatui::restore();
+            let status = std::process::Command::new(program).args(args).status();
+            *terminal = ratatui::init();
+            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+            terminal.clear().map_err(|e| e.to_string())?;
+            match status {
+                Ok(s) if s.success() => Ok(()),
+                Ok(s) => Err(format!("{program} exited with {s}")),
+                Err(e) => Err(format!("cannot run {program}: {e}")),
+            }
+        }
+    }
 }
 
 fn drain(rx: &Receiver<Msg>) -> Vec<Msg> {
-    todo!()
+    rx.try_iter().collect()
+}
+
+/// Waits up to `timeout` for input, then takes everything that is queued.
+fn poll_input(timeout: Duration) -> Result<Vec<Msg>, String> {
+    let mut msgs = Vec::new();
+    let mut wait = timeout;
+    while event::poll(wait).map_err(|e| e.to_string())? {
+        match event::read().map_err(|e| e.to_string())? {
+            Event::Key(key) => msgs.push(Msg::Key(key)),
+            Event::Mouse(mouse) => msgs.push(Msg::Mouse(mouse, Instant::now())),
+            _ => {}
+        }
+        wait = Duration::ZERO;
+    }
+    Ok(msgs)
 }

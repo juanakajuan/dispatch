@@ -110,10 +110,10 @@ fn parse_markers(text: &str) -> Markers {
             if let (Ok(branch), Ok(n)) = (BranchName::parse(b), value.parse::<u32>()) {
                 issues.insert(branch, IssueNumber(n));
             }
-        } else if let Some(b) = rest.strip_suffix(".dispatch-skill") {
-            if let (Ok(branch), Ok(skill)) = (BranchName::parse(b), SkillName::parse(value)) {
-                skills.insert(branch, skill);
-            }
+        } else if let (Some(b), Ok(skill)) = (rest.strip_suffix(".dispatch-skill"), SkillName::parse(value))
+            && let Ok(branch) = BranchName::parse(b)
+        {
+            skills.insert(branch, skill);
         }
     }
     issues

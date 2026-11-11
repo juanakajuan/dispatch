@@ -366,10 +366,8 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Tail { window, result } => {
             state.inflight.tail = false;
             let in_view = current_session(state).and_then(|s| s.window.as_ref()).is_some_and(|w| w.id == window);
-            if in_view {
-                if let Ok(lines) = result {
-                    state.tail = Some(Tail { window, lines });
-                }
+            if let (true, Ok(lines)) = (in_view, result) {
+                state.tail = Some(Tail { window, lines });
             }
             Vec::new()
         }

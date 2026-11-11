@@ -155,7 +155,7 @@ fn labels_spans(labels: &[String]) -> Vec<Span<'static>> {
     labels.iter().flat_map(|l| [span(format!("[{l}]"), palette::LABEL), Span::raw(" ")]).collect()
 }
 
-fn issue_of<'a>(state: &'a State, n: IssueNumber) -> Option<&'a Issue> {
+fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
     state.issues.items.iter().find(|i| i.number == n)
 }
 
