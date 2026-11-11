@@ -201,6 +201,11 @@ impl Workspace {
         &self.repo_root
     }
 
+    /// `origin/main`, for the dialog preview.
+    pub fn base(&self) -> &str {
+        &self.base
+    }
+
     /// Three subprocesses (worktree list, config regexp, tmux list-windows),
     /// then the pure `join`. A missing tmux server is an empty window list.
     pub fn observe(&self) -> Result<Sessions, SessionError> {

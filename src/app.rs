@@ -122,7 +122,16 @@ pub enum HitTarget {
     Row(RowKey),
 }
 
+/// Facts about the repo that the view shows, resolved once at startup.
+#[derive(Clone, Debug, Default)]
+pub struct Context {
+    pub repo_name: String,
+    /// `origin/main`
+    pub base: String,
+}
+
 pub struct State {
+    pub context: Context,
     pub tab: Tab,
     pub issues: Feed<Issue>,
     pub prs: Feed<PullRequest>,
@@ -193,8 +202,9 @@ pub const TAIL_LINES: u16 = 60;
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const TOAST_FOR: Duration = Duration::from_secs(5);
 
-pub fn init(now: Instant, config: &Config) -> (State, Vec<Cmd>) {
+pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>) {
     let state = State {
+        context,
         tab: Tab::Issues,
         issues: Feed { items: Vec::new(), status: FeedStatus::Loading },
         prs: Feed { items: Vec::new(), status: FeedStatus::Loading },
@@ -831,7 +841,7 @@ mod tests {
     fn app() -> (State, Config, Instant) {
         let now = Instant::now();
         let config = Config::default();
-        let (mut state, _) = init(now, &config);
+        let (mut state, _) = init(now, &config, Context::default());
         state.issues = Feed {
             items: vec![issue(3, "Retry queue drops jobs", &["bug"]), issue(2, "Docs for plugins", &["docs"]), issue(1, "Add json output", &["feature"])],
             status: FeedStatus::Fresh,
@@ -858,7 +868,7 @@ mod tests {
 
     #[test]
     fn init_asks_for_all_three_reads() {
-        let (state, cmds) = init(Instant::now(), &Config::default());
+        let (state, cmds) = init(Instant::now(), &Config::default(), Context::default());
         let jobs: Vec<_> = cmds.iter().map(|c| matches!(c, Cmd::Job(_))).collect();
         assert_eq!(jobs, [true, true, true]);
         assert!(state.inflight.issues && state.inflight.prs && state.inflight.sessions);
