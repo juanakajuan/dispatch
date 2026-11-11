@@ -55,6 +55,7 @@
    }
   ],
   "title": "feat(export): report CPU, memory and disk in JSON metadata",
+  "updatedAt": "2026-11-08T00:07:11Z",
   "url": "https://github.com/sharkdp/hyperfine/pull/1028"
  },
  {
@@ -113,6 +114,7 @@
    }
   ],
   "title": "test(integration): ignore ambient forced color",
+  "updatedAt": "2026-10-12T08:33:48Z",
   "url": "https://github.com/sharkdp/hyperfine/pull/1002"
  },
  {
@@ -157,6 +159,7 @@
    }
   ],
   "title": "Add guided multi-account setup and evaluation",
+  "updatedAt": "2026-11-03T21:29:03Z",
   "url": "https://github.com/cli/cli/pull/14927"
  },
  {
@@ -194,6 +197,7 @@
   "state": "OPEN",
   "statusCheckRollup": [],
   "title": "Fix project scope errors during issue creation",
+  "updatedAt": "2026-10-23T15:08:26Z",
   "url": "https://github.com/cli/cli/pull/14035"
  }
 ]

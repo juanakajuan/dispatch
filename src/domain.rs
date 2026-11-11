@@ -120,6 +120,7 @@ pub struct Issue {
     pub labels: Vec<String>,
     pub author: String,
     pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
     pub comment_count: usize,
     pub body: String,
     pub url: String,
@@ -150,6 +151,7 @@ pub struct PullRequest {
     pub state: PrState,
     pub author: String,
     pub created_at: jiff::Timestamp,
+    pub updated_at: jiff::Timestamp,
     pub head: String,
     /// The head commit SHA. A direct merge pins it, so a push after the
     /// check can not merge unchecked code.

@@ -64,7 +64,7 @@ mod tests {
     fn view_in(state: &str, mergeable: &str, status: &str, checks: &str) -> String {
         format!(
             r#"{{"number":10,"title":"t","state":"{state}","isDraft":false,"author":null,
-            "createdAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
             "statusCheckRollup":[{checks}],"mergeable":"{mergeable}","mergeStateStatus":"{status}",
             "closingIssuesReferences":[],"url":"u"}}"#
         )

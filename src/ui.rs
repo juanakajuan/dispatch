@@ -335,13 +335,21 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Inst
     let used = usize::from(x.saturating_sub(area.x));
     let room = usize::from(area.width).saturating_sub(used + 1);
     let repo = &state.context.repo_name;
-    let right = match freshness(state, now) {
+    let mut right = match freshness(state, now) {
         Some((text, style)) if cells(&text) + 3 + cells(repo) <= room => {
             vec![span(text, style), Span::raw("   "), span(repo.clone(), palette::DIM)]
         }
         Some((text, style)) => vec![span(fit(&text, room), style)],
         None => vec![span(fit(repo, room), palette::DIM)],
     };
+    let sort = [
+        span("S", palette::ACCENT),
+        span(format!(" sort: {}", state.sort.label(state.tab)), palette::DIM),
+        Span::raw("   "),
+    ];
+    if spans_width(&sort) + spans_width(&right) <= room {
+        right.splice(0..0, sort);
+    }
     spans.push(Span::raw(" ".repeat(room.saturating_sub(spans_width(&right)))));
     spans.extend(right);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -1144,6 +1152,19 @@ mod tests {
         assert_eq!(wrap_text("aa bb cc", 5, 3), ["aa bb", "cc"]);
         assert_eq!(wrap_text("aa bb cc dd", 2, 2), ["aa", "b…"]);
         assert_eq!(wrap_text("abcdefgh", 4, 3), ["abc…"]);
+    }
+
+    #[test]
+    fn the_tab_row_shows_the_shown_tabs_sort_mode_when_it_fits() {
+        let (mut state, config) = full_state();
+        let top = |state: &State, w| text(&render(state, &config, w, 24)).lines().next().unwrap_or_default().to_string();
+        assert!(top(&state, 120).ends_with("S sort: attention   updated 0s ago   orbit "), "{}", top(&state, 120));
+        let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)), &config);
+        assert!(top(&state, 120).contains("S sort: newest"));
+        send(&mut state, &config, KeyCode::Char('2'));
+        assert!(top(&state, 120).contains("S sort: attention"), "each tab has its own mode");
+        let narrow = top(&state, 90);
+        assert!(!narrow.contains("sort") && narrow.ends_with("updated 0s ago   orbit "), "the mode goes before the age and the repo: {narrow}");
     }
 
     #[test]

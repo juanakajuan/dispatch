@@ -8,6 +8,7 @@ use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode
 use crate::merge::MergeOutcome;
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::session::{Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
+use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
@@ -162,6 +163,7 @@ pub struct State {
     /// app owns; it covers the gap before the next observation shows the window.
     pub starting: BTreeSet<IssueNumber>,
     pub selected: Selected,
+    pub sort: Sorts,
     pub filter: String,
     pub focus: Focus,
     pub tail: Option<Tail>,
@@ -204,6 +206,32 @@ enum Fixer {
     Agent(IssueNumber),
     /// A new session for this issue, on the PR's branch.
     NewSession(IssueNumber),
+}
+
+/// Each tab's sort mode. `S` cycles the shown tab's mode only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Sorts {
+    pub issues: IssueSort,
+    pub prs: PrSort,
+    pub sessions: SessionSort,
+}
+
+impl Sorts {
+    fn cycle(&mut self, tab: Tab) {
+        match tab {
+            Tab::Issues => self.issues = self.issues.next(),
+            Tab::Prs => self.prs = self.prs.next(),
+            Tab::Sessions => self.sessions = self.sessions.next(),
+        }
+    }
+
+    pub fn label(&self, tab: Tab) -> &'static str {
+        match tab {
+            Tab::Issues => self.issues.label(),
+            Tab::Prs => self.prs.label(),
+            Tab::Sessions => self.sessions.label(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -278,6 +306,7 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         sessions: Sessions::new(),
         starting: BTreeSet::new(),
         selected: Selected::default(),
+        sort: Sorts::default(),
         filter: String::new(),
         focus: Focus::List,
         tail: None,
@@ -322,6 +351,7 @@ pub enum Action {
     Refresh,
     Filter,
     ClearFilter,
+    Sort,
     SplitNarrower,
     SplitWider,
     SplitReset,
@@ -382,6 +412,8 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
     Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
+    // Not in the key bar: the tab row shows `S sort: <mode>`.
+    Binding { keys: &[Key::Char('S')], action: Action::Sort, bar: &[] },
     Binding { keys: &[Key::Char('<')], action: Action::SplitNarrower, bar: &[] },
     Binding { keys: &[Key::Char('>')], action: Action::SplitWider, bar: &[] },
     Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
@@ -638,6 +670,13 @@ fn act(state: &mut State, action: Action, armed: Option<Armed>, config: &Config)
         }
         Action::Filter => state.focus = Focus::Filter,
         Action::ClearFilter => state.filter.clear(),
+        Action::Sort => {
+            // Pin the shown row first, so the first-row fallback can not move it.
+            if let Some(key) = selected_row(state) {
+                select(state, key);
+            }
+            state.sort.cycle(state.tab);
+        }
         Action::SplitNarrower => state.split = state.split.narrower(state.hits.panes.width),
         Action::SplitWider => state.split = state.split.wider(state.hits.panes.width),
         Action::SplitReset => state.split = config.split,
@@ -1038,43 +1077,60 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
 
 // ---- pure view helpers, shared by update and ui ----------------------------
 
-/// Rows of the current tab after the filter. The single definition of
-/// "what is in the list"; ui renders it and update moves through it.
+/// Rows of the current tab after the filter, in the tab's sort order. The
+/// single definition of "what is in the list"; ui renders it and update moves
+/// through it.
 pub fn visible_rows(state: &State) -> Vec<RowKey> {
     let f = state.filter.as_str();
+    let activity = |n| activity(state, n);
     match state.tab {
-        Tab::Issues => state
-            .issues
-            .items
-            .iter()
-            .filter(|i| {
-                let number = format!("#{}", i.number.0);
-                let mut parts = vec![number.as_str(), i.title.as_str()];
-                parts.extend(i.labels.iter().map(String::as_str));
-                rules::matches_filter(&parts, f)
-            })
-            .map(|i| RowKey::Issue(i.number))
-            .collect(),
-        Tab::Prs => state
-            .prs
-            .items
-            .iter()
-            .filter(|p| rules::matches_filter(&[&format!("#{}", p.number.0), &p.title, &p.head], f))
-            .map(|p| RowKey::Pr(p.number))
-            .collect(),
+        Tab::Issues => {
+            let mut rows: Vec<&Issue> = state
+                .issues
+                .items
+                .iter()
+                .filter(|i| {
+                    let number = format!("#{}", i.number.0);
+                    let mut parts = vec![number.as_str(), i.title.as_str()];
+                    parts.extend(i.labels.iter().map(String::as_str));
+                    rules::matches_filter(&parts, f)
+                })
+                .collect();
+            sort::issues(&mut rows, state.sort.issues, activity);
+            rows.into_iter().map(|i| RowKey::Issue(i.number)).collect()
+        }
+        Tab::Prs => {
+            let mut rows: Vec<&PullRequest> = state
+                .prs
+                .items
+                .iter()
+                .filter(|p| rules::matches_filter(&[&format!("#{}", p.number.0), &p.title, &p.head], f))
+                .collect();
+            sort::prs(&mut rows, state.sort.prs);
+            rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
+        }
         Tab::Sessions => {
             let numbers: BTreeSet<IssueNumber> = state.sessions.keys().chain(state.starting.iter()).copied().collect();
-            numbers
+            let mut rows: Vec<IssueNumber> = numbers
                 .into_iter()
-                .rev()
                 .filter(|n| {
                     let title = state.issues.items.iter().find(|i| i.number == *n).map_or("", |i| i.title.as_str());
                     let branch = state.sessions.get(n).map_or("", |s| s.branch.as_str());
                     rules::matches_filter(&[&format!("#{}", n.0), title, branch], f)
                 })
-                .map(RowKey::Session)
-                .collect()
+                .collect();
+            sort::sessions(&mut rows, state.sort.sessions, activity);
+            rows.into_iter().map(RowKey::Session).collect()
         }
+    }
+}
+
+/// The state of issue `n`'s session for sorting. A start in flight counts as
+/// running, so the row does not jump when the window appears.
+fn activity(state: &State, n: IssueNumber) -> Option<SessionState> {
+    match state.sessions.get(&n) {
+        Some(s) => Some(s.state()),
+        None => state.starting.contains(&n).then_some(SessionState::Running),
     }
 }
 
@@ -1160,7 +1216,8 @@ mod tests {
         }
     }
 
-    /// Three issues (#3 bug, #2 docs, #1 feature), idle jobs.
+    /// Three issues (#3 bug, #2 docs, #1 feature) and two open PRs (#10
+    /// newer, #11), idle jobs.
     fn app() -> (State, Config, Instant) {
         let now = Instant::now();
         let config = Config::default();
@@ -1169,7 +1226,9 @@ mod tests {
             items: vec![issue(3, "Retry queue drops jobs", &["bug"]), issue(2, "Docs for plugins", &["docs"]), issue(1, "Add json output", &["feature"])],
             status: FeedStatus::Fresh { at: now },
         };
-        state.prs = Feed { items: vec![pr(10, "fix/3-x", &[3]), pr(11, "other", &[])], status: FeedStatus::Fresh { at: now } };
+        let newer = jiff::Timestamp::from_second(60).expect("in range");
+        let items = vec![PullRequest { created_at: newer, ..pr(10, "fix/3-x", &[3]) }, pr(11, "other", &[])];
+        state.prs = Feed { items, status: FeedStatus::Fresh { at: now } };
         state.inflight = Inflight::default();
         (state, config, now)
     }
@@ -1529,13 +1588,13 @@ mod tests {
     }
 
     #[test]
-    fn sessions_tab_lists_sessions_and_starting_issues_newest_first() {
+    fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(1), session(1, None));
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.starting.insert(IssueNumber(2));
         press(&mut state, &config, key('3'));
-        assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(1))]);
+        assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(1))]);
         press(&mut state, &config, key('/'));
         for c in "docs".chars() {
             press(&mut state, &config, key(c));
@@ -1873,7 +1932,7 @@ mod tests {
         let (mut state, config, _) = app();
         state.prs.items[1].mergeability = Mergeability::Conflict;
         press(&mut state, &config, key('2'));
-        press(&mut state, &config, key('j'));
+        state.selected.pr = Some(PrNumber(11));
         assert!(press(&mut state, &config, key('m')).is_empty());
         assert_eq!(toast(&state), "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it.");
         assert!(state.armed.is_none());
@@ -1981,5 +2040,109 @@ mod tests {
         let mut ev = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         ev.kind = KeyEventKind::Release;
         assert!(press(&mut state, &config, Msg::Key(ev)).is_empty());
+    }
+
+    /// What a terminal sends for `S`.
+    fn shift_s() -> Msg {
+        Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+    }
+
+    fn numbers(state: &State) -> Vec<u32> {
+        visible_rows(state)
+            .into_iter()
+            .map(|k| match k {
+                RowKey::Issue(n) | RowKey::Session(n) => n.0,
+                RowKey::Pr(n) => n.0,
+            })
+            .collect()
+    }
+
+    /// `app()` plus: #1 needs you and has the most comments, #2 was updated last.
+    fn sortable() -> (State, Config) {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
+        state.issues.items[2].comment_count = 5;
+        state.issues.items[1].updated_at = jiff::Timestamp::from_second(60).expect("in range");
+        (state, config)
+    }
+
+    #[test]
+    fn s_cycles_every_issue_mode_in_order_and_wraps() {
+        let (mut state, config) = sortable();
+        let mut seen = vec![(state.sort.label(Tab::Issues), numbers(&state))];
+        for _ in 0..IssueSort::ALL.len() {
+            assert!(press(&mut state, &config, shift_s()).is_empty());
+            seen.push((state.sort.label(Tab::Issues), numbers(&state)));
+        }
+        assert_eq!(
+            seen,
+            [
+                ("attention", vec![1, 3, 2]),
+                ("newest", vec![3, 2, 1]),
+                ("oldest", vec![1, 2, 3]),
+                ("recently updated", vec![2, 3, 1]),
+                ("number", vec![1, 2, 3]),
+                ("most comments", vec![1, 3, 2]),
+                ("attention", vec![1, 3, 2]),
+            ]
+        );
+    }
+
+    #[test]
+    fn each_tab_keeps_its_own_mode() {
+        let (mut state, config) = sortable();
+        press(&mut state, &config, shift_s());
+        press(&mut state, &config, key('2'));
+        assert_eq!(state.sort.label(Tab::Prs), "attention");
+        assert_eq!(numbers(&state), [10, 11]);
+        for _ in 0..4 {
+            press(&mut state, &config, shift_s());
+        }
+        assert_eq!(state.sort.label(Tab::Prs), "number");
+        assert_eq!(numbers(&state), [10, 11]);
+        press(&mut state, &config, shift_s());
+        assert_eq!(state.sort.label(Tab::Prs), "attention", "PRs have no comment mode");
+
+        press(&mut state, &config, key('3'));
+        state.sessions.insert(IssueNumber(9), session(9, Some((true, false))));
+        state.sessions.insert(IssueNumber(10), session(10, None));
+        assert_eq!(numbers(&state), [1, 9, 10]);
+        press(&mut state, &config, shift_s());
+        assert_eq!(state.sort.label(Tab::Sessions), "number");
+        assert_eq!(numbers(&state), [1, 9, 10]);
+        state.sessions.insert(IssueNumber(1), session(1, None));
+        assert_eq!(numbers(&state), [1, 9, 10], "number mode ignores the state");
+        press(&mut state, &config, shift_s());
+        assert_eq!(numbers(&state), [9, 1, 10]);
+
+        press(&mut state, &config, key('1'));
+        assert_eq!(state.sort.label(Tab::Issues), "newest");
+    }
+
+    #[test]
+    fn re_sorting_keeps_the_selected_row_even_when_it_was_only_the_first() {
+        let (mut state, config) = sortable();
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
+        press(&mut state, &config, shift_s());
+        assert_eq!(numbers(&state), [3, 2, 1]);
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
+        press(&mut state, &config, key('k'));
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
+        press(&mut state, &config, shift_s());
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
+    }
+
+    #[test]
+    fn the_sort_applies_to_the_filtered_rows_and_typing_s_in_the_filter_is_text() {
+        let (mut state, config) = sortable();
+        press(&mut state, &config, key('/'));
+        press(&mut state, &config, key('j'));
+        press(&mut state, &config, shift_s());
+        assert_eq!(state.filter, "jS");
+        state.filter = "j".to_string();
+        press(&mut state, &config, code(KeyCode::Enter));
+        assert_eq!(numbers(&state), [1, 3]);
+        press(&mut state, &config, shift_s());
+        assert_eq!(numbers(&state), [3, 1]);
     }
 }
