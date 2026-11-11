@@ -24,6 +24,7 @@ pub fn pr(number: u32, head: &str, closes: &[u32]) -> PullRequest {
         author: "octo".to_string(),
         created_at: jiff::Timestamp::UNIX_EPOCH,
         head: head.to_string(),
+        head_oid: format!("sha{number}"),
         base: "main".to_string(),
         additions: 1,
         deletions: 0,

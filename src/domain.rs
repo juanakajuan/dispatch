@@ -151,6 +151,9 @@ pub struct PullRequest {
     pub author: String,
     pub created_at: jiff::Timestamp,
     pub head: String,
+    /// The head commit SHA. A direct merge pins it, so a push after the
+    /// check can not merge unchecked code.
+    pub head_oid: String,
     pub base: String,
     pub additions: u32,
     pub deletions: u32,

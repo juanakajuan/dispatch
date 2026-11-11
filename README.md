@@ -86,9 +86,9 @@ The Sessions tab shows the last lines of the Claude pane for the selected sessio
 
 Press `m` twice on a session, its issue, or its PR. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
 
-- If the PR is clean, dispatch runs `gh pr merge <n> --<method>` itself. No agent turn. The toast shows the result.
+- If the PR is clean, dispatch runs `gh pr merge <n> --<method> --match-head-commit <sha>` itself. No agent turn. The toast shows the result. If a push lands after the check, GitHub refuses the merge. If the repo uses a merge queue, the toast says the PR is in the queue.
 - If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, dispatch sends the session's agent a prompt. The prompt names the problem and the merge method, for example: "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
-- If checks are still running, or GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.
+- If checks are still running, if a blocked PR has no checks yet, or if GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.
 
 dispatch never passes `--delete-branch`, because the session's worktree still has the branch checked out.
 

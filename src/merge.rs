@@ -1,7 +1,7 @@
 //! The second `m`: look at the PR again, because the list can be a minute
 //! old, then merge it here or hand it to the session's agent.
 
-use crate::domain::{MergeMethod, PrNumber};
+use crate::domain::{MergeMethod, PrNumber, PrState};
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::{github, proc};
 use std::path::Path;
@@ -12,6 +12,8 @@ pub const SETTING: &str = "dispatch.mergeMethod";
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
     Merged(MergeMethod),
+    /// `gh pr merge` succeeded but the PR is still open: a merge queue took it.
+    Queued,
     /// The agent must fix `problem`, then merge with `method`.
     Handoff { problem: MergeProblem, method: MergeMethod, base: String },
     Refused(String),
@@ -28,8 +30,9 @@ pub fn merge(repo_root: &Path, pr: PrNumber) -> Result<MergeOutcome, String> {
     let method = rules::merge_method(configured_method(repo_root)?, &allowed)?;
     match problem {
         None => {
-            github::merge_pr(repo_root, pr, method).map_err(|e| e.to_string())?;
-            Ok(MergeOutcome::Merged(method))
+            github::merge_pr(repo_root, &fresh, method).map_err(|e| e.to_string())?;
+            let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
+            Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
         }
         Some(problem) => Ok(MergeOutcome::Handoff { problem, method, base: fresh.base }),
     }
@@ -54,20 +57,39 @@ mod tests {
     const ALL_ALLOWED: &str = r#"{"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#;
 
     fn view(mergeable: &str, status: &str, checks: &str) -> String {
+        view_in("OPEN", mergeable, status, checks)
+    }
+
+    fn view_in(state: &str, mergeable: &str, status: &str, checks: &str) -> String {
         format!(
-            r#"{{"number":10,"title":"t","state":"OPEN","isDraft":false,"author":null,
-            "createdAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","baseRefName":"main","additions":1,"deletions":0,
+            r#"{{"number":10,"title":"t","state":"{state}","isDraft":false,"author":null,
+            "createdAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
             "statusCheckRollup":[{checks}],"mergeable":"{mergeable}","mergeStateStatus":"{status}",
             "closingIssuesReferences":[],"url":"u"}}"#
         )
     }
 
-    /// Answers `gh pr view` with `pr`, `git config` with `setting`, `gh repo
-    /// view` with `allowed`, and anything else (the merge) with success.
+    /// Answers `gh pr view` with `pr` before the merge and a merged PR after
+    /// it, `git config` with `setting`, `gh repo view` with `allowed`, and the
+    /// merge with success.
     fn world(pr: String, setting: Option<&'static str>, allowed: &'static str) {
+        world_after(pr, view_in("MERGED", "UNKNOWN", "UNKNOWN", ""), setting, allowed, Ok(String::new()));
+    }
+
+    fn world_after(
+        pr: String,
+        after: String,
+        setting: Option<&'static str>,
+        allowed: &'static str,
+        merge: Result<String, &'static str>,
+    ) {
+        let mut merged = false;
         fake::install(move |call| {
             if call.starts_with("gh pr view") {
-                Ok(pr.clone())
+                Ok(if merged { after.clone() } else { pr.clone() })
+            } else if call.starts_with("gh pr merge") {
+                merged = merge.is_ok();
+                merge.clone().map_err(|e| fake::fail("gh", 1, e))
             } else if call.starts_with("git config") {
                 setting.map(|s| format!("{s}\n")).ok_or_else(|| fake::fail("git", 1, ""))
             } else if call.starts_with("gh repo view") {
@@ -86,7 +108,7 @@ mod tests {
     fn a_clean_pr_merges_with_the_configured_method() {
         world(view("MERGEABLE", "CLEAN", ""), Some("squash"), ALL_ALLOWED);
         assert_eq!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Merged(MergeMethod::Squash)));
-        assert_eq!(merges(), ["gh pr merge 10 --squash"]);
+        assert_eq!(merges(), ["gh pr merge 10 --squash --match-head-commit abc"]);
         assert!(fake::calls().contains(&"git config --get dispatch.mergeMethod".to_string()));
     }
 
@@ -95,7 +117,7 @@ mod tests {
         let only_rebase = r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":false}"#;
         world(view("MERGEABLE", "CLEAN", ""), None, only_rebase);
         assert_eq!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Merged(MergeMethod::Rebase)));
-        assert_eq!(merges(), ["gh pr merge 10 --rebase"]);
+        assert_eq!(merges(), ["gh pr merge 10 --rebase --match-head-commit abc"]);
     }
 
     #[test]
@@ -138,5 +160,31 @@ mod tests {
         let err = merge(Path::new("/r"), PrNumber(10)).expect_err("rejected");
         assert_eq!(err, r#"dispatch.mergeMethod is "fast-forward". Use merge, squash, or rebase."#);
         assert!(merges().is_empty());
+    }
+
+    #[test]
+    fn a_merge_queue_that_takes_the_pr_reads_as_queued_not_merged() {
+        let still_open = view("MERGEABLE", "CLEAN", "");
+        world_after(view("MERGEABLE", "CLEAN", ""), still_open, None, ALL_ALLOWED, Ok(String::new()));
+        assert_eq!(merge(Path::new("/r"), PrNumber(10)), Ok(MergeOutcome::Queued));
+    }
+
+    #[test]
+    fn a_failed_gh_merge_is_an_error() {
+        let after = view_in("MERGED", "UNKNOWN", "UNKNOWN", "");
+        world_after(view("MERGEABLE", "CLEAN", ""), after, None, ALL_ALLOWED, Err("Head branch was modified"));
+        let err = merge(Path::new("/r"), PrNumber(10)).expect_err("fails");
+        assert!(err.contains("Head branch was modified"), "{err}");
+    }
+
+    #[test]
+    fn behind_and_blocked_prs_go_to_the_agent() {
+        for (status, problem) in [("BEHIND", MergeProblem::Behind), ("BLOCKED", MergeProblem::Blocked)] {
+            let passed = r#"{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}"#;
+            world(view("MERGEABLE", status, passed), None, ALL_ALLOWED);
+            let want = MergeOutcome::Handoff { problem, method: MergeMethod::Merge, base: "main".to_string() };
+            assert_eq!(merge(Path::new("/r"), PrNumber(10)), Ok(want), "{status}");
+            assert!(merges().is_empty());
+        }
     }
 }

@@ -116,6 +116,9 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
         (Mergeability::Unstable, _) => MergePlan::Handoff(MergeProblem::ChecksFailing),
         (Mergeability::Unknown, _) => MergePlan::Refuse(format!("GitHub does not know yet if PR #{n} can merge. Try again in a moment.")),
         (Mergeability::Behind, _) => MergePlan::Handoff(MergeProblem::Behind),
+        (Mergeability::Blocked, Checks::None) => MergePlan::Refuse(format!(
+            "PR #{n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
+        )),
         (Mergeability::Blocked, _) => MergePlan::Handoff(MergeProblem::Blocked),
         (Mergeability::Clean, _) => MergePlan::Direct,
     }
@@ -251,6 +254,7 @@ mod tests {
         assert_eq!(plan(Mergeability::Blocked, Checks::Pass), MergePlan::Handoff(MergeProblem::Blocked));
         assert!(matches!(plan(Mergeability::Blocked, Checks::Pending), MergePlan::Refuse(why) if why.contains("still running")));
         assert!(matches!(plan(Mergeability::Unknown, Checks::Pass), MergePlan::Refuse(why) if why.contains("Try again")));
+        assert!(matches!(plan(Mergeability::Blocked, Checks::None), MergePlan::Refuse(why) if why.contains("no checks yet")), "nothing for the agent to fix");
     }
 
     #[test]

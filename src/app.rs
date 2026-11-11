@@ -662,6 +662,12 @@ fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>
             refresh_github(state, &mut cmds);
             cmds
         }
+        Ok(MergeOutcome::Queued) => {
+            say(state, format!("PR #{} is in the merge queue", ask.pr.0));
+            let mut cmds = Vec::new();
+            refresh_github(state, &mut cmds);
+            cmds
+        }
         Ok(MergeOutcome::Handoff { problem, method, base }) => {
             let sentence = rules::problem_sentence(ask.pr, &base, problem);
             say(state, format!("{sentence} Asking #{}'s agent to fix it.", ask.issue.0));
@@ -1542,6 +1548,14 @@ mod tests {
         assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
         assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
         assert_eq!(toast(&state), "PR #10 has failing checks. Asking #3's agent to fix it.");
+    }
+
+    #[test]
+    fn a_queued_merge_says_so() {
+        let (mut state, config, _) = app();
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Queued) });
+        assert_eq!(toast(&state), "PR #10 is in the merge queue");
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
     }
 
     #[test]

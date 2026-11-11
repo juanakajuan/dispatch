@@ -26,7 +26,7 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
 }
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,headRefName,baseRefName,additions,deletions,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
+const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
 
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
     let json = proc::run("gh", ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], repo_root)
@@ -58,11 +58,14 @@ pub fn allowed_merge_methods(repo_root: &Path) -> Result<Vec<MergeMethod>, Fetch
     .collect())
 }
 
-/// `gh pr merge <n> --<method>`. No `--delete-branch`: the session's worktree
-/// still has the branch checked out, and dispatch never deletes branches.
-pub fn merge_pr(repo_root: &Path, pr: PrNumber, method: MergeMethod) -> Result<(), FetchError> {
+/// `gh pr merge <n> --<method> --match-head-commit <sha>`. GitHub refuses the
+/// merge if the head moved after dispatch checked it. No `--delete-branch`:
+/// the session's worktree still has the branch checked out, and dispatch
+/// never deletes branches.
+pub fn merge_pr(repo_root: &Path, pr: &PullRequest, method: MergeMethod) -> Result<(), FetchError> {
     let flag = format!("--{method}");
-    proc::run("gh", ["pr", "merge", &pr.0.to_string(), &flag], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
+    let args = ["pr", "merge", &pr.number.0.to_string(), &flag, "--match-head-commit", &pr.head_oid];
+    proc::run("gh", args, repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
 /// Opens the issue or PR page in the browser with `gh <kind> view <n> --web`,
@@ -125,6 +128,7 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
         state,
         author: login(w.author),
         head: w.head_ref_name,
+        head_oid: w.head_ref_oid,
         base: w.base_ref_name,
         additions: w.additions,
         deletions: w.deletions,
@@ -217,6 +221,7 @@ struct WirePr {
     author: Option<WireAuthor>,
     created_at: String,
     head_ref_name: String,
+    head_ref_oid: String,
     base_ref_name: String,
     additions: u32,
     deletions: u32,
@@ -307,7 +312,7 @@ mod tests {
     #[test]
     fn mixed_check_shapes_parse_by_typename() {
         let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"author":{"login":"a"},
-            "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","baseRefName":"b","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
@@ -333,7 +338,7 @@ mod tests {
     fn view_pr_reads_one_pr_with_the_list_fields() {
         proc::fake::install(|_| {
             Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
-                "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","baseRefName":"main","additions":1,"deletions":2,
+                "createdAt":"2026-01-02T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
                 "closingIssuesReferences":[{"number":3}],"url":"u"}"#
                 .to_string())
@@ -350,10 +355,11 @@ mod tests {
     }
 
     #[test]
-    fn merge_pr_passes_the_method_flag_and_no_branch_delete() {
+    fn merge_pr_pins_the_head_and_passes_the_method_but_no_branch_delete() {
         proc::fake::install(|_| Ok(String::new()));
-        merge_pr(Path::new("/r"), PrNumber(12), MergeMethod::Rebase).expect("merges");
-        assert_eq!(proc::fake::calls(), ["gh pr merge 12 --rebase"]);
+        let pr = PullRequest { head_oid: "abc123".to_string(), ..crate::testutil::pr(12, "h", &[]) };
+        merge_pr(Path::new("/r"), &pr, MergeMethod::Rebase).expect("merges");
+        assert_eq!(proc::fake::calls(), ["gh pr merge 12 --rebase --match-head-commit abc123"]);
     }
 
     #[test]
