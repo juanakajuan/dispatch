@@ -8,6 +8,7 @@ use crate::app::{
     self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
 };
 use crate::config::Config;
+use crate::markdown;
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::rules;
 use crate::session::{Session, SessionState};
@@ -51,6 +52,11 @@ pub mod palette {
     pub const MERGED: Style = Style::new().fg(PURPLE);
     pub const LABEL: Style = Style::new().fg(BLUE);
     pub const ERROR: Style = Style::new().fg(RED);
+    pub const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
+    pub const ITALIC: Style = Style::new().add_modifier(Modifier::ITALIC);
+    pub const STRIKE: Style = Style::new().add_modifier(Modifier::CROSSED_OUT);
+    pub const CODE: Style = Style::new().fg(AQUA);
+    pub const LINK: Style = Style::new().fg(BLUE).add_modifier(Modifier::UNDERLINED);
 }
 
 const ROW_HEIGHT: u16 = 2;
@@ -100,7 +106,7 @@ pub fn age(created: jiff::Timestamp, now: jiff::Timestamp) -> String {
 
 // ---- small text helpers ------------------------------------------------------
 
-fn cells(text: &str) -> usize {
+pub(crate) fn cells(text: &str) -> usize {
     Span::raw(text).width()
 }
 
@@ -481,42 +487,6 @@ fn labels_line(labels: &[String]) -> Line<'static> {
     Line::from(labels.iter().flat_map(|l| [span(l.clone(), palette::LABEL), Span::raw("  ")]).collect::<Vec<_>>())
 }
 
-/// A light Markdown pass for issue bodies: headings are bold without their
-/// `#` marks, code fences become a dim gutter, and runs of blank lines
-/// collapse to one. Everything else is shown as written.
-fn body_lines(body: &str) -> Vec<Line<'static>> {
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut in_code = false;
-    let mut last_blank = true;
-    for raw in body.lines().take(300) {
-        let line = raw.trim_end();
-        if line.trim_start().starts_with("```") {
-            in_code = !in_code;
-            continue;
-        }
-        if in_code {
-            out.push(Line::from(vec![span("│ ", palette::DIM), Span::raw(line.to_string())]));
-            last_blank = false;
-            continue;
-        }
-        if line.is_empty() {
-            if !last_blank {
-                out.push(Line::raw(""));
-            }
-            last_blank = true;
-            continue;
-        }
-        last_blank = false;
-        let heading = line.trim_start_matches('#');
-        if heading.len() < line.len() && heading.starts_with(' ') {
-            out.push(Line::from(span(heading.trim().to_string(), palette::HEADING)));
-        } else {
-            out.push(Line::raw(line.to_string()));
-        }
-    }
-    out
-}
-
 fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, now: jiff::Timestamp) {
     let Some(i) = issue_of(state, n) else { return };
     let mut lines: Vec<Line<'static>> = vec![
@@ -547,7 +517,7 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
         (None, true) => lines.extend([field("session", vec![badge(None, true)]), Line::raw("")]),
         (None, false) => {}
     }
-    lines.extend(body_lines(&i.body));
+    lines.extend(markdown::render(&i.body, area.width));
     let linked: Vec<&PullRequest> = app::prs_closing(state, n).collect();
     if !linked.is_empty() {
         lines.push(Line::raw(""));
