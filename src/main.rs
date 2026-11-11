@@ -120,7 +120,9 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 }
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
                 WriteJob::Resume(issue) => Msg::Resumed { issue, result: ws.resume(issue).map_err(|e| e.to_string()) },
-                WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) },
+                WriteJob::Send { issue, text } => {
+                    Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }
+                }
                 WriteJob::Merge(ask) => Msg::Merged { ask, result: merge::merge(ws.repo_root(), ask.pr) },
             };
             if tx.send(msg).is_err() {

@@ -10,9 +10,18 @@ use std::process::{Command, Stdio};
 pub enum ProcError {
     /// Program missing or not executable. The message names the program, so
     /// "tmux is not installed" reaches the user as is.
-    Spawn { program: String, source: std::io::Error },
-    Exit { program: String, code: Option<i32>, stderr: String },
-    NotUtf8 { program: String },
+    Spawn {
+        program: String,
+        source: std::io::Error,
+    },
+    Exit {
+        program: String,
+        code: Option<i32>,
+        stderr: String,
+    },
+    NotUtf8 {
+        program: String,
+    },
 }
 
 impl ProcError {

@@ -145,7 +145,12 @@ pub(super) fn fetch(root: &Path, base: &str) -> Result<(), String> {
     text(root, ["fetch", remote, branch]).map(|_| ())
 }
 
-pub(super) fn add_worktree(root: &Path, dir: &Path, branch: &BranchName, create_from: Option<&str>) -> Result<(), String> {
+pub(super) fn add_worktree(
+    root: &Path,
+    dir: &Path,
+    branch: &BranchName,
+    create_from: Option<&str>,
+) -> Result<(), String> {
     let dir = dir.to_string_lossy();
     match create_from {
         Some(base) => text(root, ["worktree", "add", dir.as_ref(), "-b", branch.as_str(), base]),
@@ -186,7 +191,12 @@ mod tests {
         let got = parse_worktrees(&text);
         let summary: Vec<_> = got
             .iter()
-            .map(|w| (w.path.as_path().file_name().expect("name").to_string_lossy().into_owned(), w.branch.as_ref().map(|b| b.as_str().to_string())))
+            .map(|w| {
+                (
+                    w.path.as_path().file_name().expect("name").to_string_lossy().into_owned(),
+                    w.branch.as_ref().map(|b| b.as_str().to_string()),
+                )
+            })
             .collect();
         assert_eq!(
             summary,
@@ -220,7 +230,9 @@ mod tests {
         std::fs::create_dir_all(&linked).expect("mkdir linked");
         use crate::proc::fake;
         let (top, common) = (linked.display().to_string(), main.join(".git").display().to_string());
-        fake::install(move |call| Ok(if call.contains("--show-toplevel") { top.clone() } else { format!("{common}\n") }));
+        fake::install(move |call| {
+            Ok(if call.contains("--show-toplevel") { top.clone() } else { format!("{common}\n") })
+        });
         let dirs = repo_dirs(&linked).expect("dirs");
         assert_eq!(dirs.root, main);
         assert_eq!(dirs.common, main.join(".git"));

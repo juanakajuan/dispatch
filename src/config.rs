@@ -169,8 +169,10 @@ mod tests {
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#)
-            .expect("valid");
+        let c = parse_str(
+            r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#,
+        )
+        .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);

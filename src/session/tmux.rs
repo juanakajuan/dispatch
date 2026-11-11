@@ -251,7 +251,8 @@ mod tests {
 
     #[test]
     fn trailing_semicolon_is_escaped_once() {
-        let argv = ["claude".to_string(), "fix it;".to_string(), "a;b".to_string(), "x\\;".to_string(), ";".to_string()];
+        let argv =
+            ["claude".to_string(), "fix it;".to_string(), "a;b".to_string(), "x\\;".to_string(), ";".to_string()];
         assert_eq!(escape_argv(&argv), ["claude", "fix it\\;", "a;b", "x\\\\;", "\\;"]);
     }
 
@@ -272,7 +273,10 @@ mod tests {
         assert_eq!(id.as_str(), "@7");
         let calls = fake::calls();
         let tmp = dir.as_path().display();
-        assert_eq!(calls[0], format!("tmux new-window -d -t $3: -P -F #{{window_id}} -c {tmp} -n #142 -- claude go\\;"));
+        assert_eq!(
+            calls[0],
+            format!("tmux new-window -d -t $3: -P -F #{{window_id}} -c {tmp} -n #142 -- claude go\\;")
+        );
         assert_eq!(
             calls[1],
             format!("tmux set-option -w -t @7 @dispatch-worktree {tmp} ; set-option -w -t @7 remain-on-exit on")

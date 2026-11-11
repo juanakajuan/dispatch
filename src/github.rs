@@ -18,7 +18,16 @@ impl fmt::Display for FetchError {
 pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
     let json = proc::run(
         "gh",
-        ["issue", "list", "--state", "open", "--limit", "200", "--json", "number,title,labels,author,createdAt,updatedAt,comments,body,url"],
+        [
+            "issue",
+            "list",
+            "--state",
+            "open",
+            "--limit",
+            "200",
+            "--json",
+            "number,title,labels,author,createdAt,updatedAt,comments,body,url",
+        ],
         repo_root,
     )
     .map_err(|e| FetchError(e.to_string()))?;
@@ -38,14 +47,19 @@ pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
 pub fn view_pr(repo_root: &Path, pr: PrNumber) -> Result<PullRequest, FetchError> {
     let json = proc::run("gh", ["pr", "view", &pr.0.to_string(), "--json", PR_FIELDS], repo_root)
         .map_err(|e| FetchError(e.to_string()))?;
-    let wire: WirePr = serde_json::from_str(&json).map_err(|e| FetchError(format!("unexpected gh pr view output: {e}")))?;
+    let wire: WirePr =
+        serde_json::from_str(&json).map_err(|e| FetchError(format!("unexpected gh pr view output: {e}")))?;
     pr_from_wire(wire)
 }
 
 /// The merge methods the repo allows, in the order `merge`, `squash`, `rebase`.
 pub fn allowed_merge_methods(repo_root: &Path) -> Result<Vec<MergeMethod>, FetchError> {
-    let json = proc::run("gh", ["repo", "view", "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"], repo_root)
-        .map_err(|e| FetchError(e.to_string()))?;
+    let json = proc::run(
+        "gh",
+        ["repo", "view", "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"],
+        repo_root,
+    )
+    .map_err(|e| FetchError(e.to_string()))?;
     let wire: WireRepoMerge =
         serde_json::from_str(&json).map_err(|e| FetchError(format!("unexpected gh repo view output: {e}")))?;
     Ok([
@@ -76,7 +90,9 @@ pub fn open_in_browser(repo_root: &Path, target: GithubRef) -> Result<(), FetchE
         GithubRef::Issue(n) => ("issue", n.0),
         GithubRef::Pr(n) => ("pr", n.0),
     };
-    proc::run("gh", [kind, "view", &number.to_string(), "--web"], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
+    proc::run("gh", [kind, "view", &number.to_string(), "--web"], repo_root)
+        .map(|_| ())
+        .map_err(|e| FetchError(e.to_string()))
 }
 
 fn timestamp(raw: &str, field: &str, what: &str) -> Result<jiff::Timestamp, FetchError> {
@@ -89,7 +105,8 @@ fn login(author: Option<WireAuthor>) -> String {
 
 /// Pure. Tested against fixture text captured from real `gh` output.
 fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
-    let wire: Vec<WireIssue> = serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh issue list output: {e}")))?;
+    let wire: Vec<WireIssue> =
+        serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh issue list output: {e}")))?;
     wire.into_iter()
         .map(|w| {
             let what = format!("issue #{}", w.number);
@@ -111,7 +128,8 @@ fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
 /// `state` OPEN with `isDraft` is a draft. Any state string that is not one
 /// of the four is an error naming the PR, never a silent default.
 fn parse_prs(json: &str) -> Result<Vec<PullRequest>, FetchError> {
-    let wire: Vec<WirePr> = serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh pr list output: {e}")))?;
+    let wire: Vec<WirePr> =
+        serde_json::from_str(json).map_err(|e| FetchError(format!("unexpected gh pr list output: {e}")))?;
     wire.into_iter().map(pr_from_wire).collect()
 }
 
@@ -166,7 +184,10 @@ fn rollup(items: &[WireCheck]) -> Checks {
         .filter_map(|c| match c {
             WireCheck::CheckRun { status, conclusion } => Some(if status != "COMPLETED" {
                 Checks::Pending
-            } else if matches!(conclusion.as_str(), "FAILURE" | "TIMED_OUT" | "CANCELLED" | "STARTUP_FAILURE" | "ACTION_REQUIRED") {
+            } else if matches!(
+                conclusion.as_str(),
+                "FAILURE" | "TIMED_OUT" | "CANCELLED" | "STARTUP_FAILURE" | "ACTION_REQUIRED"
+            ) {
                 Checks::Fail
             } else {
                 Checks::Pass
@@ -351,13 +372,18 @@ mod tests {
                 .to_string())
         });
         let pr = view_pr(Path::new("/r"), PrNumber(12)).expect("parses");
-        assert_eq!((pr.number, pr.mergeability, pr.closes.as_slice()), (PrNumber(12), Mergeability::Conflict, [IssueNumber(3)].as_slice()));
+        assert_eq!(
+            (pr.number, pr.mergeability, pr.closes.as_slice()),
+            (PrNumber(12), Mergeability::Conflict, [IssueNumber(3)].as_slice())
+        );
         assert_eq!(proc::fake::calls(), [format!("gh pr view 12 --json {PR_FIELDS}")]);
     }
 
     #[test]
     fn allowed_merge_methods_keep_gh_order() {
-        proc::fake::install(|_| Ok(r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#.to_string()));
+        proc::fake::install(|_| {
+            Ok(r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#.to_string())
+        });
         assert_eq!(allowed_merge_methods(Path::new("/r")).expect("parses"), [MergeMethod::Squash, MergeMethod::Rebase]);
     }
 

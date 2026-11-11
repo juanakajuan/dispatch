@@ -5,13 +5,11 @@
 //! (1 row). The right end of the tab bar shows how old the shown list is.
 //! List rows are two lines tall. The dialog is a centered overlay.
 
-use crate::app::{
-    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab,
-};
+use crate::app::{self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab};
 use crate::config::Config;
+use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
 use crate::markdown;
-use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::rules;
 use crate::session::{Session, SessionState};
 use ratatui::Frame;
@@ -95,7 +93,8 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     draw_list(frame, list, state, now, icons, &mut hits);
     draw_detail(frame, detail, state, now, icons);
     if let Some((lines, style)) = message {
-        let lines: Vec<Line<'static>> = lines.into_iter().map(|l| centered(vec![span(l, style)], message_area.width)).collect();
+        let lines: Vec<Line<'static>> =
+            lines.into_iter().map(|l| centered(vec![span(l, style)], message_area.width)).collect();
         frame.render_widget(Paragraph::new(lines), message_area);
     }
     draw_keys(frame, keys, state);
@@ -520,13 +519,21 @@ fn list_row(
             if !i.labels.is_empty() {
                 facts.push_str(&format!(" · {}", i.labels.join(", ")));
             }
-            (one_line(&i.title), badge(state.sessions.get(&n), state.starting.contains(&n), icons), vec![span(facts, palette::DIM)])
+            (
+                one_line(&i.title),
+                badge(state.sessions.get(&n), state.starting.contains(&n), icons),
+                vec![span(facts, palette::DIM)],
+            )
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return [Line::raw(""), Line::raw("")] };
             let mut meta = vec![span(format!("{} · {}", p.author, age(p.created_at, now)), palette::DIM)];
             if p.checks != Checks::None {
-                meta.extend([span(" · ", palette::DIM), checks_span(p.checks, icons), span(format!(" {}", checks_word(p.checks)), palette::DIM)]);
+                meta.extend([
+                    span(" · ", palette::DIM),
+                    checks_span(p.checks, icons),
+                    span(format!(" {}", checks_word(p.checks)), palette::DIM),
+                ]);
             }
             (one_line(&p.title), pr_state_span(p.state), meta)
         }
@@ -535,7 +542,11 @@ fn list_row(
             let title = issue_of(state, n).map(|i| one_line(&i.title));
             let branch = session.map(|s| s.branch.as_str().to_string());
             let meta = if title.is_some() { branch.clone().unwrap_or_default() } else { String::new() };
-            (title.or(branch).unwrap_or_default(), badge(session, state.starting.contains(&n), icons), vec![span(meta, palette::DIM)])
+            (
+                title.or(branch).unwrap_or_default(),
+                badge(session, state.starting.contains(&n), icons),
+                vec![span(meta, palette::DIM)],
+            )
         }
     };
     let marker = || if selected { span("▌ ", palette::ACCENT) } else { Span::raw("  ") };
@@ -580,7 +591,14 @@ fn labels_line(labels: &[String]) -> Line<'static> {
     Line::from(labels.iter().flat_map(|l| [span(l.clone(), palette::LABEL), Span::raw("  ")]).collect::<Vec<_>>())
 }
 
-fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumber, now: jiff::Timestamp, icons: &Icons) {
+fn draw_issue_detail(
+    frame: &mut Frame,
+    area: Rect,
+    state: &State,
+    n: IssueNumber,
+    now: jiff::Timestamp,
+    icons: &Icons,
+) {
     let Some(i) = issue_of(state, n) else { return };
     let mut lines: Vec<Line<'static>> = vec![
         Line::from(span(i.title.clone(), palette::HEADING)),
@@ -602,9 +620,16 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
     lines.push(Line::raw(""));
     match (state.sessions.get(&n), state.starting.contains(&n)) {
         (Some(s), _) => {
-            lines.push(field("session", vec![badge(Some(s), false, icons), span(format!("  {}", s.branch.as_str()), palette::DIM)]));
+            lines.push(field(
+                "session",
+                vec![badge(Some(s), false, icons), span(format!("  {}", s.branch.as_str()), palette::DIM)],
+            ));
             let width = usize::from(area.width).saturating_sub(2);
-            lines.extend(last_n(tail_lines(state, s), 3).iter().map(|l| Line::from(vec![span("│ ", palette::DIM), span(fit(l, width), palette::DIM)])));
+            lines.extend(
+                last_n(tail_lines(state, s), 3)
+                    .iter()
+                    .map(|l| Line::from(vec![span("│ ", palette::DIM), span(fit(l, width), palette::DIM)])),
+            );
             lines.push(Line::raw(""));
         }
         (None, true) => lines.extend([field("session", vec![badge(None, true, icons)]), Line::raw("")]),
@@ -629,7 +654,14 @@ fn draw_issue_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNumbe
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
-fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain::PrNumber, now: jiff::Timestamp, icons: &Icons) {
+fn draw_pr_detail(
+    frame: &mut Frame,
+    area: Rect,
+    state: &State,
+    n: crate::domain::PrNumber,
+    now: jiff::Timestamp,
+    icons: &Icons,
+) {
     let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return };
     let mut lines = vec![
         Line::from(span(p.title.clone(), palette::HEADING)),
@@ -638,7 +670,14 @@ fn draw_pr_detail(frame: &mut Frame, area: Rect, state: &State, n: crate::domain
         field("state", vec![pr_state_span(p.state)]),
         field("checks", vec![checks_span(p.checks, icons), Span::raw(format!(" {}", checks_word(p.checks)))]),
         field("branch", vec![Span::raw(format!("{} → {}", p.head, p.base))]),
-        field("diff", vec![span(format!("+{}", p.additions), palette::PASS), Span::raw(" "), span(format!("-{}", p.deletions), palette::FAIL)]),
+        field(
+            "diff",
+            vec![
+                span(format!("+{}", p.additions), palette::PASS),
+                Span::raw(" "),
+                span(format!("-{}", p.deletions), palette::FAIL),
+            ],
+        ),
     ];
     if !p.closes.is_empty() {
         let closes = p.closes.iter().map(|c| format!("#{}", c.0)).collect::<Vec<_>>().join(", ");
@@ -664,20 +703,32 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
         Line::raw(""),
         field("state", vec![badge(Some(s), false, icons)]),
         field("branch", vec![Span::raw(s.branch.as_str().to_string())]),
-        field("worktree", vec![Span::raw(fit_path(&s.worktree.as_path().display().to_string(), width.saturating_sub(FIELD_KEY_CELLS)))]),
+        field(
+            "worktree",
+            vec![Span::raw(fit_path(
+                &s.worktree.as_path().display().to_string(),
+                width.saturating_sub(FIELD_KEY_CELLS),
+            ))],
+        ),
     ];
     if let Some(p) = app::pr_for_session(state, s) {
-        head.push(field("pr", vec![Span::raw(format!("#{} ", p.number.0)), checks_span(p.checks, icons), Span::raw(" "), pr_state_span(p.state)]));
+        head.push(field(
+            "pr",
+            vec![
+                Span::raw(format!("#{} ", p.number.0)),
+                checks_span(p.checks, icons),
+                Span::raw(" "),
+                pr_state_span(p.state),
+            ],
+        ));
     }
     head.push(Line::raw(""));
     head.push(Line::from(span(format!("output {}", "─".repeat(width.saturating_sub(7))), palette::DIM)));
     let head_h = u16::try_from(head.len()).unwrap_or(u16::MAX).min(area.height);
     let [top, rest] = Layout::vertical([Constraint::Length(head_h), Constraint::Min(0)]).areas(area);
     frame.render_widget(Paragraph::new(head), top);
-    let tail: Vec<Line<'static>> = last_n(tail_lines(state, s), usize::from(rest.height))
-        .iter()
-        .map(|l| Line::raw(fit(l, width)))
-        .collect();
+    let tail: Vec<Line<'static>> =
+        last_n(tail_lines(state, s), usize::from(rest.height)).iter().map(|l| Line::raw(fit(l, width))).collect();
     frame.render_widget(Paragraph::new(tail), rest);
 }
 
@@ -765,16 +816,15 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
     modes.extend(radio(d.mode == Mode::PlanFirst, "Plan first, then wait for approval"));
     modes.push(Span::raw("    "));
     modes.extend(radio(d.mode == Mode::Implement, "Implement directly"));
-    frame.render_widget(
-        Paragraph::new(vec![field_label("Mode", focus(DialogField::Mode)), Line::from(modes)]),
-        mode,
-    );
+    frame.render_widget(Paragraph::new(vec![field_label("Mode", focus(DialogField::Mode)), Line::from(modes)]), mode);
     frame.render_widget(Paragraph::new(field_label("Prompt", focus(DialogField::Prompt))), prompt_l);
     frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), indent(prompt));
 
     let mut run_lines = vec![Line::from(span("  Runs", palette::DIM))];
     let width = usize::from(runs.width).saturating_sub(4);
-    run_lines.extend(preview(state, d, config).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))));
+    run_lines.extend(
+        preview(state, d, config).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))),
+    );
     frame.render_widget(Paragraph::new(run_lines), runs);
     if let Some(e) = &d.error {
         frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
@@ -785,11 +835,11 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
 mod tests {
     use super::*;
     use crate::app::{Context, Msg};
+    use crate::domain::Split;
     use crate::domain::{BranchName, WorktreePath};
+    use crate::glyphs::IconSet;
     use crate::session::{Window, WindowId};
     use crate::testutil::{issue, pr};
-    use crate::domain::Split;
-    use crate::glyphs::IconSet;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -805,7 +855,18 @@ mod tests {
     #[test]
     fn age_buckets() {
         let now = ts(10_000_000);
-        for (secs, want) in [(0, "now"), (59, "now"), (60, "1m"), (3599, "59m"), (3600, "1h"), (86_399, "23h"), (86_400, "1d"), (9 * 86_400, "9d"), (40 * 86_400, "1mo"), (400 * 86_400, "1y")] {
+        for (secs, want) in [
+            (0, "now"),
+            (59, "now"),
+            (60, "1m"),
+            (3599, "59m"),
+            (3600, "1h"),
+            (86_399, "23h"),
+            (86_400, "1d"),
+            (9 * 86_400, "9d"),
+            (40 * 86_400, "1mo"),
+            (400 * 86_400, "1y"),
+        ] {
             assert_eq!(age(ts(10_000_000 - secs), now), want, "{secs}s");
         }
         assert_eq!(age(ts(10_000_100), now), "now", "a clock skew never prints a negative age");
@@ -823,7 +884,11 @@ mod tests {
         assert_eq!(fit_path("/w/orbit-3", 20), "/w/orbit-3");
         assert_eq!(fit_path("/home/me/scratchpad/smoke/hf-1017", 26), "…/scratchpad/smoke/hf-1017");
         assert_eq!(fit_path("/home/me/scratchpad/smoke/hf-1017", 24), "…/smoke/hf-1017", "the cut starts at a slash");
-        assert_eq!(fit_path("/a/very-long-final-segment", 10), "…l-segment", "a segment wider than the space is cut by cells");
+        assert_eq!(
+            fit_path("/a/very-long-final-segment", 10),
+            "…l-segment",
+            "a segment wider than the space is cut by cells"
+        );
         assert_eq!(fit_path("/anything", 0), "");
     }
 
@@ -837,14 +902,25 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('3'));
         let screen = text(&render(&state, &config, 80, 24));
         let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
-        assert!(line.contains("…/") && line.trim_end().ends_with("/smoke/hf-1017"), "path end not visible in {line:?}\n{screen}");
+        assert!(
+            line.contains("…/") && line.trim_end().ends_with("/smoke/hf-1017"),
+            "path end not visible in {line:?}\n{screen}"
+        );
     }
 
     fn full_state() -> (State, Config) {
         let config = Config::default();
-        let (mut state, _) = app::init(Instant::now(), &config, Context { repo_name: "orbit".to_string(), base: "origin/main".to_string() });
+        let (mut state, _) = app::init(
+            Instant::now(),
+            &config,
+            Context { repo_name: "orbit".to_string(), base: "origin/main".to_string() },
+        );
         state.issues.items = vec![
-            issue(3, "Retry queue drops jobs when Redis reconnects after a very long title that must be cut", &["bug", "p1"]),
+            issue(
+                3,
+                "Retry queue drops jobs when Redis reconnects after a very long title that must be cut",
+                &["bug", "p1"],
+            ),
             issue(2, "Docs", &["docs"]),
         ];
         state.issues.items[0].body = "First line of the body.\n\n```\ncode block\n```".to_string();
@@ -869,15 +945,20 @@ mod tests {
 
     fn render(state: &State, config: &Config, w: u16, h: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
-        terminal.draw(|f| {
-            let _ = draw(f, state, config);
-        })
-        .expect("draw");
+        terminal
+            .draw(|f| {
+                let _ = draw(f, state, config);
+            })
+            .expect("draw");
         terminal.backend().buffer().clone()
     }
 
     fn text(buf: &Buffer) -> String {
-        buf.content().chunks(usize::from(buf.area.width)).map(|row| row.iter().map(|c| c.symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        buf.content()
+            .chunks(usize::from(buf.area.width))
+            .map(|row| row.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     fn send(state: &mut State, config: &Config, code: KeyCode) {
@@ -918,9 +999,13 @@ mod tests {
         let (state, config) = full_state();
         let buf = render(&state, &config, 100, 30);
         let width = usize::from(buf.area.width);
-        let marked: Vec<usize> = buf.content().iter().enumerate().filter(|(_, c)| c.symbol() == "▌").map(|(i, _)| i / width).collect();
+        let marked: Vec<usize> =
+            buf.content().iter().enumerate().filter(|(_, c)| c.symbol() == "▌").map(|(i, _)| i / width).collect();
         assert_eq!(marked, [2, 3], "the first row is selected, and it is two lines tall");
-        assert!(buf.content().iter().all(|c| !c.modifier.contains(Modifier::REVERSED)), "no reversed block outside a text cursor");
+        assert!(
+            buf.content().iter().all(|c| !c.modifier.contains(Modifier::REVERSED)),
+            "no reversed block outside a text cursor"
+        );
         assert!(buf.content().iter().filter(|c| c.symbol() == "▌").all(|c| c.fg == palette::ORANGE));
     }
 
@@ -959,8 +1044,14 @@ mod tests {
     #[test]
     fn issue_rows_show_the_lead_pr_state_and_follow_a_refresh() {
         let (mut state, config) = full_state();
-        let mark = |state: &State| (mark_cell(&render(state, &config, 100, 20), 3), mark_cell(&render(state, &config, 100, 20), 2));
-        assert_eq!(mark(&state), (("●".to_string(), palette::FG), (" ".to_string(), palette::FG)), "open, no checks; #2 has no PR");
+        let mark = |state: &State| {
+            (mark_cell(&render(state, &config, 100, 20), 3), mark_cell(&render(state, &config, 100, 20), 2))
+        };
+        assert_eq!(
+            mark(&state),
+            (("●".to_string(), palette::FG), (" ".to_string(), palette::FG)),
+            "open, no checks; #2 has no PR"
+        );
         for (pr_state, checks, want, color) in [
             (PrState::Draft, Checks::Pass, "◌", palette::GRAY),
             (PrState::Open, Checks::Pending, "●", palette::YELLOW),
@@ -974,7 +1065,10 @@ mod tests {
             assert_eq!(mark(&state).0, (want.to_string(), color), "{pr_state:?} {checks:?}");
         }
         let screen = text(&render(&state, &config, 100, 20));
-        assert!(screen.contains("#3    Retry queue") && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
+        assert!(
+            screen.contains("#3    Retry queue") && screen.contains("#2    Docs"),
+            "titles stay in one column\n{screen}"
+        );
     }
 
     /// The column of `needle` on the first screen line that holds `anchor`.
@@ -993,7 +1087,10 @@ mod tests {
         let screen = text(&render(&state, &nerd, 120, 24));
         let mark = mark_cell(&render(&state, &nerd, 120, 24), 3);
         assert_eq!(mark, (icons.pr_open.to_string(), palette::FG), "the PR mark cell");
-        assert!(screen.contains(&format!("#3  {} Retry queue", icons.pr_open)) && screen.contains("#2    Docs"), "titles stay in one column\n{screen}");
+        assert!(
+            screen.contains(&format!("#3  {} Retry queue", icons.pr_open)) && screen.contains("#2    Docs"),
+            "titles stay in one column\n{screen}"
+        );
         assert!(screen.contains(&format!("3 Sessions (1) {}1", icons.needs_you)), "tab count\n{screen}");
         assert!(screen.contains(&format!("{} needs you", icons.needs_you)), "session badge\n{screen}");
         for (anchor, needle) in [("#3 ", "Retry queue"), ("#2 ", "Docs"), ("#3 ", "needs you"), ("Sessions", "orbit")] {
@@ -1020,7 +1117,16 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('j'));
         send(&mut state, &config, KeyCode::Char('s'));
         let screen = text(&render(&state, &config, 120, 30));
-        for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "$ git worktree add .claude/worktrees/2 -b docs/2-docs origin/main", "claude \"Implement GitHub issue #2: Docs", "ctrl-s start"] {
+        for want in [
+            "Start session for #2 Docs",
+            "Branch",
+            "docs/2-docs",
+            "Implement directly",
+            "Runs",
+            "$ git worktree add .claude/worktrees/2 -b docs/2-docs origin/main",
+            "claude \"Implement GitHub issue #2: Docs",
+            "ctrl-s start",
+        ] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
     }
@@ -1032,7 +1138,14 @@ mod tests {
         let mut hits = HitMap::default();
         terminal.draw(|f| hits = draw(f, &state, &config)).expect("draw");
         let tabs = hits.targets.iter().filter(|(_, t)| matches!(t, HitTarget::Tab(_))).count();
-        let rows: Vec<_> = hits.targets.iter().filter_map(|(r, t)| match t { HitTarget::Row(k) => Some((r.y, *k)), _ => None }).collect();
+        let rows: Vec<_> = hits
+            .targets
+            .iter()
+            .filter_map(|(r, t)| match t {
+                HitTarget::Row(k) => Some((r.y, *k)),
+                _ => None,
+            })
+            .collect();
         assert_eq!(tabs, 3);
         assert_eq!(rows, [(2, RowKey::Issue(IssueNumber(3))), (4, RowKey::Issue(IssueNumber(2)))]);
     }
@@ -1043,8 +1156,13 @@ mod tests {
         state.issues.items.clear();
         let buf = frame(&mut state, &config, 120, 20);
         let top = text(&buf).lines().next().expect("tab row").to_string();
-        let column = |needle: &str| u16::try_from(top.chars().take(top.find(needle).expect(needle)).count()).expect("x");
-        for (label, end, tab) in [("1 Issues (0)", "(0)", Tab::Issues), ("2 Pull requests (1)", "(1)", Tab::Prs), ("3 Sessions (1) ▲1", "▲1", Tab::Sessions)] {
+        let column =
+            |needle: &str| u16::try_from(top.chars().take(top.find(needle).expect(needle)).count()).expect("x");
+        for (label, end, tab) in [
+            ("1 Issues (0)", "(0)", Tab::Issues),
+            ("2 Pull requests (1)", "(1)", Tab::Prs),
+            ("3 Sessions (1) ▲1", "▲1", Tab::Sessions),
+        ] {
             let x = column(label);
             assert_eq!(buf[(x, 0)].fg, palette::ORANGE, "{label}: the key has the key bar's accent");
             let count = column(end);
@@ -1150,7 +1268,10 @@ mod tests {
         send(&mut state, &config, KeyCode::Char('3'));
         let screen = text(&frame(&mut state, &config, 100, 20));
         let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
-        assert!(line.contains('…') && line.trim_end().ends_with("hf-1017"), "path end not visible in {line:?}\n{screen}");
+        assert!(
+            line.contains('…') && line.trim_end().ends_with("hf-1017"),
+            "path end not visible in {line:?}\n{screen}"
+        );
     }
 
     #[test]
@@ -1174,7 +1295,8 @@ mod tests {
     #[test]
     fn a_long_message_wraps_on_its_own_row_above_the_centered_keys() {
         let (mut state, config) = full_state();
-        state.toast = Some(app::Toast { text: "Press m again to ask #3's agent to merge PR #10".to_string(), shown_at: None });
+        state.toast =
+            Some(app::Toast { text: "Press m again to ask #3's agent to merge PR #10".to_string(), shown_at: None });
         let screen = text(&render(&state, &config, 30, 12));
         let lines: Vec<&str> = screen.lines().collect();
         let message = format!("{} {}", lines[9].trim(), lines[10].trim());
@@ -1209,20 +1331,25 @@ mod tests {
     #[test]
     fn the_tab_row_shows_the_shown_tabs_sort_mode_when_it_fits() {
         let (mut state, config) = full_state();
-        let top = |state: &State, w| text(&render(state, &config, w, 24)).lines().next().unwrap_or_default().to_string();
+        let top =
+            |state: &State, w| text(&render(state, &config, w, 24)).lines().next().unwrap_or_default().to_string();
         assert!(top(&state, 120).ends_with("S sort: attention   updated 0s ago   orbit "), "{}", top(&state, 120));
         let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)), &config);
         assert!(top(&state, 120).contains("S sort: newest"));
         send(&mut state, &config, KeyCode::Char('2'));
         assert!(top(&state, 120).contains("S sort: attention"), "each tab has its own mode");
         let narrow = top(&state, 90);
-        assert!(!narrow.contains("sort") && narrow.ends_with("updated 0s ago   orbit "), "the mode goes before the age and the repo: {narrow}");
+        assert!(
+            !narrow.contains("sort") && narrow.ends_with("updated 0s ago   orbit "),
+            "the mode goes before the age and the repo: {narrow}"
+        );
     }
 
     #[test]
     fn since_counts_seconds_then_minutes_then_hours() {
         let at = Instant::now();
-        for (secs, want) in [(0, "0s"), (12, "12s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h"), (7300, "2h")] {
+        for (secs, want) in [(0, "0s"), (12, "12s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h"), (7300, "2h")]
+        {
             assert_eq!(since(at, at + Duration::from_secs(secs)), want, "{secs}s");
         }
         assert_eq!(since(at + Duration::from_secs(5), at), "0s", "a response stamped after now is not negative");
@@ -1233,7 +1360,9 @@ mod tests {
         let buf = render(state, config, 120, 20);
         let row = text(&buf).lines().next().unwrap_or_default().to_string();
         let words = ["loading", "refreshing", "updated", "refresh failed"];
-        let Some(x) = words.iter().filter_map(|w| row.find(w)).min() else { return (row.trim().to_string(), palette::PLAIN) };
+        let Some(x) = words.iter().filter_map(|w| row.find(w)).min() else {
+            return (row.trim().to_string(), palette::PLAIN);
+        };
         let column = row[..x].chars().count();
         let cell = &buf[(u16::try_from(column).expect("x"), 0)];
         (row[x..].trim_end().to_string(), Style::new().fg(cell.fg))
@@ -1262,7 +1391,10 @@ mod tests {
 
         send(&mut state, &config, KeyCode::Char('3'));
         let row = freshness_on_screen(&state, &config).0;
-        assert!(row.starts_with("1 Issues") && row.ends_with(" orbit"), "sessions are not fetched from GitHub, so no age: {row:?}");
+        assert!(
+            row.starts_with("1 Issues") && row.ends_with(" orbit"),
+            "sessions are not fetched from GitHub, so no age: {row:?}"
+        );
     }
 
     #[test]

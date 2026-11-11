@@ -31,7 +31,8 @@ pub enum IssueSort {
 }
 
 impl Cycle for IssueSort {
-    const ALL: &'static [Self] = &[Self::Attention, Self::Newest, Self::Oldest, Self::Updated, Self::Number, Self::Comments];
+    const ALL: &'static [Self] =
+        &[Self::Attention, Self::Newest, Self::Oldest, Self::Updated, Self::Number, Self::Comments];
 
     fn label(self) -> &'static str {
         match self {
@@ -249,7 +250,11 @@ mod tests {
         let same = [pr(5, "a", &[]), pr(9, "b", &[])];
         let mut rows: Vec<&PullRequest> = same.iter().collect();
         prs(&mut rows, PrSort::Newest);
-        assert_eq!(rows.iter().map(|p| p.number).collect::<Vec<_>>(), [PrNumber(9), PrNumber(5)], "a tie goes to the newer number");
+        assert_eq!(
+            rows.iter().map(|p| p.number).collect::<Vec<_>>(),
+            [PrNumber(9), PrNumber(5)],
+            "a tie goes to the newer number"
+        );
     }
 
     #[test]
