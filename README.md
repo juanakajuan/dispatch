@@ -24,6 +24,15 @@ Then run `dispatch` in the checkout.
 
 There are three tabs: Issues, Pull requests, and Sessions. The list is on the left and the details are on the right.
 
+dispatch fetches the issues and the pull requests every 60 seconds. Press `r` to fetch them now. On the Issues and Pull requests tabs, the right end of the tab row shows how old the list is:
+
+| Text | Meaning |
+|---|---|
+| `loading…` | The first fetch has not finished |
+| `updated 12s ago` gray | The last fetch worked. The time counts from when the response arrived |
+| `refreshing…` | A fetch is running. The list stays until the new data arrives |
+| `refresh failed 40s ago` yellow | The last fetch failed. The list shows the data from the last fetch that worked, and the message row shows the error |
+
 To start a session, select an issue and press `s`, press Enter, or double-click it. A dialog opens with these fields:
 
 - Branch, for example `fix/142-retry-queue-drops-jobs`.
@@ -56,6 +65,14 @@ Each issue row shows the state of the pull request that closes it, between the n
 
 If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. dispatch loads the 100 newest PRs in any state, so an older merged PR does not show. Press `r` to refresh.
 
+dispatch loads issues and PRs again every 60 seconds and when you press `r`. It also loads them a few seconds after these events, because they often change GitHub data:
+
+- A session starts or stops.
+- A session's Claude goes from working to `needs you`, or exits.
+- The terminal gets focus back, for example after you merge a PR in the browser. Inside tmux, this needs `set -g focus-events on`.
+
+A burst of events makes one load, at most one each 5 seconds.
+
 ## Keys
 
 | Key | Action |
@@ -66,9 +83,9 @@ If more than one PR closes the issue, the row shows the most advanced one: merge
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
-| `m` | Merge the session's open PR. Press `m` twice to confirm. See [Merge](#merge) |
+| `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
-| `r` | Refresh |
+| `r` | Fetch the issues and pull requests now |
 | `/` | Filter. Enter keeps it, Esc clears it |
 | `S` | Change the sort order of the tab. See [Order](#order) |
 | `<` / `>` | Move the border between the list and the details left or right by 5% |
@@ -108,11 +125,24 @@ Press `S` to change the order of the tab that you see. Each tab keeps its own or
 
 ## Merge
 
-Press `m` twice on a session, its issue, or its PR. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
+Press `m` twice on a PR, on an issue that has a PR, or on a session that has a PR. You do not need a session. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
 
 - If the PR is clean, dispatch runs `gh pr merge <n> --<method> --match-head-commit <sha>` itself. No agent turn. The toast shows the result. If a push lands after the check, GitHub refuses the merge. If the repo uses a merge queue, the toast says the PR is in the queue.
-- If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, dispatch sends the session's agent a prompt. The prompt names the problem and the merge method, for example: "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
+- If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, an agent fixes it. See [Fix a PR that can not merge](#fix-a-pr-that-can-not-merge).
 - If checks are still running, if a blocked PR has no checks yet, or if GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.
+
+### Fix a PR that can not merge
+
+If a running session is on the PR's branch, dispatch sends its agent a prompt. The prompt names the problem and the merge method, for example: "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
+
+If no running session is on the PR's branch, dispatch starts a new session to fix the PR. A new session is a big step, so it needs its own `m`:
+
+- If the list already shows the problem, the first `m` says so, for example: "PR #12 has a merge conflict with main. Press m again to start a session for #5 that fixes it." The second `m` checks GitHub. If the problem is still there, the session starts. If the PR is now clean, dispatch merges it.
+- If the list showed a clean PR but GitHub finds a problem, the toast names the problem and asks you to press `m` once more. Any other key cancels.
+
+The new session is for an issue that the PR closes, on the PR's branch. If the branch is not in your checkout, dispatch fetches it from `origin`. The prompt tells the agent to run `gh pr checkout <n>` first, so it has the latest commits. If a session for that issue exited on the PR's branch, the new Claude runs in that session's worktree.
+
+dispatch can not start a session for a PR that closes no issue, because each session belongs to an issue. A PR from a fork also fails, because its branch is not on `origin`.
 
 dispatch never passes `--delete-branch`, because the session's worktree still has the branch checked out.
 

@@ -4,10 +4,10 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, Mode, PrNumber, PrState, PullRequest, Split};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split};
 use crate::merge::MergeOutcome;
-use crate::rules::{self, MergePlan};
-use crate::session::{Session, SessionState, Sessions, StartOutcome, StartRequest, WindowId};
+use crate::rules::{self, MergePlan, MergeProblem};
+use crate::session::{Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::collections::BTreeSet;
@@ -47,10 +47,11 @@ pub struct Feed<T> {
     pub status: FeedStatus,
 }
 
+/// `at` is when the response arrived, not when the request was sent.
 pub enum FeedStatus {
     Loading,
-    Fresh,
-    Failed(String),
+    Fresh { at: Instant },
+    Failed { error: String, at: Instant },
 }
 
 /// Where keys go. One enum, so "dialog open while typing a filter" can not
@@ -93,6 +94,12 @@ pub struct Inflight {
 
 pub struct Due {
     pub github: Instant,
+    /// Set by an event that likely changed GitHub data. A tick fetches once
+    /// no fetch is in flight and `GITHUB_COOLDOWN` has passed since
+    /// `github_sent`, so a burst of events makes one fetch.
+    pub github_soon: bool,
+    /// When the last tick sent a GitHub fetch.
+    pub github_sent: Instant,
     pub sessions: Instant,
     /// `None` means "as soon as possible": set when the selection changes.
     pub tail: Option<Instant>,
@@ -169,16 +176,36 @@ pub struct State {
     pub split: Split,
     /// True from a press on the divider to the next release.
     pub dragging_split: bool,
-    /// Set by a first `m`. A second `m` on the same session and PR starts the
-    /// merge; any other key clears it.
-    pub armed_merge: Option<MergeAsk>,
+    /// Set by an `m` that waits for one more `m` on the same PR. Any other
+    /// key clears it.
+    pub armed: Option<Armed>,
 }
 
-/// Merge `pr`, or ask the agent of `issue`'s session to fix and merge it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Armed {
+    /// The next `m` checks the PR again, then merges it or has it fixed.
+    Merge(MergeAsk),
+    /// The check found a problem and no running session is on the PR's
+    /// branch. The next `m` starts `req`, a session that fixes it.
+    Fix { pr: PrNumber, req: StartRequest },
+}
+
+/// Merge `pr`. If it has a problem, a running session on its branch fixes it.
+/// Without one, a new session fixes it only when `new_session_ok`, because
+/// the first `m` told the user so. Otherwise one more `m` must agree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MergeAsk {
-    pub issue: IssueNumber,
     pub pr: PrNumber,
+    pub new_session_ok: bool,
+}
+
+/// Who fixes a PR that can not merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fixer {
+    /// A running session on the PR's branch. It gets a prompt.
+    Agent(IssueNumber),
+    /// A new session for this issue, on the PR's branch.
+    NewSession(IssueNumber),
 }
 
 /// Each tab's sort mode. `S` cycles the shown tab's mode only.
@@ -218,8 +245,9 @@ pub enum Msg {
     Key(KeyEvent),
     Mouse(MouseEvent, Instant),
     Tick(Instant),
-    Issues(Result<Vec<Issue>, String>),
-    Prs(Result<Vec<PullRequest>, String>),
+    /// `at` is stamped by the worker when `gh` returns.
+    Issues { result: Result<Vec<Issue>, String>, at: Instant },
+    Prs { result: Result<Vec<PullRequest>, String>, at: Instant },
     Sessions(Result<Sessions, String>),
     Tail { window: WindowId, result: Result<Vec<String>, String> },
     Started { issue: IssueNumber, result: Result<StartOutcome, String> },
@@ -229,6 +257,8 @@ pub enum Msg {
     Opened { target: GithubRef, result: Result<(), String> },
     Sent { issue: IssueNumber, result: Result<(), String> },
     Merged { ask: MergeAsk, result: Result<MergeOutcome, String> },
+    /// The terminal got focus back, often after a merge or comment in the browser.
+    FocusGained,
 }
 
 /// Work for the shell.
@@ -265,6 +295,7 @@ pub const TAIL_EVERY: Duration = Duration::from_secs(1);
 pub const TAIL_LINES: u16 = 60;
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const TOAST_FOR: Duration = Duration::from_secs(5);
+const GITHUB_COOLDOWN: Duration = Duration::from_secs(5);
 
 pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>) {
     let state = State {
@@ -281,12 +312,18 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         tail: None,
         toast: None,
         inflight: Inflight { issues: true, prs: true, sessions: true, tail: false },
-        due: Due { github: now + config.github_refresh, sessions: now + SESSIONS_EVERY, tail: None },
+        due: Due {
+            github: now + config.github_refresh,
+            github_soon: false,
+            github_sent: now,
+            sessions: now + SESSIONS_EVERY,
+            tail: None,
+        },
         hits: HitMap::default(),
         last_click: None,
         split: config.split,
         dragging_split: false,
-        armed_merge: None,
+        armed: None,
     };
     (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
 }
@@ -331,7 +368,7 @@ pub enum When {
     OnSessions,
     SessionLive,
     SessionExited,
-    /// A live session whose branch has an open, non-draft PR.
+    /// The selection has an open, non-draft PR.
     Mergeable,
 }
 
@@ -423,7 +460,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             Focus::Dialog(_) => dialog_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
             Focus::List => {
-                let armed = state.armed_merge.take();
+                let armed = state.armed.take();
                 match action_for(&ev) {
                     Some(action) => act(state, action, armed, config),
                     None => Vec::new(),
@@ -432,20 +469,25 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         },
         Msg::Mouse(ev, now) => on_mouse(state, &ev, now),
         Msg::Tick(now) => tick(state, now, config),
-        Msg::Issues(result) => {
+        Msg::Issues { result, at } => {
             state.inflight.issues = false;
-            apply_feed(&mut state.issues, result);
+            apply_feed(&mut state.issues, result, at);
             Vec::new()
         }
-        Msg::Prs(result) => {
+        Msg::Prs { result, at } => {
             state.inflight.prs = false;
-            apply_feed(&mut state.prs, result);
+            apply_feed(&mut state.prs, result, at);
             Vec::new()
         }
         Msg::Sessions(result) => {
             state.inflight.sessions = false;
             match result {
-                Ok(sessions) => state.sessions = sessions,
+                Ok(sessions) => {
+                    if state.sessions.iter().any(|(n, s)| went_idle(s.state(), sessions.get(n).map(Session::state))) {
+                        state.due.github_soon = true;
+                    }
+                    state.sessions = sessions;
+                }
                 Err(e) => say(state, format!("sessions: {e}")),
             }
             Vec::new()
@@ -467,6 +509,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
                         None => format!("Started #{}", issue.0),
                     };
                     state.sessions.insert(issue, outcome.session);
+                    state.due.github_soon = true;
                     say(state, text);
                 }
                 Err(e) => say(state, format!("Start #{} failed: {e}", issue.0)),
@@ -474,6 +517,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             observe_now(state)
         }
         Msg::Stopped { issue, result } => {
+            state.due.github_soon = true;
             match result {
                 Ok(()) => say(state, format!("Stopped #{}", issue.0)),
                 Err(e) => say(state, format!("Stop #{} failed: {e}", issue.0)),
@@ -507,7 +551,21 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             }
             observe_now(state)
         }
+        Msg::FocusGained => {
+            state.due.github_soon = true;
+            Vec::new()
+        }
     }
+}
+
+/// True when a session's Claude stopped working: it waits for you, or it
+/// exited. That is usually when it has just opened or pushed a PR.
+fn went_idle(before: SessionState, after: Option<SessionState>) -> bool {
+    matches!(
+        (before, after),
+        (SessionState::Running, Some(SessionState::NeedsYou | SessionState::Exited) | None)
+            | (SessionState::NeedsYou, Some(SessionState::Exited) | None)
+    )
 }
 
 fn say(state: &mut State, text: String) {
@@ -522,13 +580,13 @@ fn observe_now(state: &mut State) -> Vec<Cmd> {
     vec![Cmd::Job(Job::ObserveSessions)]
 }
 
-fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>) {
+fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>, at: Instant) {
     match result {
         Ok(items) => {
             feed.items = items;
-            feed.status = FeedStatus::Fresh;
+            feed.status = FeedStatus::Fresh { at };
         }
-        Err(e) => feed.status = FeedStatus::Failed(e),
+        Err(error) => feed.status = FeedStatus::Failed { error, at },
     }
 }
 
@@ -541,8 +599,15 @@ fn tick(state: &mut State, now: Instant, config: &Config) -> Vec<Cmd> {
         }
     }
     let mut cmds = Vec::new();
-    if now >= state.due.github {
+    let idle = !state.inflight.issues && !state.inflight.prs;
+    let soon = state.due.github_soon && idle && now >= state.due.github_sent + GITHUB_COOLDOWN;
+    if soon || now >= state.due.github {
+        // A fetch already in flight may predate the event, so `soon` waits for it.
+        if idle {
+            state.due.github_soon = false;
+        }
         state.due.github = now + config.github_refresh;
+        state.due.github_sent = now;
         refresh_github(state, &mut cmds);
     }
     if now >= state.due.sessions {
@@ -571,8 +636,8 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
     }
 }
 
-/// `armed` is the merge a previous `m` armed; only a second `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<MergeAsk>, config: &Config) -> Vec<Cmd> {
+/// `armed` is what a previous `m` armed; only the next `m` uses it.
+fn act(state: &mut State, action: Action, armed: Option<Armed>, config: &Config) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -646,51 +711,106 @@ fn open_key(state: &mut State) -> Vec<Cmd> {
     vec![Cmd::Job(Job::Open(target))]
 }
 
-/// What `m` would merge right now, or why it can not.
-fn merge_target(state: &State) -> Result<(MergeAsk, &PullRequest), String> {
-    let session = current_session(state).ok_or("No session here.")?;
-    if !matches!(session.state(), SessionState::Running | SessionState::NeedsYou) {
-        return Err(format!("#{} is not running. Press a to resume it.", session.issue.0));
-    }
-    let pr = pr_for_session(state, session).ok_or(format!("#{} has no PR yet.", session.issue.0))?;
+/// The PR `m` acts on: the selected PR, or the PR of the selected issue or
+/// session. No session is needed.
+fn merge_target(state: &State) -> Result<&PullRequest, String> {
+    let (pr, missing) = match selected_row(state).ok_or("Nothing is selected.")? {
+        RowKey::Pr(n) => (state.prs.items.iter().find(|p| p.number == n), format!("PR #{} is not in the list.", n.0)),
+        RowKey::Issue(n) => (
+            state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).or_else(|| lead_pr(state, n)),
+            format!("#{} has no PR yet.", n.0),
+        ),
+        RowKey::Session(n) => (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), format!("#{} has no PR yet.", n.0)),
+    };
+    let pr = pr.ok_or(missing)?;
     match pr.state {
-        PrState::Open => Ok((MergeAsk { issue: session.issue, pr: pr.number }, pr)),
+        PrState::Open => Ok(pr),
         PrState::Draft => Err(format!("PR #{} is a draft.", pr.number.0)),
         PrState::Merged | PrState::Closed => Err(format!("PR #{} is not open.", pr.number.0)),
     }
 }
 
-/// `m`: the first press arms, a second press on the same target merges.
-/// Merging is hard to undo, so one stray key never does it. The first press
-/// says what the PR list expects; the job checks GitHub again before it acts.
-fn merge_key(state: &mut State, armed: Option<MergeAsk>) -> Vec<Cmd> {
-    let (ask, expect) = match merge_target(state) {
-        Ok((ask, pr)) => (ask, arm_text(&rules::merge_plan(pr), ask, &pr.base)),
+/// A running session on the PR's branch fixes it. Else a new session does:
+/// for the issue of an exited session on that branch, or else for the first
+/// issue the PR closes that has no session yet.
+fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, String> {
+    if let Some(s) = state.sessions.values().find(|s| s.branch.as_str() == pr.head) {
+        return Ok(match s.state() {
+            SessionState::Running | SessionState::NeedsYou => Fixer::Agent(s.issue),
+            SessionState::Exited => Fixer::NewSession(s.issue),
+        });
+    }
+    let n = pr.number.0;
+    if pr.closes.is_empty() {
+        return Err(format!("PR #{n} closes no issue, so dispatch can not start a session for it."));
+    }
+    pr.closes
+        .iter()
+        .find(|i| !state.sessions.contains_key(i) && !state.starting.contains(i))
+        .map(|&i| Fixer::NewSession(i))
+        .ok_or_else(|| format!("Each issue that PR #{n} closes already has a session on another branch."))
+}
+
+/// `m`: the first press arms, the next press on the same PR acts. Merging
+/// is hard to undo and a new session is a big step, so one stray key never
+/// does either. The first press says what the PR list expects; the job
+/// checks GitHub again before it acts.
+fn merge_key(state: &mut State, armed: Option<Armed>) -> Vec<Cmd> {
+    let pr = match merge_target(state) {
+        Ok(pr) => pr,
         Err(why) => {
             say(state, why);
             return Vec::new();
         }
     };
-    if armed != Some(ask) {
-        state.armed_merge = Some(ask);
+    let n = pr.number;
+    if let Some(Armed::Fix { pr, req }) = armed.clone()
+        && pr == n
+    {
+        return start_fix(state, req);
+    }
+    let (new_session_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
+        (MergePlan::Handoff(problem), fix) => {
+            let sentence = rules::problem_sentence(n, &pr.base, problem);
+            match fix {
+                Ok(Fixer::Agent(i)) => (false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0)),
+                Ok(Fixer::NewSession(i)) => (true, format!("{sentence} Press m again to start a session for #{} that fixes it.", i.0)),
+                Err(why) => {
+                    say(state, format!("{sentence} {why}"));
+                    return Vec::new();
+                }
+            }
+        }
+        // A cached refusal still arms, because the list can be stale and the
+        // job asks GitHub again.
+        (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, format!("Press m again to merge PR #{}", n.0)),
+    };
+    let ask = MergeAsk { pr: n, new_session_ok };
+    if armed != Some(Armed::Merge(ask)) {
+        state.armed = Some(Armed::Merge(ask));
         say(state, expect);
         return Vec::new();
     }
-    say(state, format!("Checking PR #{}", ask.pr.0));
+    say(state, format!("Checking PR #{}", n.0));
     vec![Cmd::Job(Job::Merge(ask))]
 }
 
-/// The first `m`'s toast. A cached refusal still arms, because the list can
-/// be stale and the job asks GitHub again.
-fn arm_text(plan: &MergePlan, ask: MergeAsk, base: &str) -> String {
-    match plan {
-        MergePlan::Handoff(problem) => format!(
-            "{} Press m again to ask #{}'s agent to fix and merge it.",
-            rules::problem_sentence(ask.pr, base, *problem),
-            ask.issue.0
-        ),
-        MergePlan::Direct | MergePlan::Refuse(_) => format!("Press m again to merge PR #{}", ask.pr.0),
-    }
+fn start_fix(state: &mut State, req: StartRequest) -> Vec<Cmd> {
+    let n = req.issue;
+    state.starting.insert(n);
+    goto_session(state, n);
+    vec![Cmd::Job(Job::Start(req))]
+}
+
+fn fix_request(issue: IssueNumber, pr: &PullRequest, problem: MergeProblem, method: MergeMethod) -> Result<StartRequest, String> {
+    let branch = BranchName::parse(&pr.head).map_err(|e| format!("PR #{} has the branch name {:?}: {e:?}", pr.number.0, pr.head))?;
+    Ok(StartRequest {
+        issue,
+        branch,
+        mode: Mode::Implement,
+        prompt: rules::fix_session_prompt(pr.number, &pr.base, problem, method),
+        from: StartFrom::Origin,
+    })
 }
 
 fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
@@ -707,11 +827,7 @@ fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>
             refresh_github(state, &mut cmds);
             cmds
         }
-        Ok(MergeOutcome::Handoff { problem, method, base }) => {
-            let sentence = rules::problem_sentence(ask.pr, &base, problem);
-            say(state, format!("{sentence} Asking #{}'s agent to fix it.", ask.issue.0));
-            vec![Cmd::Job(Job::Send { issue: ask.issue, text: rules::handoff_prompt(ask.pr, &base, problem, method) })]
-        }
+        Ok(MergeOutcome::Handoff { problem, method, pr }) => handoff(state, ask, &pr, problem, method),
         Ok(MergeOutcome::Refused(why)) => {
             say(state, why);
             Vec::new()
@@ -721,6 +837,36 @@ fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>
             Vec::new()
         }
     }
+}
+
+/// The check found `problem` on `pr`, the PR as GitHub showed it now.
+fn handoff(state: &mut State, ask: MergeAsk, pr: &PullRequest, problem: MergeProblem, method: MergeMethod) -> Vec<Cmd> {
+    let sentence = rules::problem_sentence(pr.number, &pr.base, problem);
+    let issue = match fixer(state, pr) {
+        Ok(Fixer::Agent(i)) => {
+            say(state, format!("{sentence} Asking #{}'s agent to fix it.", i.0));
+            return vec![Cmd::Job(Job::Send { issue: i, text: rules::handoff_prompt(pr.number, &pr.base, problem, method) })];
+        }
+        Ok(Fixer::NewSession(i)) => i,
+        Err(why) => {
+            say(state, format!("{sentence} {why}"));
+            return Vec::new();
+        }
+    };
+    let req = match fix_request(issue, pr, problem, method) {
+        Ok(req) => req,
+        Err(why) => {
+            say(state, format!("{sentence} {why}"));
+            return Vec::new();
+        }
+    };
+    if ask.new_session_ok {
+        say(state, format!("{sentence} Starting a session for #{} to fix it.", issue.0));
+        return start_fix(state, req);
+    }
+    state.armed = Some(Armed::Fix { pr: pr.number, req });
+    say(state, format!("{sentence} Press m again to start a session for #{} that fixes it.", issue.0));
+    Vec::new()
 }
 
 /// `s` or Enter on an issue, or a double-click on one.
@@ -919,6 +1065,7 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
         branch,
         mode: dialog.mode,
         prompt,
+        from: StartFrom::Base,
     };
     let n = req.issue;
     state.starting.insert(n);
@@ -1038,8 +1185,7 @@ pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a Pul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{MergeMethod, Mergeability, WorktreePath};
-    use crate::rules::MergeProblem;
+    use crate::domain::{Mergeability, WorktreePath};
     use crate::session::Window;
     use crate::testutil::{issue, pr};
     use ratatui::layout::Rect;
@@ -1078,11 +1224,11 @@ mod tests {
         let (mut state, _) = init(now, &config, Context::default());
         state.issues = Feed {
             items: vec![issue(3, "Retry queue drops jobs", &["bug"]), issue(2, "Docs for plugins", &["docs"]), issue(1, "Add json output", &["feature"])],
-            status: FeedStatus::Fresh,
+            status: FeedStatus::Fresh { at: now },
         };
         let newer = jiff::Timestamp::from_second(60).expect("in range");
         let items = vec![PullRequest { created_at: newer, ..pr(10, "fix/3-x", &[3]) }, pr(11, "other", &[])];
-        state.prs = Feed { items, status: FeedStatus::Fresh };
+        state.prs = Feed { items, status: FeedStatus::Fresh { at: now } };
         state.inflight = Inflight::default();
         (state, config, now)
     }
@@ -1226,16 +1372,35 @@ mod tests {
     }
 
     #[test]
-    fn issues_error_keeps_the_old_items() {
-        let (mut state, config, _) = app();
+    fn issues_error_keeps_the_old_items_and_stamps_the_failure() {
+        let (mut state, config, now) = app();
         state.inflight.issues = true;
-        press(&mut state, &config, Msg::Issues(Err("offline".to_string())));
+        let failed = now + Duration::from_secs(5);
+        press(&mut state, &config, Msg::Issues { result: Err("offline".to_string()), at: failed });
         assert_eq!(state.issues.items.len(), 3);
-        assert!(matches!(&state.issues.status, FeedStatus::Failed(m) if m == "offline"));
+        assert!(matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed));
         assert!(!state.inflight.issues);
-        press(&mut state, &config, Msg::Issues(Ok(vec![issue(9, "new", &[])])));
+        let arrived = now + Duration::from_secs(9);
+        press(&mut state, &config, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
         assert_eq!(state.issues.items.len(), 1);
-        assert!(matches!(state.issues.status, FeedStatus::Fresh));
+        assert!(matches!(state.issues.status, FeedStatus::Fresh { at } if at == arrived));
+    }
+
+    #[test]
+    fn new_data_resets_the_refresh_time_on_the_timer_and_after_r() {
+        let (mut state, config, _) = app();
+        let due = state.due.github;
+        let cmds = press(&mut state, &config, Msg::Tick(due));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        let first = due + Duration::from_secs(2);
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: first });
+        assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == first));
+
+        let cmds = press(&mut state, &config, key('r'));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        let second = first + Duration::from_secs(30);
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: second });
+        assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
     }
 
     fn hit_state() -> (State, Config, Instant) {
@@ -1479,6 +1644,95 @@ mod tests {
         assert!(matches!(press(&mut state, &config, ctrl('c')).as_slice(), [Cmd::Quit]));
     }
 
+    fn github_fetches(cmds: &[Cmd]) -> usize {
+        cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::FetchIssues | Job::FetchPrs))).count()
+    }
+
+    /// Sends `msg`, then checks that the GitHub fetch waits for the cooldown,
+    /// goes out once, and pushes the 60 s timer back.
+    fn assert_triggers_one_refresh(state: &mut State, config: &Config, msg: Msg) {
+        let from = state.due.github_sent;
+        assert_eq!(github_fetches(&press(state, config, msg)), 0, "the next tick fetches, not the event");
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(from + GITHUB_COOLDOWN - Duration::from_millis(1)))), 0, "cooldown");
+        let at = from + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at))), 2);
+        assert_eq!(state.due.github, at + config.github_refresh, "the timer starts again");
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))), 0, "inflight, and no new event");
+        press(state, config, Msg::Issues { result: Ok(Vec::new()), at });
+        press(state, config, Msg::Prs { result: Ok(Vec::new()), at });
+        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))), 0, "one event, one fetch");
+    }
+
+    #[test]
+    fn a_start_or_a_stop_refreshes_github() {
+        let (mut state, config, _) = app();
+        let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: Vec::new() };
+        assert_triggers_one_refresh(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+        assert_triggers_one_refresh(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+
+        let (mut state, config, now) = app();
+        press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0, "a failed start changes nothing");
+    }
+
+    #[test]
+    fn a_session_that_goes_idle_or_exits_refreshes_github() {
+        let observe = |sessions: Vec<Session>| Msg::Sessions(Ok(sessions.into_iter().map(|s| (s.issue, s)).collect()));
+        let running = || session(3, Some((true, false)));
+        let needs_you = || session(3, Some((true, true)));
+        let exited = || session(3, Some((false, false)));
+        for (before, after) in [(running(), Some(needs_you())), (running(), Some(exited())), (needs_you(), Some(exited())), (running(), None)] {
+            let (mut state, config, _) = app();
+            state.sessions.insert(IssueNumber(3), before);
+            assert_triggers_one_refresh(&mut state, &config, observe(after.into_iter().collect()));
+        }
+        for (before, after) in [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())] {
+            let (mut state, config, now) = app();
+            state.sessions.insert(IssueNumber(3), before);
+            press(&mut state, &config, observe(vec![after]));
+            assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0);
+        }
+    }
+
+    #[test]
+    fn focus_gained_refreshes_github() {
+        let (mut state, config, _) = app();
+        assert_triggers_one_refresh(&mut state, &config, Msg::FocusGained);
+    }
+
+    #[test]
+    fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more() {
+        let (mut state, config, now) = app();
+        for _ in 0..3 {
+            press(&mut state, &config, Msg::FocusGained);
+            press(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+        }
+        let at = now + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(at))), 2);
+
+        // This fetch may have started before the change, so another one follows it.
+        press(&mut state, &config, Msg::FocusGained);
+        let later = at + GITHUB_COOLDOWN;
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "waits for the fetch in flight");
+        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: later });
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "PRs still in flight");
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: later });
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 2);
+    }
+
+    #[test]
+    fn the_timer_firing_during_a_fetch_keeps_the_pending_event() {
+        let (mut state, config, now) = app();
+        state.inflight.issues = true;
+        press(&mut state, &config, Msg::FocusGained);
+        state.due.github = now + GITHUB_COOLDOWN;
+        let cmds = press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN));
+        assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
+        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
+        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
+        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))), 2, "the issues fetch predated the event");
+    }
+
     #[test]
     fn key_bar_follows_the_context() {
         let (mut state, config, _) = app();
@@ -1561,7 +1815,21 @@ mod tests {
         state.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
     }
 
-    const ASK: MergeAsk = MergeAsk { issue: IssueNumber(3), pr: PrNumber(10) };
+    const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false };
+    const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: true };
+
+    fn handoff(problem: MergeProblem) -> Msg {
+        let mut fresh = pr(10, "fix/3-x", &[3]);
+        fresh.mergeability = Mergeability::Conflict;
+        Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Handoff { problem, method: MergeMethod::Rebase, pr: fresh }) }
+    }
+
+    fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
+        match msg {
+            Msg::Merged { result, .. } => Msg::Merged { ask, result },
+            other => other,
+        }
+    }
 
     #[test]
     fn m_twice_starts_a_merge_job_for_the_session_pr() {
@@ -1574,12 +1842,26 @@ mod tests {
         let cmds = press(&mut state, &config, key('m'));
         assert_eq!(merges(&cmds), [ASK]);
         assert!(sends(&cmds).is_empty(), "no agent turn for the merge itself");
-        assert!(state.armed_merge.is_none());
+        assert!(state.armed.is_none());
         assert!(press(&mut state, &config, key('m')).is_empty(), "a third press arms again");
     }
 
     #[test]
-    fn the_first_m_names_the_problem_the_pr_list_shows() {
+    fn m_merges_without_a_session_from_the_pr_or_the_issue() {
+        let (mut state, config, _) = app();
+        assert!(key_bar(&state).contains(&("m", "merge")), "issue #3 has PR #10");
+        press(&mut state, &config, key('m'));
+        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK]);
+
+        press(&mut state, &config, key('2'));
+        press(&mut state, &config, key('j'));
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "Press m again to merge PR #11");
+        assert_eq!(merges(&press(&mut state, &config, key('m'))), [MergeAsk { pr: PrNumber(11), new_session_ok: false }]);
+    }
+
+    #[test]
+    fn the_first_m_names_the_problem_and_the_agent_of_a_running_session() {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.prs.items[0].mergeability = Mergeability::Conflict;
@@ -1587,6 +1869,73 @@ mod tests {
         press(&mut state, &config, key('m'));
         assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it.");
         assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK], "the job decides, not the cached list");
+    }
+
+    #[test]
+    fn without_a_running_session_the_first_m_offers_a_new_session() {
+        let (mut state, config, _) = app();
+        state.prs.items[0].mergeability = Mergeability::Conflict;
+        press(&mut state, &config, key('m'));
+        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it.");
+        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK_FIX]);
+    }
+
+    #[test]
+    fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
+        let (mut state, config, _) = app();
+        let cmds = press(&mut state, &config, with_ask(handoff(MergeProblem::Conflict), ASK_FIX));
+        let started = starts(&cmds);
+        assert_eq!(started.len(), 1);
+        let req = started[0];
+        assert_eq!((req.issue, req.branch.as_str(), req.mode, req.from), (IssueNumber(3), "fix/3-x", Mode::Implement, StartFrom::Origin));
+        assert_eq!(req.prompt, rules::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
+        assert!(state.starting.contains(&IssueNumber(3)));
+        assert_eq!((state.tab, state.selected.session), (Tab::Sessions, Some(IssueNumber(3))));
+        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
+    }
+
+    #[test]
+    fn a_problem_the_list_did_not_show_needs_one_more_m_for_a_new_session() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, key('m'));
+        press(&mut state, &config, key('m'));
+        let cmds = press(&mut state, &config, handoff(MergeProblem::Conflict));
+        assert!(cmds.is_empty(), "no session before the user agrees");
+        assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it.");
+        let started = press(&mut state, &config, key('m'));
+        assert_eq!(starts(&started).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
+        assert!(merges(&started).is_empty());
+    }
+
+    #[test]
+    fn another_key_cancels_the_new_session() {
+        let (mut state, config, _) = app();
+        press(&mut state, &config, handoff(MergeProblem::Conflict));
+        press(&mut state, &config, key('j'));
+        press(&mut state, &config, key('k'));
+        let cmds = press(&mut state, &config, key('m'));
+        assert!(starts(&cmds).is_empty() && merges(&cmds).is_empty());
+        assert_eq!(toast(&state), "Press m again to merge PR #10", "the m arms a fresh merge");
+    }
+
+    #[test]
+    fn an_exited_session_on_the_pr_branch_gets_a_new_session() {
+        let (mut state, config, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+        let cmds = press(&mut state, &config, with_ask(handoff(MergeProblem::ChecksFailing), ASK_FIX));
+        assert!(sends(&cmds).is_empty());
+        assert_eq!(starts(&cmds).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
+    }
+
+    #[test]
+    fn a_problem_pr_with_no_issue_to_start_on_only_explains() {
+        let (mut state, config, _) = app();
+        state.prs.items[1].mergeability = Mergeability::Conflict;
+        press(&mut state, &config, key('2'));
+        state.selected.pr = Some(PrNumber(11));
+        assert!(press(&mut state, &config, key('m')).is_empty());
+        assert_eq!(toast(&state), "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it.");
+        assert!(state.armed.is_none());
     }
 
     #[test]
@@ -1599,10 +1948,10 @@ mod tests {
     }
 
     #[test]
-    fn a_problem_pr_sends_the_agent_a_prompt_with_the_problem_and_method() {
+    fn a_problem_pr_sends_the_running_agent_a_prompt_with_the_problem_and_method() {
         let (mut state, config, _) = app();
-        let outcome = MergeOutcome::Handoff { problem: MergeProblem::ChecksFailing, method: MergeMethod::Rebase, base: "main".to_string() };
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(outcome) });
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        let cmds = press(&mut state, &config, handoff(MergeProblem::ChecksFailing));
         let prompt = rules::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
         assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
         assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
@@ -1629,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn m_from_the_pr_row_reaches_the_same_session() {
+    fn m_from_the_pr_row_reaches_the_same_pr() {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         press(&mut state, &config, key('2'));
@@ -1652,13 +2001,9 @@ mod tests {
         let (mut state, config, _) = app();
         press(&mut state, &config, key('3'));
         press(&mut state, &config, key('m'));
-        assert_eq!(toast(&state), "No session here.");
+        assert_eq!(toast(&state), "Nothing is selected.");
 
-        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        press(&mut state, &config, key('m'));
-        assert_eq!(toast(&state), "#3 is not running. Press a to resume it.");
-
-        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        press(&mut state, &config, key('1'));
         state.prs.items[0].state = PrState::Draft;
         press(&mut state, &config, key('m'));
         assert_eq!(toast(&state), "PR #10 is a draft.");

@@ -144,6 +144,16 @@ pub fn handoff_prompt(pr: PrNumber, base: &str, problem: MergeProblem, method: M
     )
 }
 
+/// The first prompt of a new session that `m` starts to fix a PR. The
+/// worktree's branch can be older than the PR, so it syncs first.
+pub fn fix_session_prompt(pr: PrNumber, base: &str, problem: MergeProblem, method: MergeMethod) -> String {
+    format!(
+        "This worktree is on the branch of PR #{n}. Run `gh pr checkout {n}` to get its latest commits. {}",
+        handoff_prompt(pr, base, problem, method),
+        n = pr.0
+    )
+}
+
 /// The method to merge with. `configured` is the `dispatch.mergeMethod`
 /// setting; `allowed` is what the repo allows, in gh order. Without a
 /// setting, the first allowed method wins, so a repo that allows one method
@@ -272,6 +282,11 @@ mod tests {
             "PR #12 has a merge conflict with main. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --squash`."
         );
         assert!(handoff_prompt(PrNumber(12), "main", MergeProblem::Behind, MergeMethod::Rebase).starts_with("PR #12 is behind main,"));
+        assert_eq!(
+            fix_session_prompt(PrNumber(12), "main", MergeProblem::ChecksFailing, MergeMethod::Merge),
+            "This worktree is on the branch of PR #12. Run `gh pr checkout 12` to get its latest commits. \
+             PR #12 has failing checks. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --merge`."
+        );
     }
 
     #[test]
