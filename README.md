@@ -85,7 +85,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
-| `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A merge closes the session on the PR's branch. See [Merge](#merge) |
+| `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
 | `/` | Filter. Enter keeps it, Esc clears it |
@@ -129,6 +129,7 @@ Press `S` to change the order of the tab that you see. Each tab keeps its own or
 
 Press `m` twice on a PR, on an issue that has a PR, or on a session that has a PR. You do not need a session. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
 
+- If the PR is a draft, the first `m` says that dispatch will mark it ready. The second `m` runs `gh pr ready <n>`, reads the PR again, and goes on with the rules below. dispatch does not undo this. If the PR then can not merge now, it stays ready, and the toast says so.
 - If the PR is clean, dispatch runs `gh pr merge <n> --<method> --match-head-commit <sha>` itself. No agent turn. The toast shows the result. If a push lands after the check, GitHub refuses the merge. If a session on the PR's branch is running or waits for you, dispatch stops it, the same as `x`. The worktree stays. If the repo uses a merge queue, the toast says the PR is in the queue, and the session stays open, because the PR can still drop out of the queue.
 - If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, an agent fixes it. See [Fix a PR that can not merge](#fix-a-pr-that-can-not-merge).
 - If checks are still running, if a blocked PR has no checks yet, or if GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.

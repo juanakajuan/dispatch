@@ -131,7 +131,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 WriteJob::Send { issue, text } => {
                     Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }
                 }
-                WriteJob::Merge(ask) => Msg::Merged { ask, result: merge::merge(ws.repo_root(), ask.pr) },
+                WriteJob::Merge(ask) => Msg::Merged { ask, run: merge::merge(ws.repo_root(), ask.pr, ask.ready_ok) },
             };
             if tx.send(msg).is_err() {
                 return;
