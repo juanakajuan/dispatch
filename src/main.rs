@@ -9,7 +9,7 @@
 //! - Each read job (`gh`, observe, tail) runs on its own short-lived
 //!   `std::thread`, with an owned clone of the immutable `Workspace`, and sends
 //!   exactly one `Msg` back on an mpsc channel. `Inflight` caps it at one job
-//!   per kind. Start, stop, resume, send, and merge go through one serial
+//!   per kind. Start, stop, resume, send, merge, and config saves go through one serial
 //!   writer thread, because two concurrent `git config` writes can fail on the
 //!   `.git/config` lock, and because a second merge must see the first one
 //!   done. No `Mutex`, no `Arc<State>`.
@@ -55,7 +55,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let config = config::load().map_err(|e| e.to_string())?;
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
-    let ws = Workspace::discover(&cwd, &config).map_err(|e| e.to_string())?;
+    let ws = Workspace::discover(&cwd).map_err(|e| e.to_string())?;
 
     let mut terminal = ratatui::init();
     // A crashed earlier run can leave the alternate screen dirty, and the
@@ -68,13 +68,13 @@ fn run() -> Result<(), String> {
     }));
     let result = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange)
         .map_err(|e| e.to_string())
-        .and_then(|()| event_loop(&mut terminal, &ws, &config));
+        .and_then(|()| event_loop(&mut terminal, &ws, config));
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
     ratatui::restore();
     result
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &config::Config) -> Result<(), String> {
+fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: config::Config) -> Result<(), String> {
     let (tx, rx) = mpsc::channel::<Msg>();
     let writer = spawn_writer(ws.clone(), tx.clone());
     let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -97,7 +97,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &
             }
         }
         let mut hits = app::HitMap::default();
-        terminal.draw(|frame| hits = ui::draw(frame, &state, config)).map_err(|e| e.to_string())?;
+        terminal.draw(|frame| hits = ui::draw(frame, &state)).map_err(|e| e.to_string())?;
         state.hits = hits;
 
         let mut msgs: Vec<Msg> = drain(&rx);
@@ -105,16 +105,17 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: &
         msgs.extend(poll_input(POLL)?);
         msgs.push(Msg::Tick(Instant::now()));
         for msg in msgs {
-            cmds.extend(app::update(&mut state, msg, config));
+            cmds.extend(app::update(&mut state, msg));
         }
     }
 }
 
 /// A write job, run in order on the writer thread.
 enum WriteJob {
-    Start(session::StartRequest),
+    Start(session::StartRequest, session::Launch),
     Stop(domain::IssueNumber),
-    Resume(domain::IssueNumber),
+    Resume(domain::IssueNumber, session::Launch),
+    SaveConfig { setting: config::Setting, config: config::Config },
     Send { issue: domain::IssueNumber, text: String },
     Merge(app::MergeAsk),
 }
@@ -124,11 +125,16 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
     std::thread::spawn(move || {
         for job in jobs {
             let msg = match job {
-                WriteJob::Start(req) => {
-                    Msg::Started { issue: req.issue, result: ws.start(&req).map_err(|e| e.to_string()) }
+                WriteJob::Start(req, launch) => {
+                    Msg::Started { issue: req.issue, result: ws.start(&req, &launch).map_err(|e| e.to_string()) }
                 }
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
-                WriteJob::Resume(issue) => Msg::Resumed { issue, result: ws.resume(issue).map_err(|e| e.to_string()) },
+                WriteJob::Resume(issue, launch) => {
+                    Msg::Resumed { issue, result: ws.resume(issue, &launch).map_err(|e| e.to_string()) }
+                }
+                WriteJob::SaveConfig { setting, config } => {
+                    Msg::Saved(config::save(setting, &config).map_err(|e| e.to_string()))
+                }
                 WriteJob::Send { issue, text } => {
                     Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }
                 }
@@ -144,14 +150,17 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
 
 fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<WriteJob>) {
     match job {
-        Job::Start(req) => {
-            let _ = writer.send(WriteJob::Start(req));
+        Job::Start(req, launch) => {
+            let _ = writer.send(WriteJob::Start(req, launch));
         }
         Job::Stop(issue) => {
             let _ = writer.send(WriteJob::Stop(issue));
         }
-        Job::Resume(issue) => {
-            let _ = writer.send(WriteJob::Resume(issue));
+        Job::Resume(issue, launch) => {
+            let _ = writer.send(WriteJob::Resume(issue, launch));
+        }
+        Job::SaveConfig { setting, config } => {
+            let _ = writer.send(WriteJob::SaveConfig { setting, config });
         }
         Job::Send { issue, text } => {
             let _ = writer.send(WriteJob::Send { issue, text });

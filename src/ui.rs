@@ -6,9 +6,9 @@
 //! List rows are two lines tall. The dialog is a centered overlay.
 
 use crate::app::{
-    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab, View,
+    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, SettingsMenu, StartDialog, State, Tab, View,
 };
-use crate::config::Config;
+use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
 use crate::markdown;
@@ -71,9 +71,9 @@ const ROW_HEIGHT: u16 = 2;
 const DETAIL_MAX_WIDTH: u16 = 100;
 const MESSAGE_MAX_LINES: usize = 3;
 
-pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
+pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
     if state.view != View::Classic {
-        return agent::draw(frame, state, config);
+        return agent::draw(frame, state);
     }
     let now = jiff::Timestamp::now();
     let screen = frame.area();
@@ -97,7 +97,7 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
     let divider = Rect { x: detail.x.saturating_sub(1), width: 2, ..body }.intersection(body);
     hits.targets.push((divider, HitTarget::Divider));
     frame.buffer_mut().set_style(screen, palette::PLAIN);
-    let icons = config.icons.icons();
+    let icons = state.config.icons.icons();
     draw_tabs(frame, tabs, rule, state, Instant::now(), icons, &mut hits);
     draw_list(frame, list, state, now, icons, &mut hits);
     draw_detail(frame, detail, state, now, icons);
@@ -107,10 +107,17 @@ pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
         frame.render_widget(Paragraph::new(lines), message_area);
     }
     draw_keys(frame, keys, state);
-    if let Focus::Dialog(dialog) = &state.focus {
-        draw_dialog(frame, frame.area(), state, dialog, config);
-    }
+    draw_overlay(frame, state);
     hits
+}
+
+/// The dialog or the settings menu, over the screen of either view.
+fn draw_overlay(frame: &mut Frame, state: &State) {
+    match &state.focus {
+        Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog),
+        Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu),
+        Focus::List | Focus::Filter => {}
+    }
 }
 
 /// "3h", "2d", "now". Pure, tested.
@@ -439,6 +446,16 @@ fn draw_keys(frame: &mut Frame, area: Rect, state: &State) {
                 parts.push(hint(k, d));
             }
         }
+        Focus::Settings(menu) => {
+            let hints: &[(&str, &str)] = if menu.edit.is_some() {
+                &[("enter", "save"), ("esc", "cancel")]
+            } else {
+                &[("j/k", "move"), ("enter", "change"), ("esc", "close")]
+            };
+            for (k, d) in hints {
+                parts.push(hint(k, d));
+            }
+        }
         Focus::List => {
             if !state.filter.is_empty() {
                 parts.push(vec![span(format!("/{}", state.filter), palette::LABEL)]);
@@ -744,11 +761,12 @@ fn draw_session_detail(frame: &mut Frame, area: Rect, state: &State, n: IssueNum
 // ---- dialog ----------------------------------------------------------------
 
 /// The exact commands the dialog will run, for the "Runs" preview.
-fn preview(state: &State, dialog: &StartDialog, config: &Config) -> Vec<String> {
+fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
     let branch = dialog.branch.lines().join("");
     let prompt = dialog.prompt.lines().join("\n");
     let args = rules::claude_args(dialog.mode, prompt.trim(), None);
-    let shown: Vec<String> = config
+    let shown: Vec<String> = state
+        .config
         .claude_command
         .argv(&args)
         .into_iter()
@@ -777,7 +795,7 @@ fn field_label(text: &str, focused: bool) -> Line<'static> {
     }
 }
 
-fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, config: &Config) {
+fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) {
     let width = screen.width.min(96);
     let height = screen.height.min(28);
     let area = Rect::new(
@@ -813,7 +831,7 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
     frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
 
-    let icons = config.icons.icons();
+    let icons = state.config.icons.icons();
     let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
         if on {
             vec![span(format!("{} ", icons.radio_on), palette::ACCENT), Span::raw(text.to_string())]
@@ -831,13 +849,71 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, 
 
     let mut run_lines = vec![Line::from(span("  Runs", palette::DIM))];
     let width = usize::from(runs.width).saturating_sub(4);
-    run_lines.extend(
-        preview(state, d, config).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))),
-    );
+    run_lines
+        .extend(preview(state, d).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))));
     frame.render_widget(Paragraph::new(run_lines), runs);
     if let Some(e) = &d.error {
         frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
     }
+}
+
+// ---- settings --------------------------------------------------------------
+
+fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &SettingsMenu) {
+    let width = screen.width.min(76);
+    let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
+    let area = Rect::new(
+        screen.x + (screen.width - width) / 2,
+        screen.y + (screen.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, area);
+    frame.buffer_mut().set_style(area, palette::PLAIN);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(palette::DIM)
+        .title(span(" Settings ", palette::HEADING))
+        .padding(Padding::new(2, 2, 1, 0));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let default = Config::default();
+    let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for setting in SETTINGS {
+        let on = setting == menu.at;
+        let room = usize::from(inner.width).saturating_sub(4 + name_width);
+        let mut spans = vec![
+            span(if on { "› " } else { "  " }, palette::ACCENT),
+            span(format!("{:name_width$}  ", setting.key()), if on { palette::ACCENT } else { palette::PLAIN }),
+        ];
+        if let (Some(edit), true) = (&menu.edit, on) {
+            let text: Vec<char> = edit.input.lines().join("").chars().collect();
+            let shown: String = text[text.len().saturating_sub(room.saturating_sub(2))..].iter().collect();
+            spans.push(span(format!("{shown}▏"), palette::ACTIVE));
+        } else {
+            let default_note = format!("   default: {}", setting.show(&default));
+            let value = fit(&setting.show(&state.config), room.saturating_sub(cells(&default_note)).max(1));
+            spans.push(span(value, if on { palette::ACTIVE } else { palette::PLAIN }));
+            spans.push(span(default_note, palette::DIM));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines.push(Line::raw(""));
+    let error = menu.edit.as_ref().and_then(|e| e.error.as_ref());
+    lines.push(match error {
+        Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
+        None if menu.at.new_sessions_only() => {
+            Line::from(span("Applies to sessions you start or resume after this change.", palette::DIM))
+        }
+        None => Line::raw(""),
+    });
+    lines.push(Line::from(span(
+        if menu.edit.is_some() { "enter save · esc cancel" } else { "j/k move · enter change · esc close" },
+        palette::DIM,
+    )));
+    lines.push(Line::from(span("Saved to config.json", palette::DIM)));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 #[cfg(test)]
@@ -903,13 +979,13 @@ mod tests {
 
     #[test]
     fn sessions_detail_shows_the_end_of_a_long_worktree_path() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         let long = "/home/someone/projects/a-very-long-directory-name/another-long-directory/scratchpad/smoke/hf-1017";
         if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
             s.worktree = WorktreePath::planned(PathBuf::from(long));
         }
-        send(&mut state, &config, KeyCode::Char('3'));
-        let screen = text(&render(&state, &config, 80, 24));
+        send(&mut state, KeyCode::Char('3'));
+        let screen = text(&render(&state, 80, 24));
         let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
         assert!(
             line.contains("…/") && line.trim_end().ends_with("/smoke/hf-1017"),
@@ -917,11 +993,10 @@ mod tests {
         );
     }
 
-    fn full_state() -> (State, Config) {
-        let config = Config::default();
+    fn full_state() -> State {
         let (mut state, _) = app::init(
             Instant::now(),
-            &config,
+            Config::default(),
             Context { repo_name: "orbit".to_string(), base: "origin/main".to_string(), ..Context::default() },
         );
         state.issues.items = vec![
@@ -949,14 +1024,14 @@ mod tests {
             },
         );
         state.tail = Some(app::Tail { window: id, lines: vec!["fake output".to_string(), "second line".to_string()] });
-        (state, config)
+        state
     }
 
-    fn render(state: &State, config: &Config, w: u16, h: u16) -> Buffer {
+    fn render(state: &State, w: u16, h: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
         terminal
             .draw(|f| {
-                let _ = draw(f, state, config);
+                let _ = draw(f, state);
             })
             .expect("draw");
         terminal.backend().buffer().clone()
@@ -970,8 +1045,8 @@ mod tests {
             .join("\n")
     }
 
-    fn send(state: &mut State, config: &Config, code: KeyCode) {
-        let _ = app::update(state, Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)), config);
+    fn send(state: &mut State, code: KeyCode) {
+        let _ = app::update(state, Msg::Key(KeyEvent::new(code, KeyModifiers::NONE)));
     }
 
     fn in_palette(c: Color) -> bool {
@@ -983,17 +1058,17 @@ mod tests {
     /// foreground is a Gruvbox palette color.
     #[test]
     fn no_cell_has_a_background_and_every_foreground_is_gruvbox() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         let mut screens: Vec<(String, Buffer)> = Vec::new();
         for (name, key) in [("issues", '1'), ("prs", '2'), ("sessions", '3')] {
-            send(&mut state, &config, KeyCode::Char(key));
-            screens.push((name.to_string(), render(&state, &config, 100, 30)));
+            send(&mut state, KeyCode::Char(key));
+            screens.push((name.to_string(), render(&state, 100, 30)));
         }
-        send(&mut state, &config, KeyCode::Char('1'));
-        send(&mut state, &config, KeyCode::Char('j'));
-        send(&mut state, &config, KeyCode::Char('s'));
-        screens.push(("dialog".to_string(), render(&state, &config, 100, 30)));
-        screens.push(("narrow".to_string(), render(&state, &config, 30, 12)));
+        send(&mut state, KeyCode::Char('1'));
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        screens.push(("dialog".to_string(), render(&state, 100, 30)));
+        screens.push(("narrow".to_string(), render(&state, 30, 12)));
         for (name, buf) in screens {
             for cell in buf.content() {
                 let badge = [palette::BLUE, palette::BG2].contains(&cell.bg);
@@ -1006,8 +1081,8 @@ mod tests {
 
     #[test]
     fn selection_is_an_accent_marker_on_both_lines_of_one_row() {
-        let (state, config) = full_state();
-        let buf = render(&state, &config, 100, 30);
+        let state = full_state();
+        let buf = render(&state, 100, 30);
         let width = usize::from(buf.area.width);
         let marked: Vec<usize> =
             buf.content().iter().enumerate().filter(|(_, c)| c.symbol() == "▌").map(|(i, _)| i / width).collect();
@@ -1021,8 +1096,8 @@ mod tests {
 
     #[test]
     fn issues_screen_shows_rows_badges_detail_and_key_bar() {
-        let (state, config) = full_state();
-        let screen = text(&render(&state, &config, 120, 24));
+        let state = full_state();
+        let screen = text(&render(&state, 120, 24));
         for want in [
             "1 Issues (2)",
             "2 Pull requests (1)",
@@ -1053,10 +1128,8 @@ mod tests {
 
     #[test]
     fn issue_rows_show_the_lead_pr_state_and_follow_a_refresh() {
-        let (mut state, config) = full_state();
-        let mark = |state: &State| {
-            (mark_cell(&render(state, &config, 100, 20), 3), mark_cell(&render(state, &config, 100, 20), 2))
-        };
+        let mut state = full_state();
+        let mark = |state: &State| (mark_cell(&render(state, 100, 20), 3), mark_cell(&render(state, 100, 20), 2));
         assert_eq!(
             mark(&state),
             (("●".to_string(), palette::FG), (" ".to_string(), palette::FG)),
@@ -1071,10 +1144,10 @@ mod tests {
             (PrState::Closed, Checks::Pass, " ", palette::FG),
         ] {
             let fresh = vec![PullRequest { state: pr_state, checks, ..pr(10, "fix/3-x", &[3]) }];
-            let _ = app::update(&mut state, Msg::Prs { result: Ok(fresh), at: Instant::now() }, &config);
+            let _ = app::update(&mut state, Msg::Prs { result: Ok(fresh), at: Instant::now() });
             assert_eq!(mark(&state).0, (want.to_string(), color), "{pr_state:?} {checks:?}");
         }
-        let screen = text(&render(&state, &config, 100, 20));
+        let screen = text(&render(&state, 100, 20));
         assert!(
             screen.contains("#3    Retry queue") && screen.contains("#2    Docs"),
             "titles stay in one column\n{screen}"
@@ -1090,12 +1163,12 @@ mod tests {
 
     #[test]
     fn the_nerd_font_set_draws_its_glyphs_in_the_same_columns_as_unicode() {
-        let (state, unicode) = full_state();
-        let nerd = Config { icons: IconSet::NerdFont, ..Config::default() };
-        let icons = nerd.icons.icons();
-        let plain = text(&render(&state, &unicode, 120, 24));
-        let screen = text(&render(&state, &nerd, 120, 24));
-        let mark = mark_cell(&render(&state, &nerd, 120, 24), 3);
+        let mut state = full_state();
+        let plain = text(&render(&state, 120, 24));
+        state.config.icons = IconSet::NerdFont;
+        let icons = state.config.icons.icons();
+        let screen = text(&render(&state, 120, 24));
+        let mark = mark_cell(&render(&state, 120, 24), 3);
         assert_eq!(mark, (icons.pr_open.to_string(), palette::FG), "the PR mark cell");
         assert!(
             screen.contains(&format!("#3  {} Retry queue", icons.pr_open)) && screen.contains("#2    Docs"),
@@ -1111,9 +1184,9 @@ mod tests {
 
     #[test]
     fn sessions_detail_shows_the_facts_and_the_tail_under_the_output_rule() {
-        let (mut state, config) = full_state();
-        send(&mut state, &config, KeyCode::Char('3'));
-        let screen = text(&render(&state, &config, 120, 24));
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('3'));
+        let screen = text(&render(&state, 120, 24));
         assert!(screen.contains("worktree /w/orbit-3"));
         let lines: Vec<&str> = screen.lines().collect();
         let rule = lines.iter().position(|l| l.contains("output ─")).expect("output rule drawn");
@@ -1123,10 +1196,10 @@ mod tests {
 
     #[test]
     fn dialog_shows_fields_and_the_exact_commands() {
-        let (mut state, config) = full_state();
-        send(&mut state, &config, KeyCode::Char('j'));
-        send(&mut state, &config, KeyCode::Char('s'));
-        let screen = text(&render(&state, &config, 120, 30));
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        let screen = text(&render(&state, 120, 30));
         for want in [
             "Start session for #2 Docs",
             "Branch",
@@ -1143,10 +1216,10 @@ mod tests {
 
     #[test]
     fn draw_returns_hits_for_tabs_and_visible_rows() {
-        let (state, config) = full_state();
+        let state = full_state();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
         let mut hits = HitMap::default();
-        terminal.draw(|f| hits = draw(f, &state, &config)).expect("draw");
+        terminal.draw(|f| hits = draw(f, &state)).expect("draw");
         let tabs = hits.targets.iter().filter(|(_, t)| matches!(t, HitTarget::Tab(_))).count();
         let rows: Vec<_> = hits
             .targets
@@ -1162,9 +1235,9 @@ mod tests {
 
     #[test]
     fn tab_keys_look_like_key_hints_and_counts_like_counts() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         state.issues.items.clear();
-        let buf = frame(&mut state, &config, 120, 20);
+        let buf = frame(&mut state, 120, 20);
         let top = text(&buf).lines().next().expect("tab row").to_string();
         let column =
             |needle: &str| u16::try_from(top.chars().take(top.find(needle).expect(needle)).count()).expect("x");
@@ -1190,10 +1263,10 @@ mod tests {
     }
 
     /// Draws like the shell does: the frame's hits go back into `state`.
-    fn frame(state: &mut State, config: &Config, w: u16, h: u16) -> Buffer {
+    fn frame(state: &mut State, w: u16, h: u16) -> Buffer {
         let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
         let mut hits = HitMap::default();
-        terminal.draw(|f| hits = draw(f, state, config)).expect("draw");
+        terminal.draw(|f| hits = draw(f, state)).expect("draw");
         state.hits = hits;
         terminal.backend().buffer().clone()
     }
@@ -1203,81 +1276,81 @@ mod tests {
         (0..buf.area.width).find(|&x| buf[(x, 2)].symbol() == "│")
     }
 
-    fn mouse(state: &mut State, config: &Config, kind: MouseEventKind, column: u16) {
+    fn mouse(state: &mut State, kind: MouseEventKind, column: u16) {
         let ev = MouseEvent { kind, column, row: 4, modifiers: KeyModifiers::NONE };
-        let _ = app::update(state, Msg::Mouse(ev, Instant::now()), config);
+        let _ = app::update(state, Msg::Mouse(ev, Instant::now()));
     }
 
-    fn drag(state: &mut State, config: &Config, from: u16, to: u16) {
-        mouse(state, config, MouseEventKind::Down(MouseButton::Left), from);
-        mouse(state, config, MouseEventKind::Drag(MouseButton::Left), to);
-        mouse(state, config, MouseEventKind::Up(MouseButton::Left), to);
+    fn drag(state: &mut State, from: u16, to: u16) {
+        mouse(state, MouseEventKind::Down(MouseButton::Left), from);
+        mouse(state, MouseEventKind::Drag(MouseButton::Left), to);
+        mouse(state, MouseEventKind::Up(MouseButton::Left), to);
     }
 
     #[test]
     fn dragging_the_border_and_the_resize_keys_move_it() {
-        let (mut state, config) = full_state();
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
-        drag(&mut state, &config, 42, 60);
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(60));
-        drag(&mut state, &config, 59, 50); // the blank column left of the border also grabs it
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(50));
-        send(&mut state, &config, KeyCode::Char('<'));
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(45));
-        send(&mut state, &config, KeyCode::Char('>'));
-        send(&mut state, &config, KeyCode::Char('>'));
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(55));
-        send(&mut state, &config, KeyCode::Char('3'));
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(55), "the split applies to every tab");
-        send(&mut state, &config, KeyCode::Char('='));
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+        let mut state = full_state();
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(42));
+        drag(&mut state, 42, 60);
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(60));
+        drag(&mut state, 59, 50); // the blank column left of the border also grabs it
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(50));
+        send(&mut state, KeyCode::Char('<'));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(45));
+        send(&mut state, KeyCode::Char('>'));
+        send(&mut state, KeyCode::Char('>'));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(55));
+        send(&mut state, KeyCode::Char('3'));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(55), "the split applies to every tab");
+        send(&mut state, KeyCode::Char('='));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(42));
     }
 
     #[test]
     fn a_drag_stops_at_the_minimum_pane_widths() {
-        let (mut state, config) = full_state();
-        let _ = frame(&mut state, &config, 100, 20);
-        drag(&mut state, &config, 42, 0);
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(Split::MIN_LIST));
-        drag(&mut state, &config, Split::MIN_LIST, 99);
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(100 - Split::MIN_DETAIL));
+        let mut state = full_state();
+        let _ = frame(&mut state, 100, 20);
+        drag(&mut state, 42, 0);
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(Split::MIN_LIST));
+        drag(&mut state, Split::MIN_LIST, 99);
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(100 - Split::MIN_DETAIL));
     }
 
     #[test]
     fn a_drag_that_starts_on_a_row_selects_it_and_leaves_the_border() {
-        let (mut state, config) = full_state();
-        let _ = frame(&mut state, &config, 100, 20);
-        drag(&mut state, &config, 10, 70);
+        let mut state = full_state();
+        let _ = frame(&mut state, 100, 20);
+        drag(&mut state, 10, 70);
         assert_eq!(app::selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(42));
     }
 
     #[test]
     fn resize_keys_typed_into_the_filter_are_text() {
-        let (mut state, config) = full_state();
-        let _ = frame(&mut state, &config, 100, 20);
-        send(&mut state, &config, KeyCode::Char('/'));
-        send(&mut state, &config, KeyCode::Char('<'));
+        let mut state = full_state();
+        let _ = frame(&mut state, 100, 20);
+        send(&mut state, KeyCode::Char('/'));
+        send(&mut state, KeyCode::Char('<'));
         assert_eq!(state.filter, "<");
-        assert_eq!(border(&frame(&mut state, &config, 100, 20)), Some(42));
+        assert_eq!(border(&frame(&mut state, 100, 20)), Some(42));
     }
 
     #[test]
     fn narrow_panes_still_draw_two_line_rows_and_the_worktree_tail() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         let long = "/home/someone/projects/a-very-long-directory-name/another-long-directory/scratchpad/smoke/hf-1017";
         if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
             s.worktree = WorktreePath::planned(PathBuf::from(long));
         }
-        let _ = frame(&mut state, &config, 100, 20);
-        drag(&mut state, &config, 42, 0);
-        let screen = text(&frame(&mut state, &config, 100, 20));
+        let _ = frame(&mut state, 100, 20);
+        drag(&mut state, 42, 0);
+        let screen = text(&frame(&mut state, 100, 20));
         let rows: Vec<&str> = screen.lines().collect();
         assert!(rows[2].contains("#3") && rows[3].contains("octo"), "two-line row broken:\n{screen}");
         assert!(rows[4].contains("#2"), "second row not drawn:\n{screen}");
-        drag(&mut state, &config, Split::MIN_LIST, 99);
-        send(&mut state, &config, KeyCode::Char('3'));
-        let screen = text(&frame(&mut state, &config, 100, 20));
+        drag(&mut state, Split::MIN_LIST, 99);
+        send(&mut state, KeyCode::Char('3'));
+        let screen = text(&frame(&mut state, 100, 20));
         let line = screen.lines().find(|l| l.contains("worktree ")).expect("worktree line drawn");
         assert!(
             line.contains('…') && line.trim_end().ends_with("hf-1017"),
@@ -1289,33 +1362,32 @@ mod tests {
     fn small_terminals_keep_both_panes() {
         for (w, h) in [(54, 12), (40, 10), (20, 6), (3, 5)] {
             for percent in [10, 42, 90] {
-                let (mut state, mut config) = full_state();
-                config.split = Split::from_percent(percent).expect("in range");
-                state.split = config.split;
-                let buf = frame(&mut state, &config, w, h);
+                let mut state = full_state();
+                state.split = Split::from_percent(percent).expect("in range");
+                let buf = frame(&mut state, w, h);
                 let x = border(&buf).unwrap_or_else(|| panic!("no border at {w}x{h} {percent}%:\n{}", text(&buf)));
                 assert!(x >= 1 && x < w, "{w}x{h} {percent}%: border at {x}");
             }
         }
-        let (mut state, config) = full_state();
-        let screen = text(&frame(&mut state, &config, 40, 10));
+        let mut state = full_state();
+        let screen = text(&frame(&mut state, 40, 10));
         let row = screen.lines().nth(2).unwrap_or_default();
         assert!(row.contains("▌ #") && row.contains("│  Retry"), "a pane is empty:\n{screen}");
     }
 
     #[test]
     fn a_long_message_wraps_on_its_own_row_above_the_centered_keys() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         state.toast =
             Some(app::Toast { text: "Press m again to ask #3's agent to merge PR #10".to_string(), shown_at: None });
-        let screen = text(&render(&state, &config, 30, 12));
+        let screen = text(&render(&state, 30, 12));
         let lines: Vec<&str> = screen.lines().collect();
         let message = format!("{} {}", lines[9].trim(), lines[10].trim());
         assert_eq!(message, "Press m again to ask #3's agent to merge PR #10", "message not whole in\n{screen}");
         assert!(!lines[11].contains("Press"), "message on the key bar:\n{screen}");
 
         state.toast = None;
-        let screen = text(&render(&state, &config, 160, 24));
+        let screen = text(&render(&state, 160, 24));
         let keys = screen.lines().last().unwrap_or_default();
         let left = keys.len() - keys.trim_start().len();
         let right = keys.len() - keys.trim_end().len();
@@ -1324,9 +1396,9 @@ mod tests {
 
     #[test]
     fn a_failed_feed_shows_on_the_message_row() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         state.issues.status = FeedStatus::Failed { error: "rate limited".to_string(), at: Instant::now() };
-        let screen = text(&render(&state, &config, 100, 20));
+        let screen = text(&render(&state, 100, 20));
         let row = screen.lines().nth(18).unwrap_or_default();
         assert!(row.contains("gh failed, showing old data: rate limited"), "missing failure in\n{screen}");
         assert!(screen.lines().next().unwrap_or_default().trim_end().ends_with("orbit"));
@@ -1341,13 +1413,12 @@ mod tests {
 
     #[test]
     fn the_tab_row_shows_the_shown_tabs_sort_mode_when_it_fits() {
-        let (mut state, config) = full_state();
-        let top =
-            |state: &State, w| text(&render(state, &config, w, 24)).lines().next().unwrap_or_default().to_string();
+        let mut state = full_state();
+        let top = |state: &State, w| text(&render(state, w, 24)).lines().next().unwrap_or_default().to_string();
         assert!(top(&state, 120).ends_with("S sort: attention   updated 0s ago   orbit "), "{}", top(&state, 120));
-        let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)), &config);
+        let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)));
         assert!(top(&state, 120).contains("S sort: newest"));
-        send(&mut state, &config, KeyCode::Char('2'));
+        send(&mut state, KeyCode::Char('2'));
         assert!(top(&state, 120).contains("S sort: attention"), "each tab has its own mode");
         let narrow = top(&state, 90);
         assert!(
@@ -1367,8 +1438,8 @@ mod tests {
     }
 
     /// The tab row's right end, and the style of its first character.
-    fn freshness_on_screen(state: &State, config: &Config) -> (String, Style) {
-        let buf = render(state, config, 120, 20);
+    fn freshness_on_screen(state: &State) -> (String, Style) {
+        let buf = render(state, 120, 20);
         let row = text(&buf).lines().next().unwrap_or_default().to_string();
         let words = ["loading", "refreshing", "updated", "refresh failed"];
         let Some(x) = words.iter().filter_map(|w| row.find(w)).min() else {
@@ -1385,23 +1456,23 @@ mod tests {
 
     #[test]
     fn the_tab_row_shows_how_old_the_list_is_and_each_fetch_state() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         state.issues.status = FeedStatus::Fresh { at: ago(12) };
-        assert_eq!(freshness_on_screen(&state, &config), ("updated 12s ago   orbit".to_string(), palette::DIM));
+        assert_eq!(freshness_on_screen(&state), ("updated 12s ago   orbit".to_string(), palette::DIM));
 
         state.inflight.issues = true;
-        assert_eq!(freshness_on_screen(&state, &config), ("refreshing…   orbit".to_string(), palette::DIM));
+        assert_eq!(freshness_on_screen(&state), ("refreshing…   orbit".to_string(), palette::DIM));
 
         state.inflight.issues = false;
         state.issues.status = FeedStatus::Failed { error: "offline".to_string(), at: ago(40) };
-        assert_eq!(freshness_on_screen(&state, &config), ("refresh failed 40s ago   orbit".to_string(), palette::WARN));
+        assert_eq!(freshness_on_screen(&state), ("refresh failed 40s ago   orbit".to_string(), palette::WARN));
 
         state.prs.status = FeedStatus::Fresh { at: ago(125) };
-        send(&mut state, &config, KeyCode::Char('2'));
-        assert_eq!(freshness_on_screen(&state, &config).0, "updated 2m ago   orbit", "each tab shows its own feed");
+        send(&mut state, KeyCode::Char('2'));
+        assert_eq!(freshness_on_screen(&state).0, "updated 2m ago   orbit", "each tab shows its own feed");
 
-        send(&mut state, &config, KeyCode::Char('3'));
-        let row = freshness_on_screen(&state, &config).0;
+        send(&mut state, KeyCode::Char('3'));
+        let row = freshness_on_screen(&state).0;
         assert!(
             row.starts_with("1 Issues") && row.ends_with(" orbit"),
             "sessions are not fetched from GitHub, so no age: {row:?}"
@@ -1410,17 +1481,59 @@ mod tests {
 
     #[test]
     fn a_narrow_tab_row_keeps_the_age_and_drops_the_repo_name() {
-        let (mut state, config) = full_state();
+        let mut state = full_state();
         state.issues.status = FeedStatus::Fresh { at: ago(12) };
-        let row = text(&render(&state, &config, 78, 10)).lines().next().unwrap_or_default().to_string();
+        let row = text(&render(&state, 78, 10)).lines().next().unwrap_or_default().to_string();
         assert!(row.trim_end().ends_with("updated 12s ago") && !row.contains("orbit"), "row: {row:?}");
     }
 
     #[test]
     fn empty_and_loading_lists_say_so() {
-        let config = Config::default();
-        let (state, _) = app::init(Instant::now(), &config, Context::default());
-        assert!(text(&render(&state, &config, 80, 10)).contains("Loading issues…"));
+        let (state, _) = app::init(Instant::now(), Config::default(), Context::default());
+        assert!(text(&render(&state, 80, 10)).contains("Loading issues…"));
+    }
+
+    #[test]
+    fn the_settings_menu_shows_each_key_value_and_default_in_both_views() {
+        for view in [View::Classic, View::Agent] {
+            let mut state = full_state();
+            state.view = view;
+            state.config.detect_waiting = false;
+            send(&mut state, KeyCode::Char(','));
+            let screen = text(&render(&state, 100, 30));
+            for want in [
+                " Settings ",
+                "detect_waiting  off   default: on",
+                "icons           unicode   default: unicode",
+                "split           42%   default: 42%",
+                "claude_command  claude   default: claude",
+                "Applies to sessions you start or resume after this change.",
+                "j/k move · enter change · esc close",
+                "Saved to config.json",
+            ] {
+                assert!(screen.contains(want), "{view:?} missing {want:?} in\n{screen}");
+            }
+            assert!(screen.contains("› detect_waiting"), "the selected row is marked\n{screen}");
+        }
+    }
+
+    #[test]
+    fn the_settings_menu_shows_the_editor_and_its_error() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char(','));
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Enter);
+        send(&mut state, KeyCode::Backspace);
+        send(&mut state, KeyCode::Backspace);
+        send(&mut state, KeyCode::Char('9'));
+        send(&mut state, KeyCode::Char('5'));
+        send(&mut state, KeyCode::Enter);
+        let screen = text(&render(&state, 100, 30));
+        for want in ["split           95▏", "is not a percent from 10 to 90", "enter save · esc cancel"] {
+            assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+        }
+        assert!(!screen.contains("Applies to sessions"), "the error takes the note's line\n{screen}");
     }
 }
 
@@ -1428,19 +1541,19 @@ mod tests {
 
 mod agent {
     use super::{
-        Checks, Config, Constraint, DETAIL_MAX_WIDTH, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber,
-        Layout, Line, Paragraph, PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, View,
-        age, app, cells, centered, checks_span, checks_word, draw_dialog, draw_issue_detail, draw_pr_detail,
+        Checks, Constraint, DETAIL_MAX_WIDTH, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber, Layout,
+        Line, Paragraph, PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, View, age, app,
+        cells, centered, checks_span, checks_word, draw_issue_detail, draw_overlay, draw_pr_detail,
         draw_session_detail, empty_text, fit, freshness, issue_of, message, one_line, palette, pr_mark, pr_state_span,
         row_line, span, spans_width,
     };
 
     const LOGO: [&str; 3] = [" ▄██▄ ", "██▀▀██", "▀▘  ▝▀"];
 
-    pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
+    pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
         let now = jiff::Timestamp::now();
         let full = frame.area();
-        let icons = config.icons.icons();
+        let icons = state.config.icons.icons();
         frame.buffer_mut().set_style(full, palette::PLAIN);
         let screen = Rect {
             x: full.x + 2,
@@ -1487,9 +1600,7 @@ mod agent {
         frame.render_widget(rule(), rule2);
         draw_prompt(frame, prompt, state);
         draw_footer(frame, footer, state);
-        if let Focus::Dialog(dialog) = &state.focus {
-            draw_dialog(frame, full, state, dialog, config);
-        }
+        draw_overlay(frame, state);
         hits
     }
 
@@ -1770,6 +1881,8 @@ mod agent {
         let pairs: Vec<(&str, &str)> = match &state.focus {
             Focus::Filter => vec![("enter", "keep"), ("esc", "clear")],
             Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
+            Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
+            Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
             Focus::List => app::key_bar(state),
         };
         let mut spans = vec![Span::raw("")];
