@@ -5,7 +5,9 @@
 //! (1 row). The right end of the tab bar shows how old the shown list is.
 //! List rows are two lines tall. The dialog is a centered overlay.
 
-use crate::app::{self, View, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab};
+use crate::app::{
+    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab, View,
+};
 use crate::config::Config;
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
@@ -1425,7 +1427,13 @@ mod tests {
 // ---- PROTOTYPE: agent view ---------------------------------------------------
 
 mod agent {
-    use super::*;
+    use super::{
+        Checks, Config, Constraint, DETAIL_MAX_WIDTH, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber,
+        Layout, Line, Paragraph, PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, View,
+        age, app, cells, centered, checks_span, checks_word, draw_dialog, draw_issue_detail, draw_pr_detail,
+        draw_session_detail, empty_text, fit, freshness, issue_of, message, one_line, palette, pr_mark, pr_state_span,
+        row_line, span, spans_width,
+    };
 
     const LOGO: [&str; 3] = [" ▄██▄ ", "██▀▀██", "▀▘  ▝▀"];
 
@@ -1455,14 +1463,11 @@ mod agent {
         let mut hits = HitMap { panes: body, ..HitMap::default() };
         draw_header(frame, header, state, icons, &mut hits);
         let list = if state.view == View::AgentPreview {
-            let [list, sep, detail] = Layout::vertical([
-                Constraint::Percentage(55),
-                Constraint::Length(1),
-                Constraint::Min(3),
-            ])
-            .areas(body);
+            let [list, sep, detail] =
+                Layout::vertical([Constraint::Percentage(55), Constraint::Length(1), Constraint::Min(3)]).areas(body);
             draw_separator(frame, sep, state);
-            let detail = Rect { x: detail.x + 2, width: detail.width.saturating_sub(4).min(DETAIL_MAX_WIDTH), ..detail };
+            let detail =
+                Rect { x: detail.x + 2, width: detail.width.saturating_sub(4).min(DETAIL_MAX_WIDTH), ..detail };
             match app::selected_row(state) {
                 Some(RowKey::Issue(n)) => draw_issue_detail(frame, detail, state, n, now, icons),
                 Some(RowKey::Pr(n)) => draw_pr_detail(frame, detail, state, n, now, icons),
@@ -1497,10 +1502,8 @@ mod agent {
             Paragraph::new(LOGO.iter().map(|l| Line::from(span(*l, palette::ACCENT))).collect::<Vec<_>>()),
             logo,
         );
-        let first = vec![
-            span("dispatch", palette::HEADING),
-            span(format!(" v{}", env!("CARGO_PKG_VERSION")), palette::DIM),
-        ];
+        let first =
+            vec![span("dispatch", palette::HEADING), span(format!(" v{}", env!("CARGO_PKG_VERSION")), palette::DIM)];
         let mut second = vec![span(state.context.repo_name.clone(), palette::PLAIN)];
         if let Some((text, style)) = freshness(state, Instant::now()) {
             second.push(span(format!(" · {text}"), style));
@@ -1585,40 +1588,52 @@ mod agent {
         now: jiff::Timestamp,
         icons: &Icons,
     ) -> (Span<'static>, String, Vec<Span<'static>>, String) {
-        let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(Session::state), state.starting.contains(&n)) {
-            (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
-            (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
-            (Some(SessionState::Exited), _) => Some(span(icons.exited, palette::EXITED)),
-            (None, true) => Some(span(icons.starting, palette::STARTING)),
-            (None, false) => None,
-        };
+        let session_glyph =
+            |n: IssueNumber| match (state.sessions.get(&n).map(Session::state), state.starting.contains(&n)) {
+                (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
+                (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
+                (Some(SessionState::Exited), _) => Some(span(icons.exited, palette::EXITED)),
+                (None, true) => Some(span(icons.starting, palette::STARTING)),
+                (None, false) => None,
+            };
         let pr_summary = |p: &PullRequest| {
-            let mut v = vec![
-                span(format!("PR #{} ", p.number.0), palette::DIM),
-                pr_state_span(p.state),
-            ];
+            let mut v = vec![span(format!("PR #{} ", p.number.0), palette::DIM), pr_state_span(p.state)];
             if p.checks != Checks::None {
-                v.extend([span(" · ", palette::DIM), checks_span(p.checks, icons), span(format!(" {}", checks_word(p.checks)), palette::DIM)]);
+                v.extend([
+                    span(" · ", palette::DIM),
+                    checks_span(p.checks, icons),
+                    span(format!(" {}", checks_word(p.checks)), palette::DIM),
+                ]);
             }
             v
         };
         match key {
             RowKey::Issue(n) => {
-                let Some(i) = issue_of(state, n) else { return (Span::raw(" "), String::new(), Vec::new(), String::new()) };
+                let Some(i) = issue_of(state, n) else {
+                    return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                };
                 let glyph = session_glyph(n).unwrap_or_else(|| {
                     let m = pr_mark(app::lead_pr(state, n), icons);
-                    if m.content.trim().is_empty() { span(icons.idle, palette::DIM) } else { span(m.content.trim().to_string(), m.style) }
+                    if m.content.trim().is_empty() {
+                        span(icons.idle, palette::DIM)
+                    } else {
+                        span(m.content.trim().to_string(), m.style)
+                    }
                 });
                 let summary = match (said(state, n), app::lead_pr(state, n)) {
                     (Some(said), _) => said,
                     (None, Some(p)) => pr_summary(p),
-                    (None, None) if !i.labels.is_empty() => vec![span(format!("{} · {}", i.author, i.labels.join(", ")), palette::DIM)],
+                    (None, None) if !i.labels.is_empty() => {
+                        vec![span(format!("{} · {}", i.author, i.labels.join(", ")), palette::DIM)]
+                    }
                     (None, None) => vec![span(format!("{} · {} comments", i.author, i.comment_count), palette::DIM)],
                 };
                 (glyph, format!("#{} {}", n.0, one_line(&i.title)), summary, age(i.updated_at, now))
             }
             RowKey::Pr(n) => {
-                let Some(p) = state.prs.items.iter().find(|p| p.number == n) else { return (Span::raw(" "), String::new(), Vec::new(), String::new()) };
+                let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
+                    return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                };
                 let mut summary = vec![
                     span(format!("{} → {}  ", p.head, p.base), palette::DIM),
                     span(format!("+{}", p.additions), palette::PASS),
@@ -1642,7 +1657,10 @@ mod agent {
                 let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
                 let issue = issue_of(state, n);
                 let session = state.sessions.get(&n);
-                let name = issue.map(|i| one_line(&i.title)).or_else(|| session.map(|s| s.branch.as_str().to_string())).unwrap_or_default();
+                let name = issue
+                    .map(|i| one_line(&i.title))
+                    .or_else(|| session.map(|s| s.branch.as_str().to_string()))
+                    .unwrap_or_default();
                 let summary = said(state, n)
                     .or_else(|| session.and_then(|s| app::pr_for_session(state, s)).map(pr_summary))
                     .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
@@ -1759,9 +1777,15 @@ mod agent {
             if i > 0 {
                 spans.push(span(" · ", palette::DIM));
             }
-            spans.push(span(format!("{k} to {d}"), palette::DIM));
+            spans.push(span(k.to_string(), palette::ACCENT));
+            spans.push(span(format!(" to {d}"), palette::DIM));
         }
-        let sort = vec![span(format!("S sort: {}", state.sort.label(state.tab)), palette::DIM)];
+        let sort = vec![
+            span("S", palette::ACCENT),
+            span(format!(" sort: {} · ", state.sort.label(state.tab)), palette::DIM),
+            span("v", palette::ACCENT),
+            span(" layout", palette::DIM),
+        ];
         frame.render_widget(Paragraph::new(row_line(area.width, spans, sort)), area);
     }
 }

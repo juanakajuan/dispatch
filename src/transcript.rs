@@ -129,7 +129,8 @@ mod tests {
             parse_latest(&jsonl),
             Some(Summary { kind: SummaryKind::Recap, text: "You fixed X. Next, run Y.".to_string() })
         );
-        let newer = format!("{jsonl}\n{}", r#"{"type":"assistant","message":{"content":[{"type":"text","text":"New."}]}}"#);
+        let newer =
+            format!("{jsonl}\n{}", r#"{"type":"assistant","message":{"content":[{"type":"text","text":"New."}]}}"#);
         assert_eq!(parse_latest(&newer), Some(Summary { kind: SummaryKind::Message, text: "New.".to_string() }));
     }
 

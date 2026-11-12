@@ -53,8 +53,7 @@ pub fn group_of(state: &State, key: RowKey) -> Group {
     let by_session = |n: IssueNumber| match activity(state, n) {
         Some(SessionState::NeedsYou) => Some(g(0, "Needs you")),
         Some(SessionState::Running) => Some(g(1, "Working")),
-        Some(SessionState::Exited) => None,
-        None => None,
+        Some(SessionState::Exited) | None => None,
     };
     match key {
         RowKey::Session(n) => by_session(n).unwrap_or(g(2, "Exited")),
@@ -546,7 +545,7 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('<')], action: Action::SplitNarrower, bar: &[] },
     Binding { keys: &[Key::Char('>')], action: Action::SplitWider, bar: &[] },
     Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
-    Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[bar("v", "layout", When::Always)] },
+    Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[] },
     Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
 ];
 
