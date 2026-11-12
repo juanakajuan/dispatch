@@ -7,12 +7,13 @@ use crate::config::Config;
 use crate::domain::{
     BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split,
 };
-use crate::merge::MergeOutcome;
+use crate::merge::{MergeOutcome, MergeRun};
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::session::{Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,11 +206,13 @@ pub enum Armed {
 
 /// Merge `pr`. If it has a problem, a running session on its branch fixes it.
 /// Without one, a new session fixes it only when `new_session_ok`, because
-/// the first `m` told the user so. Otherwise one more `m` must agree.
+/// the first `m` told the user so. Otherwise one more `m` must agree. A draft
+/// is marked ready only when `ready_ok`, for the same reason.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MergeAsk {
     pub pr: PrNumber,
     pub new_session_ok: bool,
+    pub ready_ok: bool,
 }
 
 /// Who fixes a PR that can not merge.
@@ -303,7 +306,7 @@ pub enum Msg {
     },
     Merged {
         ask: MergeAsk,
-        result: Result<MergeOutcome, String>,
+        run: MergeRun,
     },
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
@@ -426,7 +429,7 @@ pub enum When {
     OnSessions,
     SessionLive,
     SessionExited,
-    /// The selection has an open, non-draft PR.
+    /// The selection has an open or draft PR.
     Mergeable,
     OpenWith(OpenWith),
 }
@@ -630,7 +633,7 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             }
             Vec::new()
         }
-        Msg::Merged { ask, result } => merged(state, ask, result),
+        Msg::Merged { ask, run } => merged(state, ask, run),
         Msg::Attached(result) => {
             if let Err(e) = result {
                 say(state, format!("attach failed: {e}"));
@@ -820,8 +823,7 @@ fn merge_target(state: &State) -> Result<&PullRequest, String> {
     };
     let pr = pr.ok_or(missing)?;
     match pr.state {
-        PrState::Open => Ok(pr),
-        PrState::Draft => Err(format!("PR #{} is a draft.", pr.number.0)),
+        PrState::Open | PrState::Draft => Ok(pr),
         PrState::Merged | PrState::Closed => Err(format!("PR #{} is not open.", pr.number.0)),
     }
 }
@@ -865,15 +867,15 @@ fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     {
         return start_fix(state, req.clone());
     }
-    let (new_session_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
+    let (new_session_ok, ready_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
         (MergePlan::Handoff(problem), fix) => {
             let sentence = rules::problem_sentence(n, &pr.base, problem);
             match fix {
                 Ok(Fixer::Agent(i)) => {
-                    (false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0))
+                    (false, false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0))
                 }
                 Ok(Fixer::NewSession(i)) => {
-                    (true, format!("{sentence} Press m again to start a session for #{} that fixes it.", i.0))
+                    (true, false, format!("{sentence} Press m again to start a session for #{} that fixes it.", i.0))
                 }
                 Err(why) => {
                     say(state, format!("{sentence} {why}"));
@@ -883,9 +885,12 @@ fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         }
         // A cached refusal still arms, because the list can be stale and the
         // job asks GitHub again.
-        (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, format!("Press m again to merge PR #{}", n.0)),
+        (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, false, format!("Press m again to merge PR #{}", n.0)),
+        (MergePlan::MarkReady, _) => {
+            (false, true, format!("PR #{} is a draft. Press m again to mark it ready and merge it.", n.0))
+        }
     };
-    let ask = MergeAsk { pr: n, new_session_ok };
+    let ask = MergeAsk { pr: n, new_session_ok, ready_ok };
     if armed != Some(&Armed::Merge(ask)) {
         state.armed = Some(Armed::Merge(ask));
         say(state, expect);
@@ -919,7 +924,23 @@ fn fix_request(
     })
 }
 
-fn merged(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
+fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd> {
+    let ended_ready = run.marked_ready && !matches!(run.result, Ok(MergeOutcome::Merged(_) | MergeOutcome::Queued));
+    let refused = matches!(run.result, Ok(MergeOutcome::Refused(_)));
+    let mut cmds = merge_result(state, ask, run.result);
+    if ended_ready {
+        // dispatch does not undo `gh pr ready`, so the toast must say it ran.
+        if let Some(toast) = &mut state.toast {
+            let _ = write!(toast.text, " PR #{} is now ready for review.", ask.pr.0);
+        }
+    }
+    if ended_ready || refused {
+        refresh_github(state, &mut cmds);
+    }
+    cmds
+}
+
+fn merge_result(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
     match result {
         Ok(MergeOutcome::Merged(method)) => {
             let mut cmds = Vec::new();
@@ -2054,18 +2075,29 @@ mod tests {
         state.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
     }
 
-    const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false };
-    const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: true };
+    const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: false };
+    const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: true, ready_ok: false };
+
+    fn ran(result: Result<MergeOutcome, String>) -> MergeRun {
+        MergeRun { marked_ready: false, result }
+    }
+
+    fn ran_after_ready(result: Result<MergeOutcome, String>) -> MergeRun {
+        MergeRun { marked_ready: true, result }
+    }
 
     fn handoff(problem: MergeProblem) -> Msg {
         let mut fresh = pr(10, "fix/3-x", &[3]);
         fresh.mergeability = Mergeability::Conflict;
-        Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Handoff { problem, method: MergeMethod::Rebase, pr: fresh }) }
+        Msg::Merged {
+            ask: ASK,
+            run: ran(Ok(MergeOutcome::Handoff { problem, method: MergeMethod::Rebase, pr: fresh })),
+        }
     }
 
     fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
         match msg {
-            Msg::Merged { result, .. } => Msg::Merged { ask, result },
+            Msg::Merged { run, .. } => Msg::Merged { ask, run },
             other => other,
         }
     }
@@ -2098,7 +2130,7 @@ mod tests {
         assert_eq!(toast(&state), "Press m again to merge PR #11");
         assert_eq!(
             merges(&press(&mut state, &config, key('m'))),
-            [MergeAsk { pr: PrNumber(11), new_session_ok: false }]
+            [MergeAsk { pr: PrNumber(11), new_session_ok: false, ready_ok: false }]
         );
     }
 
@@ -2201,8 +2233,11 @@ mod tests {
     #[test]
     fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
         let (mut state, config, _) = app();
-        let cmds =
-            press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) });
+        let cmds = press(
+            &mut state,
+            &config,
+            Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) },
+        );
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         assert!(sends(&cmds).is_empty());
@@ -2219,7 +2254,7 @@ mod tests {
     }
 
     fn merged_squash() -> Msg {
-        Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Merged(MergeMethod::Squash)) }
+        Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) }
     }
 
     #[test]
@@ -2251,7 +2286,7 @@ mod tests {
     fn a_queued_merge_keeps_the_session() {
         let (mut state, config, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Queued) });
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
         assert!(stops(&cmds).is_empty(), "the PR can still drop out of the queue");
     }
 
@@ -2269,21 +2304,69 @@ mod tests {
     #[test]
     fn a_queued_merge_says_so() {
         let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Queued) });
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
         assert_eq!(toast(&state), "PR #10 is in the merge queue");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
     }
 
     #[test]
-    fn a_refused_or_failed_merge_only_shows_a_toast() {
+    fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast() {
         let (mut state, config, _) = app();
-        let cmds =
-            press(&mut state, &config, Msg::Merged { ask: ASK, result: Ok(MergeOutcome::Refused("wait".to_string())) });
-        assert!(cmds.is_empty());
+        let cmds = press(
+            &mut state,
+            &config,
+            Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Refused("wait".to_string()))) },
+        );
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "a stale list catches up");
         assert_eq!(toast(&state), "wait");
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, result: Err("not allowed".to_string()) });
+        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Err("not allowed".to_string())) });
         assert!(cmds.is_empty());
         assert_eq!(toast(&state), "Merge PR #10 failed: not allowed");
+    }
+
+    const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: true };
+
+    #[test]
+    fn m_on_a_draft_says_it_marks_it_ready_then_the_second_m_merges_with_consent() {
+        let (mut state, config, _) = app();
+        state.prs.items[0].state = PrState::Draft;
+        assert!(key_bar(&state).contains(&("m", "merge")));
+        assert!(press(&mut state, &config, key('m')).is_empty());
+        assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
+        let cmds = press(&mut state, &config, key('m'));
+        assert_eq!(merges(&cmds), [ASK_READY]);
+    }
+
+    #[test]
+    fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
+        let handoff_after_ready = || {
+            let mut fresh = pr(10, "fix/3-x", &[3]);
+            fresh.mergeability = Mergeability::Conflict;
+            Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: fresh })
+        };
+        let outcomes = [
+            (Ok(MergeOutcome::Refused("wait.".to_string())), "wait. PR #10 is now ready for review."),
+            (
+                handoff_after_ready(),
+                "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it. PR #10 is now ready for review.",
+            ),
+            (Err("boom".to_string()), "Merge PR #10 failed: boom PR #10 is now ready for review."),
+        ];
+        for (result, text) in outcomes {
+            let (mut state, config, _) = app();
+            let cmds = press(&mut state, &config, Msg::Merged { ask: ASK_READY, run: ran_after_ready(result) });
+            assert_eq!(toast(&state), text);
+            assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "{text}");
+            assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchIssues))), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_merge_after_marking_ready_has_no_ready_note() {
+        let (mut state, config, _) = app();
+        let msg = Msg::Merged { ask: ASK_READY, run: ran_after_ready(Ok(MergeOutcome::Merged(MergeMethod::Squash))) };
+        press(&mut state, &config, msg);
+        assert_eq!(toast(&state), "Merged PR #10 (squash)");
     }
 
     #[test]
@@ -2315,8 +2398,8 @@ mod tests {
         press(&mut state, &config, key('1'));
         state.prs.items[0].state = PrState::Draft;
         press(&mut state, &config, key('m'));
-        assert_eq!(toast(&state), "PR #10 is a draft.");
-        assert!(!key_bar(&state).contains(&("m", "merge")));
+        assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
+        assert!(key_bar(&state).contains(&("m", "merge")));
 
         state.prs.items.remove(0);
         for _ in 0..2 {

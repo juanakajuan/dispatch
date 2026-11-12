@@ -82,6 +82,11 @@ pub fn merge_pr(repo_root: &Path, pr: &PullRequest, method: MergeMethod) -> Resu
     proc::run("gh", args, repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
+/// `gh pr ready <n>`: takes a draft out of draft.
+pub fn mark_ready(repo_root: &Path, pr: PrNumber) -> Result<(), FetchError> {
+    proc::run("gh", ["pr", "ready", &pr.0.to_string()], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
+}
+
 /// Opens the issue or PR page in the browser with `gh <kind> view <n> --web`,
 /// so it follows whatever host `gh` is logged in to. `proc::run` captures the
 /// output, so nothing `gh` prints reaches the TUI.
@@ -406,6 +411,13 @@ mod tests {
         let pr = PullRequest { head_oid: "abc123".to_string(), ..crate::testutil::pr(12, "h", &[]) };
         merge_pr(Path::new("/r"), &pr, MergeMethod::Rebase).expect("merges");
         assert_eq!(proc::fake::calls(), ["gh pr merge 12 --rebase --match-head-commit abc123"]);
+    }
+
+    #[test]
+    fn mark_ready_runs_gh_pr_ready() {
+        proc::fake::install(|_| Ok(String::new()));
+        mark_ready(Path::new("/r"), PrNumber(12)).expect("marks ready");
+        assert_eq!(proc::fake::calls(), ["gh pr ready 12"]);
     }
 
     #[test]
