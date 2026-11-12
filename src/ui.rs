@@ -5,7 +5,9 @@
 //! (1 row). The right end of the tab bar shows how old the shown list is.
 //! List rows are two lines tall. The dialog is a centered overlay.
 
-use crate::app::{self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab};
+use crate::app::{
+    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, StartDialog, State, Tab, View,
+};
 use crate::config::Config;
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
@@ -20,10 +22,10 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph, Wr
 use std::time::Instant;
 
 /// The whole palette. No other module builds a `Style`.
-/// Rule: Gruvbox (dark) foregrounds only; never a background color, so the
-/// terminal's own background shows through. One accent (orange) marks what
-/// is active: the tab, the selected row, the focused field, the keys. The
-/// other colors carry state only.
+/// Rule: Gruvbox (dark) foregrounds, and a background color only on the tab
+/// number badges, so the terminal's own background shows through elsewhere.
+/// One accent (blue) marks what is active: the tab, the selected row, the
+/// focused field, the keys. The other colors carry state only.
 pub mod palette {
     use ratatui::style::{Color, Modifier, Style};
 
@@ -35,13 +37,17 @@ pub mod palette {
     pub const BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
     pub const PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
     pub const AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
-    pub const ORANGE: Color = Color::Rgb(0xfe, 0x80, 0x19);
+    pub const BG0: Color = Color::Rgb(0x28, 0x28, 0x28);
+    pub const BG2: Color = Color::Rgb(0x50, 0x49, 0x45);
 
     pub const PLAIN: Style = Style::new().fg(FG);
     pub const HEADING: Style = Style::new().fg(FG).add_modifier(Modifier::BOLD);
     pub const DIM: Style = Style::new().fg(GRAY);
-    pub const ACCENT: Style = Style::new().fg(ORANGE);
-    pub const ACTIVE: Style = Style::new().fg(ORANGE).add_modifier(Modifier::BOLD);
+    pub const ACCENT: Style = Style::new().fg(BLUE);
+    pub const ACTIVE: Style = Style::new().fg(BLUE).add_modifier(Modifier::BOLD);
+    /// The number badge of the shown tab, and of the other tabs.
+    pub const TAB_KEY_ON: Style = Style::new().fg(BG0).bg(BLUE).add_modifier(Modifier::BOLD);
+    pub const TAB_KEY_OFF: Style = Style::new().fg(FG).bg(BG2);
     pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
     pub const RUNNING: Style = Style::new().fg(GREEN);
     pub const NEEDS_YOU: Style = Style::new().fg(YELLOW).add_modifier(Modifier::BOLD);
@@ -51,7 +57,7 @@ pub mod palette {
     pub const FAIL: Style = Style::new().fg(RED);
     pub const PENDING: Style = Style::new().fg(YELLOW);
     pub const MERGED: Style = Style::new().fg(PURPLE);
-    pub const LABEL: Style = Style::new().fg(BLUE);
+    pub const LABEL: Style = Style::new().fg(AQUA);
     pub const ERROR: Style = Style::new().fg(RED);
     pub const WARN: Style = Style::new().fg(YELLOW);
     pub const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
@@ -66,6 +72,9 @@ const DETAIL_MAX_WIDTH: u16 = 100;
 const MESSAGE_MAX_LINES: usize = 3;
 
 pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
+    if state.view != View::Classic {
+        return agent::draw(frame, state, config);
+    }
     let now = jiff::Timestamp::now();
     let screen = frame.area();
     // Tabs, rule, one body row, and keys always fit before the message grows.
@@ -317,7 +326,7 @@ fn draw_tabs(frame: &mut Frame, area: Rect, rule: Rect, state: &State, now: Inst
     for (tab, key, name, count, needs) in tabs {
         let on = tab == state.tab;
         let mut label = vec![
-            span(format!("{key} "), palette::ACCENT),
+            span(format!(" {key} "), if on { palette::TAB_KEY_ON } else { palette::TAB_KEY_OFF }),
             span(name, if on { palette::ACTIVE } else { palette::PLAIN }),
             span(format!(" ({count})"), palette::DIM),
         ];
@@ -966,8 +975,8 @@ mod tests {
     }
 
     fn in_palette(c: Color) -> bool {
-        use palette::{AQUA, BLUE, FG, GRAY, GREEN, ORANGE, PURPLE, RED, YELLOW};
-        [FG, GRAY, RED, GREEN, YELLOW, BLUE, PURPLE, AQUA, ORANGE].contains(&c)
+        use palette::{AQUA, BG0, BLUE, FG, GRAY, GREEN, PURPLE, RED, YELLOW};
+        [FG, GRAY, RED, GREEN, YELLOW, BLUE, PURPLE, AQUA, BG0].contains(&c)
     }
 
     /// Every screen the app can show: no cell has a background, and every
@@ -987,7 +996,8 @@ mod tests {
         screens.push(("narrow".to_string(), render(&state, &config, 30, 12)));
         for (name, buf) in screens {
             for cell in buf.content() {
-                assert_eq!(cell.bg, Color::Reset, "{name}: background at {:?}", cell.symbol());
+                let badge = [palette::BLUE, palette::BG2].contains(&cell.bg);
+                assert!(cell.bg == Color::Reset || badge, "{name}: background at {:?}", cell.symbol());
                 assert_eq!(cell.underline_color, Color::Reset, "{name}: underline color");
                 assert!(in_palette(cell.fg), "{name}: fg {:?} at {:?}", cell.fg, cell.symbol());
             }
@@ -1006,7 +1016,7 @@ mod tests {
             buf.content().iter().all(|c| !c.modifier.contains(Modifier::REVERSED)),
             "no reversed block outside a text cursor"
         );
-        assert!(buf.content().iter().filter(|c| c.symbol() == "▌").all(|c| c.fg == palette::ORANGE));
+        assert!(buf.content().iter().filter(|c| c.symbol() == "▌").all(|c| c.fg == palette::BLUE));
     }
 
     #[test]
@@ -1164,7 +1174,8 @@ mod tests {
             ("3 Sessions (1) ▲1", "▲1", Tab::Sessions),
         ] {
             let x = column(label);
-            assert_eq!(buf[(x, 0)].fg, palette::ORANGE, "{label}: the key has the key bar's accent");
+            let badge = if tab == state.tab { palette::BLUE } else { palette::BG2 };
+            assert_eq!(buf[(x, 0)].bg, badge, "{label}: the key sits on a badge, blue for the shown tab");
             let count = column(end);
             assert_eq!(buf[(count, 0)].symbol(), end.chars().next().expect("end").to_string());
             if end.starts_with('(') {
@@ -1410,5 +1421,371 @@ mod tests {
         let config = Config::default();
         let (state, _) = app::init(Instant::now(), &config, Context::default());
         assert!(text(&render(&state, &config, 80, 10)).contains("Loading issues…"));
+    }
+}
+
+// ---- PROTOTYPE: agent view ---------------------------------------------------
+
+mod agent {
+    use super::{
+        Checks, Config, Constraint, DETAIL_MAX_WIDTH, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber,
+        Layout, Line, Paragraph, PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, View,
+        age, app, cells, centered, checks_span, checks_word, draw_dialog, draw_issue_detail, draw_pr_detail,
+        draw_session_detail, empty_text, fit, freshness, issue_of, message, one_line, palette, pr_mark, pr_state_span,
+        row_line, span, spans_width,
+    };
+
+    const LOGO: [&str; 3] = [" ▄██▄ ", "██▀▀██", "▀▘  ▝▀"];
+
+    pub fn draw(frame: &mut Frame, state: &State, config: &Config) -> HitMap {
+        let now = jiff::Timestamp::now();
+        let full = frame.area();
+        let icons = config.icons.icons();
+        frame.buffer_mut().set_style(full, palette::PLAIN);
+        let screen = Rect {
+            x: full.x + 2,
+            y: full.y + 1,
+            width: full.width.saturating_sub(4),
+            height: full.height.saturating_sub(1),
+        };
+        let message = message(state);
+        let [header, _, body, msg, rule1, prompt, rule2, footer] = Layout::vertical([
+            Constraint::Length(5),
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(u16::from(message.is_some())),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(screen);
+        let mut hits = HitMap { panes: body, ..HitMap::default() };
+        draw_header(frame, header, state, icons, &mut hits);
+        let list = if state.view == View::AgentPreview {
+            let [list, sep, detail] =
+                Layout::vertical([Constraint::Percentage(55), Constraint::Length(1), Constraint::Min(3)]).areas(body);
+            draw_separator(frame, sep, state);
+            let detail =
+                Rect { x: detail.x + 2, width: detail.width.saturating_sub(4).min(DETAIL_MAX_WIDTH), ..detail };
+            match app::selected_row(state) {
+                Some(RowKey::Issue(n)) => draw_issue_detail(frame, detail, state, n, now, icons),
+                Some(RowKey::Pr(n)) => draw_pr_detail(frame, detail, state, n, now, icons),
+                Some(RowKey::Session(n)) => draw_session_detail(frame, detail, state, n, icons),
+                None => {}
+            }
+            list
+        } else {
+            body
+        };
+        draw_rows(frame, list, state, now, icons, &mut hits);
+        if let Some((text, style)) = message {
+            frame.render_widget(Paragraph::new(span(format!(" {}", fit(&text, usize::from(msg.width))), style)), msg);
+        }
+        let rule = || Paragraph::new(span("─".repeat(usize::from(screen.width)), palette::DIM));
+        frame.render_widget(rule(), rule1);
+        frame.render_widget(rule(), rule2);
+        draw_prompt(frame, prompt, state);
+        draw_footer(frame, footer, state);
+        if let Focus::Dialog(dialog) = &state.focus {
+            draw_dialog(frame, full, state, dialog, config);
+        }
+        hits
+    }
+
+    fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &Icons, hits: &mut HitMap) {
+        let [tab_row, _, brand] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(3)]).areas(area);
+        let [logo, _, text] =
+            Layout::horizontal([Constraint::Length(6), Constraint::Length(4), Constraint::Min(1)]).areas(brand);
+        frame.render_widget(
+            Paragraph::new(LOGO.iter().map(|l| Line::from(span(*l, palette::ACCENT))).collect::<Vec<_>>()),
+            logo,
+        );
+        let first =
+            vec![span("dispatch", palette::HEADING), span(format!(" v{}", env!("CARGO_PKG_VERSION")), palette::DIM)];
+        let mut second = vec![span(state.context.repo_name.clone(), palette::PLAIN)];
+        if let Some((text, style)) = freshness(state, Instant::now()) {
+            second.push(span(format!(" · {text}"), style));
+        }
+
+        let mut tabs: Vec<Span<'static>> = Vec::new();
+        let mut spans_at: Vec<(Tab, u16, u16)> = Vec::new();
+        let mut x: u16 = 0;
+        for (tab, key, name, count) in [
+            (Tab::Issues, "1", "Issues", state.issues.items.len()),
+            (Tab::Prs, "2", "Pull requests", state.prs.items.len()),
+            (Tab::Sessions, "3", "Sessions", state.sessions.len()),
+        ] {
+            if !tabs.is_empty() {
+                tabs.push(Span::raw("     "));
+                x = x.saturating_add(5);
+            }
+            let on = tab == state.tab;
+            let label = vec![
+                span(format!(" {key} "), if on { palette::TAB_KEY_ON } else { palette::TAB_KEY_OFF }),
+                Span::raw(" "),
+                span(name, if on { palette::ACTIVE } else { palette::DIM }),
+                span(format!(" {count}"), if on { palette::PLAIN } else { palette::DIM }),
+            ];
+            let w = u16::try_from(spans_width(&label)).unwrap_or(u16::MAX);
+            spans_at.push((tab, x, w));
+            x = x.saturating_add(w);
+            tabs.extend(label);
+        }
+        let left = tab_row.x + tab_row.width.saturating_sub(x) / 2;
+        for (tab, at, w) in spans_at {
+            hits.targets.push((Rect::new(left + at, tab_row.y, w, 1).intersection(tab_row), HitTarget::Tab(tab)));
+        }
+        frame.render_widget(Paragraph::new(centered(tabs, tab_row.width)), tab_row);
+
+        let count = |want: SessionState| state.sessions.values().filter(|s| s.state() == want).count();
+        let needs = count(SessionState::NeedsYou);
+        let working = count(SessionState::Running) + state.starting.len();
+        let exited = count(SessionState::Exited);
+        let needs_style = if needs > 0 { palette::NEEDS_YOU } else { palette::DIM };
+        let lit = |n: usize, style| if n > 0 { style } else { palette::DIM };
+        let third = vec![
+            span(format!("{} ", icons.needs_you), lit(needs, palette::NEEDS_YOU)),
+            span(format!("{needs} needs you"), needs_style),
+            span(format!("   {} ", icons.running), lit(working, palette::RUNNING)),
+            span(format!("{working} working"), palette::DIM),
+            span(format!("   {} ", icons.exited), lit(exited, palette::EXITED)),
+            span(format!("{exited} exited"), palette::DIM),
+        ];
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                row_line(text.width, first, Vec::new()),
+                row_line(text.width, second, Vec::new()),
+                row_line(text.width, third, Vec::new()),
+            ]),
+            text,
+        );
+    }
+
+    fn draw_separator(frame: &mut Frame, area: Rect, state: &State) {
+        let label = match app::selected_row(state) {
+            Some(RowKey::Issue(n) | RowKey::Session(n)) => format!(" #{} ", n.0),
+            Some(RowKey::Pr(n)) => format!(" PR #{} ", n.0),
+            None => String::new(),
+        };
+        let rest = usize::from(area.width).saturating_sub(2 + cells(&label));
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                span("──", palette::DIM),
+                span(label, palette::ACCENT),
+                span("─".repeat(rest), palette::DIM),
+            ])),
+            area,
+        );
+    }
+
+    /// Glyph, name, summary, age. One line per row.
+    fn row_parts(
+        state: &State,
+        key: RowKey,
+        now: jiff::Timestamp,
+        icons: &Icons,
+    ) -> (Span<'static>, String, Vec<Span<'static>>, String) {
+        let session_glyph =
+            |n: IssueNumber| match (state.sessions.get(&n).map(Session::state), state.starting.contains(&n)) {
+                (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
+                (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
+                (Some(SessionState::Exited), _) => Some(span(icons.exited, palette::EXITED)),
+                (None, true) => Some(span(icons.starting, palette::STARTING)),
+                (None, false) => None,
+            };
+        let pr_summary = |p: &PullRequest| {
+            let mut v = vec![span(format!("PR #{} ", p.number.0), palette::DIM), pr_state_span(p.state)];
+            if p.checks != Checks::None {
+                v.extend([
+                    span(" · ", palette::DIM),
+                    checks_span(p.checks, icons),
+                    span(format!(" {}", checks_word(p.checks)), palette::DIM),
+                ]);
+            }
+            v
+        };
+        match key {
+            RowKey::Issue(n) => {
+                let Some(i) = issue_of(state, n) else {
+                    return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                };
+                let glyph = session_glyph(n).unwrap_or_else(|| {
+                    let m = pr_mark(app::lead_pr(state, n), icons);
+                    if m.content.trim().is_empty() {
+                        span(icons.idle, palette::DIM)
+                    } else {
+                        span(m.content.trim().to_string(), m.style)
+                    }
+                });
+                let summary = match (said(state, n), app::lead_pr(state, n)) {
+                    (Some(said), _) => said,
+                    (None, Some(p)) => pr_summary(p),
+                    (None, None) if !i.labels.is_empty() => {
+                        vec![span(format!("{} · {}", i.author, i.labels.join(", ")), palette::DIM)]
+                    }
+                    (None, None) => vec![span(format!("{} · {} comments", i.author, i.comment_count), palette::DIM)],
+                };
+                (glyph, format!("#{} {}", n.0, one_line(&i.title)), summary, age(i.updated_at, now))
+            }
+            RowKey::Pr(n) => {
+                let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
+                    return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                };
+                let mut summary = vec![
+                    span(format!("{} → {}  ", p.head, p.base), palette::DIM),
+                    span(format!("+{}", p.additions), palette::PASS),
+                    span(" ", palette::DIM),
+                    span(format!("-{}", p.deletions), palette::FAIL),
+                    span(format!(" · {}", checks_word(p.checks)), palette::DIM),
+                ];
+                if !p.closes.is_empty() {
+                    let c = p.closes.iter().map(|c| format!("#{}", c.0)).collect::<Vec<_>>().join(", ");
+                    summary.push(span(format!(" · closes {c}"), palette::DIM));
+                }
+                let glyph = match p.state {
+                    PrState::Merged => span(icons.pr_merged, palette::MERGED),
+                    PrState::Draft => span(icons.pr_draft, palette::DIM),
+                    PrState::Closed => span(icons.pr_closed, palette::DIM),
+                    PrState::Open => checks_span(p.checks, icons),
+                };
+                (glyph, format!("#{} {}", n.0, one_line(&p.title)), summary, age(p.updated_at, now))
+            }
+            RowKey::Session(n) => {
+                let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
+                let issue = issue_of(state, n);
+                let session = state.sessions.get(&n);
+                let name = issue
+                    .map(|i| one_line(&i.title))
+                    .or_else(|| session.map(|s| s.branch.as_str().to_string()))
+                    .unwrap_or_default();
+                let summary = said(state, n)
+                    .or_else(|| session.and_then(|s| app::pr_for_session(state, s)).map(pr_summary))
+                    .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
+                    .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
+                let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
+                (glyph, format!("#{} {}", n.0, name), summary, age)
+            }
+        }
+    }
+
+    /// What the session's Claude last said: its recap, or its last message.
+    fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> {
+        let s = state.summaries.get(&n)?;
+        let mut v = Vec::new();
+        if s.kind == crate::transcript::SummaryKind::Recap {
+            v.push(span("※ ", palette::ACCENT));
+        }
+        v.push(span(one_line(&s.text), palette::PLAIN));
+        Some(v)
+    }
+
+    fn draw_rows(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, icons: &Icons, hits: &mut HitMap) {
+        let rows = app::visible_rows(state);
+        if rows.is_empty() {
+            frame.render_widget(Paragraph::new(span(format!(" {}", empty_text(state)), palette::DIM)), area);
+            return;
+        }
+        let selected = app::selected_row(state);
+        let width = usize::from(area.width);
+        let name_w = (width * 36 / 100).clamp(20, 64);
+        let age_w = 5;
+        let summary_w = width.saturating_sub(name_w + age_w + 6);
+        let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
+        let mut last_group = None;
+        for key in &rows {
+            let group = app::group_of(state, *key);
+            if last_group != Some(group) {
+                if last_group.is_some() {
+                    lines.push((None, Line::raw("")));
+                }
+                let style = match group.rank {
+                    0 if state.tab != Tab::Prs => palette::NEEDS_YOU,
+                    0 | 1 => palette::HEADING,
+                    _ => palette::DIM,
+                };
+                let n = rows.iter().filter(|k| app::group_of(state, **k) == group).count();
+                lines.push((None, Line::from(vec![span(group.name, style), span(format!(" {n}"), palette::DIM)])));
+                last_group = Some(group);
+            }
+            let on = selected == Some(*key);
+            let (glyph, name, summary, age) = row_parts(state, *key, now, icons);
+            let marker = if on { span("❯", palette::ACCENT) } else { Span::raw(" ") };
+            let name_style = if on { palette::HEADING } else { palette::PLAIN };
+            let mut summary_text: Vec<Span<'static>> = Vec::new();
+            let mut used = 0;
+            for s in summary {
+                let t = fit(&s.content, summary_w.saturating_sub(used));
+                used += cells(&t);
+                summary_text.push(Span::styled(t, s.style));
+            }
+            let mut line = vec![
+                marker,
+                Span::raw(" "),
+                glyph,
+                Span::raw(" "),
+                span(format!("{:<name_w$}", fit(&name, name_w)), name_style),
+                Span::raw("  "),
+            ];
+            line.extend(summary_text);
+            line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used))));
+            line.push(span(format!("{age:>age_w$}"), palette::DIM));
+            lines.push((Some(*key), Line::from(line)));
+        }
+        let height = usize::from(area.height);
+        let at = lines.iter().position(|(k, _)| k.is_some() && *k == selected).unwrap_or(0);
+        let top = (at + 1).saturating_sub(height);
+        for (i, (key, line)) in lines.into_iter().skip(top).take(height).enumerate() {
+            let rect = Rect::new(area.x, area.y + u16::try_from(i).unwrap_or(0), area.width, 1);
+            frame.render_widget(Paragraph::new(line), rect);
+            if let Some(key) = key {
+                hits.targets.push((rect, HitTarget::Row(key)));
+            }
+        }
+    }
+
+    fn draw_prompt(frame: &mut Frame, area: Rect, state: &State) {
+        let mut spans = vec![span("❯ ", palette::ACCENT)];
+        match (&state.focus, state.filter.is_empty()) {
+            (Focus::Filter, _) => {
+                spans.push(Span::raw(state.filter.clone()));
+                spans.push(span("▏", palette::ACCENT));
+            }
+            (_, false) => spans.push(span(format!("/{}", state.filter), palette::LABEL)),
+            (_, true) => spans.push(span(
+                match state.tab {
+                    Tab::Issues => "/ to filter issues · s to start a session",
+                    Tab::Prs => "/ to filter pull requests",
+                    Tab::Sessions => "/ to filter sessions · enter to attach",
+                },
+                palette::DIM,
+            )),
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
+        let pairs: Vec<(&str, &str)> = match &state.focus {
+            Focus::Filter => vec![("enter", "keep"), ("esc", "clear")],
+            Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
+            Focus::List => app::key_bar(state),
+        };
+        let mut spans = vec![Span::raw("")];
+        for (i, (k, d)) in pairs.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(span(" · ", palette::DIM));
+            }
+            spans.push(span(k.to_string(), palette::ACCENT));
+            spans.push(span(format!(" to {d}"), palette::DIM));
+        }
+        let sort = vec![
+            span("S", palette::ACCENT),
+            span(format!(" sort: {} · ", state.sort.label(state.tab)), palette::DIM),
+            span("v", palette::ACCENT),
+            span(" layout", palette::DIM),
+        ];
+        frame.render_widget(Paragraph::new(row_line(area.width, spans, sort)), area);
     }
 }

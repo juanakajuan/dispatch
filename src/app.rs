@@ -23,6 +23,54 @@ pub enum Tab {
     Sessions,
 }
 
+/// PROTOTYPE: which layout draws the screen. `v` cycles it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Classic,
+    Agent,
+    AgentPreview,
+}
+
+impl View {
+    fn next(self) -> View {
+        match self {
+            View::Classic => View::Agent,
+            View::Agent => View::AgentPreview,
+            View::AgentPreview => View::Classic,
+        }
+    }
+}
+
+/// PROTOTYPE: the section a row sits in on the agent views. Lower `rank` first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub rank: u8,
+    pub name: &'static str,
+}
+
+pub fn group_of(state: &State, key: RowKey) -> Group {
+    let g = |rank, name| Group { rank, name };
+    let by_session = |n: IssueNumber| match activity(state, n) {
+        Some(SessionState::NeedsYou) => Some(g(0, "Needs you")),
+        Some(SessionState::Running) => Some(g(1, "Working")),
+        Some(SessionState::Exited) | None => None,
+    };
+    match key {
+        RowKey::Session(n) => by_session(n).unwrap_or(g(2, "Exited")),
+        RowKey::Issue(n) => by_session(n).unwrap_or_else(|| match lead_pr(state, n).map(|p| p.state) {
+            Some(PrState::Open | PrState::Draft) => g(2, "In review"),
+            Some(PrState::Merged) => g(3, "Merged"),
+            _ => g(4, "Open"),
+        }),
+        RowKey::Pr(n) => match state.prs.items.iter().find(|p| p.number == n).map(|p| p.state) {
+            Some(PrState::Open) => g(0, "Ready for review"),
+            Some(PrState::Draft) => g(1, "Draft"),
+            Some(PrState::Merged) => g(2, "Merged"),
+            _ => g(3, "Closed"),
+        },
+    }
+}
+
 /// A list row's identity. Selection stores keys, never indices, so a refresh
 /// that reorders or filters rows keeps the same item selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -193,6 +241,8 @@ pub struct State {
     /// Set by an `m` that waits for one more `m` on the same PR. Any other
     /// key clears it.
     pub armed: Option<Armed>,
+    pub view: View,
+    pub summaries: std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -258,6 +308,8 @@ pub struct Selected {
 }
 
 pub enum Msg {
+    /// PROTOTYPE: what each session's Claude last said.
+    Summaries(std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>),
     Key(KeyEvent),
     Mouse(MouseEvent, Instant),
     Tick(Instant),
@@ -385,6 +437,8 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         split: config.split,
         dragging_split: false,
         armed: None,
+        view: if cfg!(test) { View::Classic } else { View::Agent },
+        summaries: std::collections::BTreeMap::new(),
     };
     (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
 }
@@ -416,6 +470,7 @@ pub enum Action {
     SplitNarrower,
     SplitWider,
     SplitReset,
+    View,
     Quit,
 }
 
@@ -490,6 +545,7 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('<')], action: Action::SplitNarrower, bar: &[] },
     Binding { keys: &[Key::Char('>')], action: Action::SplitWider, bar: &[] },
     Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
+    Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[] },
     Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
 ];
 
@@ -552,6 +608,10 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
         Msg::Prs { result, at } => {
             state.inflight.prs = false;
             apply_feed(&mut state.prs, result, at);
+            Vec::new()
+        }
+        Msg::Summaries(summaries) => {
+            state.summaries = summaries;
             Vec::new()
         }
         Msg::Sessions(result) => {
@@ -770,6 +830,7 @@ fn act(state: &mut State, action: Action, armed: Option<&Armed>, config: &Config
         Action::SplitNarrower => state.split = state.split.narrower(state.hits.panes.width),
         Action::SplitWider => state.split = state.split.wider(state.hits.panes.width),
         Action::SplitReset => state.split = config.split,
+        Action::View => state.view = state.view.next(),
         Action::Quit => return vec![Cmd::Quit],
     }
     Vec::new()
@@ -1228,6 +1289,14 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
 /// single definition of "what is in the list"; ui renders it and update moves
 /// through it.
 pub fn visible_rows(state: &State) -> Vec<RowKey> {
+    let mut rows = sorted_rows(state);
+    if state.view != View::Classic {
+        rows.sort_by_key(|k| group_of(state, *k).rank);
+    }
+    rows
+}
+
+fn sorted_rows(state: &State) -> Vec<RowKey> {
     let f = state.filter.as_str();
     let activity = |n| activity(state, n);
     match state.tab {
