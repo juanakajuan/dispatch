@@ -14,6 +14,7 @@
 #   verify.sh window RUN NAME            print the pane text of the tmux window NAME (for example '#42')
 #   verify.sh client RUN                 attach a headless tmux client (needed for `a` attach)
 #   verify.sh tmux RUN ARGS...           run tmux ARGS against this run's server only
+#   verify.sh restart RUN                start dispatch again in the drive pane, with the run's PATH
 #   verify.sh down RUN                   kill this run's tmux server, delete its scratch, keep evidence
 #   verify.sh list                       list runs and whether their tmux server is up
 #
@@ -129,6 +130,12 @@ EOF
   jq -n --arg c "$RUN/bin/fake-claude" '{claude_command: [$c], detect_waiting: true}' >"$RUN/xdg/dispatch/config.json"
 
   gh repo clone "$repo" "$CLONE" -- --depth 1 --quiet >&2
+  # A clone of a fork gets an `upstream` remote that gh resolves by default, and
+  # dispatch runs gh without -R. Pin gh to the repo the run is for.
+  (cd "$CLONE" && gh repo set-default "$repo" >/dev/null)
+  # --depth 1 implies --single-branch. Track every branch, as a normal clone
+  # does, so `git fetch origin <pr-branch>` makes origin/<pr-branch> for m's fix start.
+  git -C "$CLONE" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
   git -C "$CLONE" symbolic-ref refs/remotes/origin/HEAD >/dev/null 2>&1 || git -C "$CLONE" remote set-head origin --auto >/dev/null
 
   cat >"$RUN/run.env" <<EOF
@@ -189,10 +196,13 @@ cmd_doctor() {
   check "tmux server answers on $SOCK" 't list-sessions >/dev/null 2>&1'
   check "drive pane $PANE is alive" '[[ $(t display-message -p -t "$PANE" "#{pane_dead}" 2>/dev/null) == 0 ]]'
   check "pane runs this run's binary" '[[ $(realpath "/proc/$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)/exe" 2>/dev/null) == "$BIN" ]]'
+  check "drive pane has the gh guard first on PATH" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^PATH=$RUN/bin:"'
   check "binary matches $BIN_SRC (no rebuild since up)" 'cmp -s "$BIN" "$BIN_SRC"'
   check "binary is not older than src/ (built at $BUILT_REV)" '[[ -z $(find "$ROOT/src" "$ROOT/Cargo.toml" -newer "$BIN_SRC" -print -quit) ]]'
   check "gh is logged in, as the drive server sees it" 't run-shell "gh auth status >/dev/null 2>&1 && echo GH_OK" 2>/dev/null | grep -q GH_OK'
   check "clone $CLONE has origin/HEAD" 'git -C "$CLONE" symbolic-ref -q refs/remotes/origin/HEAD >/dev/null'
+  check "clone tracks every origin branch" '[[ $(git -C "$CLONE" config --get remote.origin.fetch) == "+refs/heads/*:refs/remotes/origin/*" ]]'
+  check "gh in the clone resolves to $REPO (not a fork's parent)" '[[ $(cd "$CLONE" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) == "$REPO" ]]'
   check "last GitHub fetch did not fail" '! screen_text 2>/dev/null | grep -q "refresh failed"'
   check "tab row shows a fetch age (tabs 1 and 2 only)" 'screen_text 2>/dev/null | sed -n 1p | grep -Eq "updated [0-9]+[smh]? ago"'
   echo "repo=$REPO built=$BUILT_REV allow_merge=$ALLOW_MERGE"
@@ -238,6 +248,17 @@ cmd_down() {
   ls "$RUN/evidence"
 }
 
+# Start dispatch again in the drive pane, as a user who quits and reruns it.
+# tmux gives a pane that a detached client spawns the PATH of that client, not
+# the server's, and that wins over -e. So set the PATH from `up` with env, or
+# the gh guard is lost.
+cmd_restart() {
+  load "$1"
+  t respawn-pane -k -t "$PANE" env "$(t show-environment -g PATH)" "$BIN"
+  wait_for 'updated [0-9]+[smh]? ago' 30 >/dev/null || die "dispatch did not finish the first fetch in 30s after restart"
+  echo "restarted dispatch in $PANE"
+}
+
 cmd_list() {
   shopt -s nullglob
   for env in "$HOME_DIR"/*/run.env; do
@@ -261,6 +282,7 @@ case "$sub" in
   client) load "$1"; cmd_client ;;
   tmux) load "$1"; shift; t "$@" ;;
   window) load "$1"; t capture-pane -p -t "$(t list-windows -a -F '#{window_id} #{window_name}' | awk -v n="$2" '$2==n {print $1; exit}')" ;;
+  restart) cmd_restart "$@" ;;
   down) cmd_down "$@" ;;
   list) cmd_list ;;
   *) sed -n '2,/^set -euo/p' "$0" | grep '^#'; exit 2 ;;
