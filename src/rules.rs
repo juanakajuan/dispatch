@@ -85,6 +85,8 @@ pub enum MergePlan {
     Direct,
     /// The session's agent fixes the problem, then merges.
     Handoff(MergeProblem),
+    /// A draft. dispatch marks it ready, looks at it again, and plans from that.
+    MarkReady,
     /// Nothing to do now. The text says why.
     Refuse(String),
 }
@@ -103,7 +105,7 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
     let n = pr.number.0;
     match pr.state {
         PrState::Open => {}
-        PrState::Draft => return MergePlan::Refuse(format!("PR #{n} is a draft.")),
+        PrState::Draft => return MergePlan::MarkReady,
         PrState::Merged => return MergePlan::Refuse(format!("PR #{n} is already merged.")),
         PrState::Closed => return MergePlan::Refuse(format!("PR #{n} is closed.")),
     }
@@ -288,9 +290,9 @@ mod tests {
     }
 
     #[test]
-    fn merge_plan_refuses_a_pr_that_is_not_open() {
+    fn merge_plan_marks_a_draft_ready_and_refuses_a_closed_pr() {
         let plan = |state| merge_plan(&PullRequest { state, ..pr(10, "h", &[]) });
-        assert_eq!(plan(PrState::Draft), MergePlan::Refuse("PR #10 is a draft.".to_string()));
+        assert_eq!(plan(PrState::Draft), MergePlan::MarkReady);
         assert_eq!(plan(PrState::Merged), MergePlan::Refuse("PR #10 is already merged.".to_string()));
         assert_eq!(plan(PrState::Closed), MergePlan::Refuse("PR #10 is closed.".to_string()));
     }

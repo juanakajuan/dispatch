@@ -82,17 +82,35 @@ pub fn merge_pr(repo_root: &Path, pr: &PullRequest, method: MergeMethod) -> Resu
     proc::run("gh", args, repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
+/// `gh pr ready <n>`: takes a draft out of draft.
+pub fn mark_ready(repo_root: &Path, pr: PrNumber) -> Result<(), FetchError> {
+    proc::run("gh", ["pr", "ready", &pr.0.to_string()], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
+}
+
 /// Opens the issue or PR page in the browser with `gh <kind> view <n> --web`,
 /// so it follows whatever host `gh` is logged in to. `proc::run` captures the
 /// output, so nothing `gh` prints reaches the TUI.
 pub fn open_in_browser(repo_root: &Path, target: GithubRef) -> Result<(), FetchError> {
-    let (kind, number) = match target {
-        GithubRef::Issue(n) => ("issue", n.0),
-        GithubRef::Pr(n) => ("pr", n.0),
-    };
-    proc::run("gh", [kind, "view", &number.to_string(), "--web"], repo_root)
-        .map(|_| ())
-        .map_err(|e| FetchError(e.to_string()))
+    let (kind, number) = view_target(target);
+    proc::run("gh", [kind, "view", &number, "--web"], repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
+}
+
+/// The page `open_in_browser` opens, from the same `gh` host.
+pub fn page_url(repo_root: &Path, target: GithubRef) -> Result<String, FetchError> {
+    let (kind, number) = view_target(target);
+    let url = proc::run("gh", [kind, "view", &number, "--json", "url", "--jq", ".url"], repo_root)
+        .map_err(|e| FetchError(e.to_string()))?;
+    match url.trim() {
+        "" => Err(FetchError(format!("gh {kind} view printed no URL"))),
+        url => Ok(url.to_string()),
+    }
+}
+
+fn view_target(target: GithubRef) -> (&'static str, String) {
+    match target {
+        GithubRef::Issue(n) => ("issue", n.0.to_string()),
+        GithubRef::Pr(n) => ("pr", n.0.to_string()),
+    }
 }
 
 fn timestamp(raw: &str, field: &str, what: &str) -> Result<jiff::Timestamp, FetchError> {
@@ -396,6 +414,13 @@ mod tests {
     }
 
     #[test]
+    fn mark_ready_runs_gh_pr_ready() {
+        proc::fake::install(|_| Ok(String::new()));
+        mark_ready(Path::new("/r"), PrNumber(12)).expect("marks ready");
+        assert_eq!(proc::fake::calls(), ["gh pr ready 12"]);
+    }
+
+    #[test]
     fn unknown_pr_state_is_an_error_naming_the_pr() {
         let bad = PRS.replacen("\"state\": \"MERGED\"", "\"state\": \"WEIRD\"", 1);
         let err = parse_prs(&bad).expect_err("must fail");
@@ -424,6 +449,20 @@ mod tests {
         open_in_browser(root, GithubRef::Issue(IssueNumber(3))).expect("opens");
         open_in_browser(root, GithubRef::Pr(PrNumber(10))).expect("opens");
         assert_eq!(proc::fake::calls(), ["gh issue view 3 --web", "gh pr view 10 --web"]);
+    }
+
+    #[test]
+    fn page_url_asks_gh_for_the_url_of_the_right_kind() {
+        proc::fake::install(|_| Ok("https://github.com/o/r/pull/10\n".to_string()));
+        let url = page_url(Path::new("/r"), GithubRef::Pr(PrNumber(10))).expect("url");
+        assert_eq!(url, "https://github.com/o/r/pull/10");
+        assert_eq!(proc::fake::calls(), ["gh pr view 10 --json url --jq .url"]);
+    }
+
+    #[test]
+    fn page_url_with_empty_output_is_an_error() {
+        proc::fake::install(|_| Ok("\n".to_string()));
+        assert!(page_url(Path::new("/r"), GithubRef::Issue(IssueNumber(3))).is_err());
     }
 
     #[test]

@@ -9,7 +9,8 @@ A user presses `m` twice to merge a PR. The first press says what dispatch expec
 - `merge-direct` runs `gh pr merge <P> --<method> --match-head-commit <sha>` for a PR whose merge state is `CLEAN` or `HAS_HOOKS`. If the PR reads back as merged, it stops the running or needs-you session on that branch. If the PR is still open, the toast is `PR #P is in the merge queue`.
 - `merge-handoff` sends the live session on the PR branch a prompt that names the problem and the merge command.
 - `merge-new-session` starts a session to fix a PR that has a problem (failing checks, conflict, behind, blocked by a rule, unstable) and no live session. It goes to the Sessions tab.
-- `merge-refuse` says why when checks run, the PR is a draft (`PR #P is a draft.`), the PR is not open, or GitHub has not decided.
+- `merge-ready` handles a draft. The first `m` shows `PR #P is a draft. Press m again to mark it ready and merge it.` The second `m` runs `gh pr ready <P>`, reads the PR again, and plans from that. If the merge does not follow, the toast adds ` PR #P is now ready for review.`, because dispatch does not undo `gh pr ready`.
+- `merge-refuse` says why when checks run, the PR is not open, or GitHub has not decided. A PR that became a draft after the first `m` shows `PR #P is a draft now. Press m twice again to mark it ready and merge it.`
 - `merge-method` reads `git config dispatch.mergeMethod`, else the first method the repo allows.
 
 ## How to get to it (user POV)
@@ -38,6 +39,7 @@ Preconditions:
 - The guard turns a direct merge into an error toast. dispatch then does not stop the session, so `merge-direct`'s session stop is not proven by this recipe. It needs a sandbox repo and `--allow-merge`.
 - A PR can merge or close on GitHub during the run. The first press reads the cached list, so it can still arm. The second press reads the PR again and shows `PR #P is already merged.` or `PR #P is closed.` Press `r`, wait for `updated`, and pick a PR again.
 - A direct merge needs merge state `CLEAN`. On a repo that requires a review, an open PR with passing checks is `BLOCKED`, and `m` hands it off with `PR #P is blocked by a branch rule, such as a required review.` instead.
-- The new-session fix needs a PR that closes an issue. A PR from a fork fails, because its branch is not on `origin`. A draft PR is refused.
+- The new-session fix needs a PR that closes an issue. A PR from a fork fails, because its branch is not on `origin`.
+- The guard blocks `gh pr ready`. On a draft, the second `m` shows a `Merge PR #P failed:` toast that contains `blocked by dispatch verify guard`, and `gh-blocked.log` gets `gh pr ready P`. The guard has no flag that lets `gh pr ready` through.
 - The new-session fix runs `git fetch origin <head>` and then `git worktree add … origin/<head>`. This needs a clone that tracks every branch. `up` sets this, and doctor checks it. If the start fails with `invalid reference: origin/<head>`, the clone tracks only the default branch.
 - The merge method comes from `git config dispatch.mergeMethod` in the run's clone, not in the user's checkout.
