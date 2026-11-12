@@ -20,7 +20,7 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 | Part | Where | Why |
 |---|---|---|
 | tmux server | socket `$RUN/tmux/sock`, no user tmux.conf | The user's tmux sessions are never touched. dispatch runs inside this server, so its windows go there too |
-| checkout | `$RUN/work/<repo>`, a fresh shallow `gh repo clone` | Session worktrees go to `$RUN/work/<repo>/.claude/worktrees/<issue>`, never into the user's checkout |
+| checkout | `$RUN/work/<repo>`, a fresh shallow `gh repo clone` | Session worktrees go to `$RUN/work/<repo>/.claude/worktrees/<issue>`, never into the user's checkout. `up` sets `gh repo set-default <repo>`, so a fork does not read its parent. It also tracks every `origin` branch, as a normal clone does |
 | config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit |
 | `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status` to the real gh. Blocks every other call, `pr merge` too, and logs it |
@@ -42,7 +42,14 @@ Options: `--size COLSxROWS` (default `160x45`), `--allow-merge` (lets `gh pr mer
 
 `up` copies the binary into the run, clones the repo, starts dispatch in tmux session `drive`, window `dispatch`, and waits up to 30 s for the first fetch. Ready means the tab row shows `updated Ns ago`. If the first fetch fails, `up` saves the screen to `evidence/` and exits non-zero. Run `down` then.
 
-The default repo is the `origin` of this checkout. The journeys need live GitHub data (an open issue, an open PR). If the default repo has none, use `--repo` with a public repo that has some, for example `--repo ratatui/ratatui`. The guard keeps it read-only.
+The default repo is the `origin` of this checkout. The journeys need live GitHub data (an open issue, an open PR). If the default repo has none, use `--repo` with a public repo that has some. The guard keeps it read-only.
+
+Pick a repo with fewer than about 50 PRs in total (open and closed). dispatch asks for 100 PRs with their checks and merge state in one GraphQL call, and on a larger repo GitHub stops it after about 10 s with `HTTP 502` or `HTTP 504`. The PR tab then stays `No pull requests.` with `refresh failed`. This happens on `ratatui/ratatui`, for example. Repos that worked on 2026-11-11:
+
+- `viur-framework/vi-shoelace`: open issues, merged PRs, and open PRs with failing checks that close an issue (merge new session and handoff).
+- `serkanyersen/dotstate`: an open `CLEAN` PR (direct merge, blocked by the guard).
+
+Data changes. Check a repo before you use it, with the command in [features/README.md](features/README.md).
 
 Teardown is `$V down "$RUN"`.
 
@@ -54,7 +61,7 @@ Run this first, and again when anything looks wrong. It is read-only.
 $V doctor "$RUN"
 ```
 
-It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD`, the last fetch did not fail, and the tab row shows a fetch age. It then prints the tab row and the message row. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
+It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the drive pane has the gh guard first on `PATH`, the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD` and tracks every `origin` branch, `gh` in the clone resolves to the run's repo, the last fetch did not fail, and the tab row shows a fetch age. It then prints the tab row and the message row. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
 
 ## Drive
 
@@ -66,13 +73,16 @@ $V screen "$RUN"               # print the screen now
 $V window "$RUN" '#26'         # print the pane of a session window (the fake claude output)
 $V client "$RUN"               # attach a headless tmux client; needed before testing `a`
 $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
+$V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
 ```
+
+To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` sets the `PATH` from `up`. Doctor fails on `gh guard first on PATH` if the guard is lost.
 
 Stable handles on the screen:
 
-- Tab row (line 1): `1 Issues N`, `2 Pull requests N`, `3 Sessions N`, then `▲N` for sessions that need you, `S sort: <order>`, and on tabs 1 and 2 `updated Ns ago`, `refreshing…`, or `refresh failed Ns ago`. The selected tab has `━` under it on line 2.
+- Tab row (line 1): `1 Issues (N)`, `2 Pull requests (N)`, `3 Sessions (N)`, then `▲N` for sessions that need you, `S sort: <order>`, and on tabs 1 and 2 `updated Ns ago`, `refreshing…`, or `refresh failed Ns ago`. The selected tab has `━` under it on line 2.
 - List rows start with `#<number> ` and the selected row starts with `▌`.
-- The message row (second last line) shows toasts, for example `Stopped #26`, `Opening issue #26 on GitHub`, `Press m again to merge PR #12`.
+- The message row (second last line) shows toasts, for example `Stopped #26`, `Opening issue #26 on GitHub`, `Press m again to merge PR #12`. A toast stays for 5 s. A long toast wraps onto the line above, so match it with `wait` on the full screen, not on one line.
 - The key bar (last line) changes by tab. Use it to confirm which tab has focus.
 - The start dialog title is `Start session for #<n> <title>`. Its `Runs` block shows the exact commands.
 - Session states: `● running`, `▲ needs you`, `○ exited` (unicode icon set).
@@ -90,7 +100,7 @@ The run also writes these logs to `$RUN/evidence/` by itself:
 
 - `gh-calls.log`: each gh call dispatch made.
 - `gh-blocked.log`: each gh call that the guard blocked.
-- `claude-calls.log`: each fake-claude start with cwd, pane, and full argv, each hook it ran, and each line it got.
+- `claude-calls.log`: each fake-claude start with cwd, pane, and full argv, each hook it ran, and each line it got. The argv is quoted with `printf %q`, so a space in the prompt is `\ `. Search for `gh\ pr\ checkout\ 17`, not `gh pr checkout 17`.
 - `browser.log`: each URL that `o` opened.
 
 Proof standards:

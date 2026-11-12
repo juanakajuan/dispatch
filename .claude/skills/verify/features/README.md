@@ -8,6 +8,15 @@ This directory is the maintained source for verifying what a dispatch user sees 
 - `$V doctor "$RUN"` shows no `FAIL`.
 - The data is live GitHub data of the run's repo. It changes while you work: issues close, PRs merge. Pick targets from the screen at run time, never from numbers in this map.
 - The journeys need at least one open issue, and the merge journey needs an open PR. If the default repo has none, `down` and `up --repo OWNER/NAME` with a repo that has them. Report which repo you used.
+- The repo must have fewer than about 50 PRs in total, or the PR fetch times out (see [../SKILL.md](../SKILL.md)). Check a repo before `up` with dispatch's own fields. If this command fails with `HTTP 502` or `HTTP 504`, dispatch fails too:
+
+  ```sh
+  gh pr list -R OWNER/NAME --state all --limit 100 \
+    --json number,state,isDraft,isCrossRepository,mergeStateStatus,statusCheckRollup,mergeable,closingIssuesReferences \
+    -q '.[] | select(.state == "OPEN") | "#\(.number) draft=\(.isDraft) fork=\(.isCrossRepository) \(.mergeStateStatus) closes=\([.closingIssuesReferences[].number])"'
+  ```
+
+  A direct merge needs a `CLEAN` PR with `draft=false`. The merge new-session and handoff journeys need a PR with `draft=false`, `fork=false`, a state such as `UNSTABLE`, `DIRTY`, `BEHIND`, or `BLOCKED`, and a `closes=` issue.
 - Never drive a dispatch that this run did not start.
 
 ## Driving conventions
