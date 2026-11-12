@@ -24,6 +24,9 @@ pub struct Icons {
     pub pr_open: &'static str,
     pub pr_draft: &'static str,
     pub pr_merged: &'static str,
+    pub pr_closed: &'static str,
+    /// A row with no state to show.
+    pub idle: &'static str,
     pub radio_on: &'static str,
     pub radio_off: &'static str,
 }
@@ -40,6 +43,8 @@ pub const UNICODE: Icons = Icons {
     pr_open: "●",
     pr_draft: "◌",
     pr_merged: "✓",
+    pr_closed: "✗",
+    idle: "·",
     radio_on: "●",
     radio_off: "○",
 };
@@ -56,6 +61,8 @@ pub const NERD_FONT: Icons = Icons {
     pr_open: "\u{f407}",       // nf-oct-git_pull_request
     pr_draft: "\u{f4dd}",      // nf-oct-git_pull_request_draft
     pr_merged: "\u{f419}",     // nf-oct-git_merge
+    pr_closed: "\u{f4dc}",     // nf-oct-git_pull_request_closed
+    idle: "\u{f48b}",          // nf-oct-dash
     radio_on: "\u{f043e}",     // nf-md-radiobox_marked
     radio_off: "\u{f043d}",    // nf-md-radiobox_blank
 };
@@ -89,6 +96,8 @@ mod tests {
                 i.pr_open,
                 i.pr_draft,
                 i.pr_merged,
+                i.pr_closed,
+                i.idle,
                 i.radio_on,
                 i.radio_off,
             ] {

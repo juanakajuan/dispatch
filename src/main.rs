@@ -30,6 +30,7 @@ mod session;
 mod sort;
 #[cfg(test)]
 mod testutil;
+mod transcript;
 mod ui;
 
 use app::{Cmd, Context, Job, Msg, OpenWith};
@@ -166,7 +167,22 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
             let result = github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string());
             Msg::Prs { result, at: Instant::now() }
         }),
-        Job::ObserveSessions => spawn_read(ws, tx, |ws| Msg::Sessions(ws.observe().map_err(|e| e.to_string()))),
+        Job::ObserveSessions => {
+            let (ws, tx) = (ws.clone(), tx.clone());
+            std::thread::spawn(move || {
+                let result = ws.observe().map_err(|e| e.to_string());
+                let summaries = result.as_ref().ok().map(|sessions| {
+                    sessions
+                        .values()
+                        .filter_map(|s| Some((s.issue, transcript::latest(s.worktree.as_path())?)))
+                        .collect()
+                });
+                let _ = tx.send(Msg::Sessions(result));
+                if let Some(summaries) = summaries {
+                    let _ = tx.send(Msg::Summaries(summaries));
+                }
+            });
+        }
         Job::Open(target) => spawn_read(ws, tx, move |ws| Msg::Opened {
             target,
             result: github::open_in_browser(ws.repo_root(), target).map_err(|e| e.to_string()),
