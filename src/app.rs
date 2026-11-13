@@ -4,9 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::{Change, Config, SETTINGS, Setting};
-use crate::domain::{
-    BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split,
-};
+use crate::domain::{BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest};
 use crate::merge::{MergeOutcome, MergeRun};
 use crate::rules::{self, MergePlan, MergeProblem};
 use crate::session::{Launch, Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
@@ -23,10 +21,10 @@ pub enum Tab {
     Sessions,
 }
 
-/// PROTOTYPE: which layout draws the screen. `v` cycles it.
+/// Which layout draws the screen: the list alone, or the list over the
+/// details of the selected row. `v` toggles it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
-    Classic,
     Agent,
     AgentPreview,
 }
@@ -34,14 +32,13 @@ pub enum View {
 impl View {
     fn next(self) -> View {
         match self {
-            View::Classic => View::Agent,
             View::Agent => View::AgentPreview,
-            View::AgentPreview => View::Classic,
+            View::AgentPreview => View::Agent,
         }
     }
 }
 
-/// PROTOTYPE: the section a row sits in on the agent views. Lower `rank` first.
+/// The section a row sits in. Lower `rank` first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Group {
     pub rank: u8,
@@ -183,14 +180,11 @@ pub struct Toast {
     pub shown_at: Option<Instant>,
 }
 
-/// Clickable regions and pane geometry from the last frame. Written by the
-/// shell after each draw (`ui::draw` returns it); read by `update` on mouse
-/// events and resize keys.
+/// Clickable regions from the last frame. Written by the shell after each
+/// draw (`ui::draw` returns it); read by `update` on mouse events.
 #[derive(Default)]
 pub struct HitMap {
     pub targets: Vec<(ratatui::layout::Rect, HitTarget)>,
-    /// The body the list and detail panes share. Zero before the first draw.
-    pub panes: ratatui::layout::Rect,
 }
 
 impl HitMap {
@@ -204,8 +198,6 @@ impl HitMap {
 pub enum HitTarget {
     Tab(Tab),
     Row(RowKey),
-    /// The border between the list and the detail pane.
-    Divider,
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -251,10 +243,6 @@ pub struct State {
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
-    /// The list | detail border, the same on every tab.
-    pub split: Split,
-    /// True from a press on the divider to the next release.
-    pub dragging_split: bool,
     /// Set by an `m` that waits for one more `m` on the same PR. Any other
     /// key clears it.
     pub armed: Option<Armed>,
@@ -438,7 +426,6 @@ const GITHUB_COOLDOWN: Duration = Duration::from_secs(5);
 pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>) {
     let state = State {
         context,
-        split: config.split,
         tab: Tab::Issues,
         issues: Feed { items: Vec::new(), status: FeedStatus::Loading },
         prs: Feed { items: Vec::new(), status: FeedStatus::Loading },
@@ -460,9 +447,8 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         },
         hits: HitMap::default(),
         last_click: None,
-        dragging_split: false,
         armed: None,
-        view: if cfg!(test) { View::Classic } else { View::Agent },
+        view: View::Agent,
         summaries: std::collections::BTreeMap::new(),
         config,
     };
@@ -493,9 +479,6 @@ pub enum Action {
     Filter,
     ClearFilter,
     Sort,
-    SplitNarrower,
-    SplitWider,
-    SplitReset,
     Settings,
     View,
     Quit,
@@ -567,11 +550,8 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
     Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
     Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
-    // Not in the key bar: the tab row shows `S sort: <mode>`.
+    // Not in the key bar: the footer shows `S sort: <mode>`.
     Binding { keys: &[Key::Char('S')], action: Action::Sort, bar: &[] },
-    Binding { keys: &[Key::Char('<')], action: Action::SplitNarrower, bar: &[] },
-    Binding { keys: &[Key::Char('>')], action: Action::SplitWider, bar: &[] },
-    Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
     Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[] },
     Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
     // After quit: a narrow terminal clips the end of the bar, and `q quit` must stay.
@@ -863,9 +843,6 @@ fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
             }
             state.sort.cycle(state.tab);
         }
-        Action::SplitNarrower => state.split = state.split.narrower(state.hits.panes.width),
-        Action::SplitWider => state.split = state.split.wider(state.hits.panes.width),
-        Action::SplitReset => state.split = state.config.split,
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::View => state.view = state.view.next(),
         Action::Quit => return vec![Cmd::Quit],
@@ -1182,21 +1159,12 @@ fn select(state: &mut State, key: RowKey) {
 }
 
 fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
-    // Before the focus gate, so a drag can not stay stuck behind a dialog.
-    if matches!(ev.kind, MouseEventKind::Up(_) | MouseEventKind::Down(_)) {
-        state.dragging_split = false;
-    }
     if !matches!(state.focus, Focus::List) {
         return Vec::new();
     }
     match ev.kind {
         MouseEventKind::ScrollDown => move_selection(state, Move::Down),
         MouseEventKind::ScrollUp => move_selection(state, Move::Up),
-        // Follows the pointer even off the divider, so a fast drag keeps hold.
-        MouseEventKind::Drag(MouseButton::Left) if state.dragging_split => {
-            let panes = state.hits.panes;
-            state.split = Split::at_column(panes.width, ev.column.saturating_sub(panes.x));
-        }
         MouseEventKind::Down(MouseButton::Left) => {
             let Some(target) = state.hits.at(ev.column, ev.row) else { return Vec::new() };
             let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
@@ -1206,7 +1174,6 @@ fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
                     state.tab = tab;
                     state.due.tail = None;
                 }
-                HitTarget::Divider => state.dragging_split = true,
                 HitTarget::Row(key) => {
                     select(state, key);
                     if let (true, RowKey::Issue(n)) = (double, key) {
@@ -1283,11 +1250,8 @@ fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// `state.config` already holds the new value. Save it, and move what is live.
-fn changed(state: &mut State, setting: Setting) -> Vec<Cmd> {
-    if setting == Setting::Split {
-        state.split = state.config.split;
-    }
+/// `state.config` already holds the new value. Save it.
+fn changed(state: &State, setting: Setting) -> Vec<Cmd> {
     vec![Cmd::Job(Job::SaveConfig { setting, config: state.config.clone() })]
 }
 
@@ -1381,9 +1345,7 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
 /// through it.
 pub fn visible_rows(state: &State) -> Vec<RowKey> {
     let mut rows = sorted_rows(state);
-    if state.view != View::Classic {
-        rows.sort_by_key(|k| group_of(state, *k).rank);
-    }
+    rows.sort_by_key(|k| group_of(state, *k).rank);
     rows
 }
 
@@ -2589,10 +2551,14 @@ mod tests {
             .collect()
     }
 
-    /// `app()` plus: #1 needs you and has the most comments, #2 was updated last.
+    /// `app()` plus: #1 has the most comments, #2 was updated last. No PR
+    /// closes an issue and no session is live, so every issue is in the
+    /// "Open" group and only the sort orders them.
     fn sortable() -> State {
         let (mut state, _) = app();
-        state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
+        for p in &mut state.prs.items {
+            p.closes.clear();
+        }
         state.issues.items[2].comment_count = 5;
         state.issues.items[1].updated_at = jiff::Timestamp::from_second(60).expect("in range");
         state
@@ -2609,15 +2575,26 @@ mod tests {
         assert_eq!(
             seen,
             [
-                ("attention", vec![1, 3, 2]),
+                ("attention", vec![3, 2, 1]),
                 ("newest", vec![3, 2, 1]),
                 ("oldest", vec![1, 2, 3]),
                 ("recently updated", vec![2, 3, 1]),
                 ("number", vec![1, 2, 3]),
                 ("most comments", vec![1, 3, 2]),
-                ("attention", vec![1, 3, 2]),
+                ("attention", vec![3, 2, 1]),
             ]
         );
+    }
+
+    #[test]
+    fn rows_group_by_state_before_the_sort_orders_them() {
+        let mut state = sortable();
+        state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
+        state.prs.items[0].closes = vec![IssueNumber(3)];
+        for _ in 0..=IssueSort::ALL.len() {
+            assert_eq!(numbers(&state), [1, 3, 2], "needs you, in review, open: {}", state.sort.label(Tab::Issues));
+            press(&mut state, shift_s());
+        }
     }
 
     #[test]
@@ -2636,6 +2613,7 @@ mod tests {
         assert_eq!(state.sort.label(Tab::Prs), "attention", "PRs have no comment mode");
 
         press(&mut state, key('3'));
+        state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
         state.sessions.insert(IssueNumber(9), session(9, Some((true, false))));
         state.sessions.insert(IssueNumber(10), session(10, None));
         assert_eq!(numbers(&state), [1, 9, 10]);
@@ -2643,9 +2621,7 @@ mod tests {
         assert_eq!(state.sort.label(Tab::Sessions), "number");
         assert_eq!(numbers(&state), [1, 9, 10]);
         state.sessions.insert(IssueNumber(1), session(1, None));
-        assert_eq!(numbers(&state), [1, 9, 10], "number mode ignores the state");
-        press(&mut state, shift_s());
-        assert_eq!(numbers(&state), [9, 1, 10]);
+        assert_eq!(numbers(&state), [9, 1, 10], "the group comes first, then the number");
 
         press(&mut state, key('1'));
         assert_eq!(state.sort.label(Tab::Issues), "newest");
@@ -2654,13 +2630,15 @@ mod tests {
     #[test]
     fn re_sorting_keeps_the_selected_row_even_when_it_was_only_the_first() {
         let mut state = sortable();
-        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
         press(&mut state, shift_s());
-        assert_eq!(numbers(&state), [3, 2, 1]);
-        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
+        press(&mut state, shift_s());
+        assert_eq!(numbers(&state), [1, 2, 3]);
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
         press(&mut state, key('k'));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
         press(&mut state, shift_s());
+        assert_eq!(numbers(&state), [2, 3, 1]);
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
     }
 
@@ -2673,9 +2651,10 @@ mod tests {
         assert_eq!(state.filter, "jS");
         state.filter = "j".to_string();
         press(&mut state, code(KeyCode::Enter));
-        assert_eq!(numbers(&state), [1, 3]);
-        press(&mut state, shift_s());
         assert_eq!(numbers(&state), [3, 1]);
+        press(&mut state, shift_s());
+        press(&mut state, shift_s());
+        assert_eq!(numbers(&state), [1, 3]);
     }
 
     // ---- the settings menu ----
@@ -2771,25 +2750,10 @@ mod tests {
     }
 
     #[test]
-    fn a_valid_split_applies_now_and_saves() {
-        let (mut state, _) = app();
-        open_menu_at(&mut state, Setting::Split);
-        assert!(press(&mut state, code(KeyCode::Enter)).is_empty(), "enter opens the editor");
-        assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.lines().join("")), Some("42".to_string()));
-        clear_input(&mut state);
-        type_text(&mut state, "60");
-        let cmds = press(&mut state, code(KeyCode::Enter));
-        assert_eq!(state.config.split, Split::from_percent(60).expect("in range"));
-        assert_eq!(state.split, state.config.split, "the live border moves");
-        assert_eq!(saves(&cmds)[0].0, Setting::Split);
-        assert!(menu(&state).edit.is_none());
-    }
-
-    #[test]
-    fn an_invalid_split_shows_an_error_and_keeps_editing() {
-        for bad in ["95", "abc", ""] {
+    fn an_invalid_claude_command_shows_an_error_and_keeps_editing() {
+        for bad in ["claude 'oops", "''", ""] {
             let (mut state, _) = app();
-            open_menu_at(&mut state, Setting::Split);
+            open_menu_at(&mut state, Setting::ClaudeCommand);
             press(&mut state, code(KeyCode::Enter));
             clear_input(&mut state);
             type_text(&mut state, bad);
@@ -2797,23 +2761,21 @@ mod tests {
             assert!(cmds.is_empty(), "{bad:?}");
             let edit = menu(&state).edit.as_ref().expect("still editing");
             assert!(edit.error.is_some(), "{bad:?}");
-            assert_eq!(state.config.split, Split::DEFAULT);
-            assert_eq!(state.split, Split::DEFAULT);
-            type_text(&mut state, "5");
+            assert_eq!(state.config, Config::default());
+            type_text(&mut state, "x");
             assert!(menu(&state).edit.as_ref().is_some_and(|e| e.error.is_none()), "typing clears the error");
         }
     }
 
     #[test]
-    fn the_split_error_says_what_the_file_says() {
+    fn the_claude_command_error_says_what_the_file_says() {
         let (mut state, _) = app();
-        open_menu_at(&mut state, Setting::Split);
+        open_menu_at(&mut state, Setting::ClaudeCommand);
         press(&mut state, code(KeyCode::Enter));
-        clear_input(&mut state);
-        type_text(&mut state, "95");
+        type_text(&mut state, " 'oops");
         press(&mut state, code(KeyCode::Enter));
         let error = menu(&state).edit.as_ref().and_then(|e| e.error.clone());
-        assert_eq!(error, Some("invalid config: split 95 is not a percent from 10 to 90".to_string()));
+        assert_eq!(error, Some("invalid config: claude_command has a quote that never closes".to_string()));
     }
 
     #[test]
@@ -2841,13 +2803,13 @@ mod tests {
     #[test]
     fn esc_while_editing_cancels_the_edit_only() {
         let (mut state, _) = app();
-        open_menu_at(&mut state, Setting::Split);
+        open_menu_at(&mut state, Setting::ClaudeCommand);
         press(&mut state, code(KeyCode::Enter));
-        type_text(&mut state, "7");
+        type_text(&mut state, " --x");
         press(&mut state, code(KeyCode::Esc));
         assert!(menu(&state).edit.is_none(), "the menu stays open");
-        assert_eq!(menu(&state).at, Setting::Split);
-        assert_eq!(state.config.split, Split::DEFAULT);
+        assert_eq!(menu(&state).at, Setting::ClaudeCommand);
+        assert_eq!(state.config, Config::default());
         press(&mut state, code(KeyCode::Esc));
         assert!(matches!(state.focus, Focus::List));
     }
@@ -2888,20 +2850,6 @@ mod tests {
         let cmds = press(&mut state, key('a'));
         let [Cmd::Job(Job::Resume(_, launch))] = cmds.as_slice() else { panic!("one resume") };
         assert_eq!(launch.claude.words(), "claude --x");
-    }
-
-    #[test]
-    fn the_split_reset_key_returns_to_the_saved_split() {
-        let (mut state, _) = app();
-        open_menu_at(&mut state, Setting::Split);
-        press(&mut state, code(KeyCode::Enter));
-        clear_input(&mut state);
-        type_text(&mut state, "70");
-        press(&mut state, code(KeyCode::Enter));
-        press(&mut state, code(KeyCode::Esc));
-        state.split = Split::DEFAULT;
-        press(&mut state, key('='));
-        assert_eq!(state.split, Split::from_percent(70).expect("in range"));
     }
 
     #[test]

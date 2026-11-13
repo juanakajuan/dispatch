@@ -12,12 +12,10 @@
 //! {
 //!   "detect_waiting": true,
 //!   "claude_command": ["claude"],
-//!   "split": 42,
 //!   "icons": "unicode"
 //! }
 //! ```
 
-use crate::domain::Split;
 use crate::glyphs::IconSet;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -117,9 +115,6 @@ pub struct Config {
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
     pub claude_command: ClaudeCommand,
-    /// Where the list | detail border starts, and where `=` puts it back.
-    /// `<`, `>` and drags stay in memory. The settings menu saves this field.
-    pub split: Split,
     /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
     pub icons: IconSet,
 }
@@ -130,7 +125,6 @@ impl Default for Config {
             github_refresh: Duration::from_mins(1),
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
-            split: Split::DEFAULT,
             icons: IconSet::default(),
         }
     }
@@ -141,8 +135,6 @@ pub enum ConfigError {
     Read { path: PathBuf, source: std::io::Error },
     Json { path: PathBuf, message: String },
     BadCommand(&'static str),
-    BadSplit(u64),
-    NotANumber(String),
     Write { path: PathBuf, source: std::io::Error },
     NoConfigDir,
 }
@@ -153,11 +145,6 @@ impl fmt::Display for ConfigError {
             ConfigError::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
             ConfigError::BadCommand(why) => write!(f, "invalid config: claude_command {why}"),
-            ConfigError::BadSplit(value) => {
-                let (lo, hi) = (Split::PERCENT.start(), Split::PERCENT.end());
-                write!(f, "invalid config: split {value} is not a percent from {lo} to {hi}")
-            }
-            ConfigError::NotANumber(text) => write!(f, "invalid config: split {text:?} is not a number"),
             ConfigError::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             ConfigError::NoConfigDir => f.write_str("cannot save: neither XDG_CONFIG_HOME nor HOME is set"),
         }
@@ -169,7 +156,10 @@ impl fmt::Display for ConfigError {
 struct ConfigFile {
     detect_waiting: Option<bool>,
     claude_command: Option<Vec<String>>,
-    split: Option<u64>,
+    /// Removed with the classic layout. Old files that still set it load,
+    /// and the value is ignored.
+    #[serde(rename = "split")]
+    _split: Option<serde::de::IgnoredAny>,
     icons: Option<IconSet>,
 }
 
@@ -183,9 +173,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     }
     if let Some(argv) = file.claude_command {
         config.claude_command = ClaudeCommand::from_argv(argv)?;
-    }
-    if let Some(percent) = file.split {
-        config.split = Split::from_percent(percent).ok_or(ConfigError::BadSplit(percent))?;
     }
     if let Some(icons) = file.icons {
         config.icons = icons;
@@ -232,11 +219,10 @@ pub fn load() -> Result<Config, ConfigError> {
 pub enum Setting {
     DetectWaiting,
     Icons,
-    Split,
     ClaudeCommand,
 }
 
-pub const SETTINGS: [Setting; 4] = [Setting::DetectWaiting, Setting::Icons, Setting::Split, Setting::ClaudeCommand];
+pub const SETTINGS: [Setting; 3] = [Setting::DetectWaiting, Setting::Icons, Setting::ClaudeCommand];
 
 /// What `enter` does to a setting.
 #[derive(Debug, PartialEq, Eq)]
@@ -253,7 +239,6 @@ impl Setting {
         match self {
             Setting::DetectWaiting => "detect_waiting",
             Setting::Icons => "icons",
-            Setting::Split => "split",
             Setting::ClaudeCommand => "claude_command",
         }
     }
@@ -262,7 +247,7 @@ impl Setting {
     pub fn new_sessions_only(self) -> bool {
         match self {
             Setting::DetectWaiting | Setting::ClaudeCommand => true,
-            Setting::Icons | Setting::Split => false,
+            Setting::Icons => false,
         }
     }
 
@@ -270,7 +255,6 @@ impl Setting {
         match self {
             Setting::DetectWaiting => (if config.detect_waiting { "on" } else { "off" }).to_string(),
             Setting::Icons => config.icons.label().to_string(),
-            Setting::Split => format!("{}%", config.split.percent()),
             Setting::ClaudeCommand => config.claude_command.words(),
         }
     }
@@ -280,7 +264,6 @@ impl Setting {
         match self {
             Setting::DetectWaiting => config.detect_waiting = !config.detect_waiting,
             Setting::Icons => config.icons = config.icons.next(),
-            Setting::Split => return Change::Edit(config.split.percent().to_string()),
             Setting::ClaudeCommand => return Change::Edit(config.claude_command.words()),
         }
         Change::Applied
@@ -290,11 +273,6 @@ impl Setting {
     /// unchanged on an error. A setting that is not typed ignores the text.
     pub fn set_text(self, config: &mut Config, text: &str) -> Result<(), ConfigError> {
         match self {
-            Setting::Split => {
-                let text = text.trim();
-                let percent = text.parse::<u64>().map_err(|_| ConfigError::NotANumber(text.to_string()))?;
-                config.split = Split::from_percent(percent).ok_or(ConfigError::BadSplit(percent))?;
-            }
             Setting::ClaudeCommand => config.claude_command = ClaudeCommand::from_words(text)?,
             Setting::DetectWaiting | Setting::Icons => {}
         }
@@ -305,7 +283,6 @@ impl Setting {
         match self {
             Setting::DetectWaiting => json!(config.detect_waiting),
             Setting::Icons => json!(config.icons.label()),
-            Setting::Split => json!(config.split.percent()),
             Setting::ClaudeCommand => json!(config.claude_command.argv(&[])),
         }
     }
@@ -374,7 +351,6 @@ mod tests {
         let c = Config::default();
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
-        assert_eq!(c.split, Split::DEFAULT);
         assert_eq!(c.icons, IconSet::Unicode);
     }
 
@@ -387,14 +363,11 @@ mod tests {
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(
-            r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"split":30,"icons":"nerdfont"}"#,
-        )
-        .expect("valid");
+        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"icons":"nerdfont"}"#)
+            .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
-        assert_eq!(c.split.list_width(100), 30);
         assert_eq!(c.icons, IconSet::NerdFont);
     }
 
@@ -405,10 +378,16 @@ mod tests {
         assert!(matches!(parse_str(r#"{"claude_command":[]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));
-        assert!(matches!(parse_str(r#"{"split":95}"#), Err(ConfigError::BadSplit(95))));
-        assert!(matches!(parse_str(r#"{"split":-1}"#), Err(ConfigError::Json { .. })));
-        assert!(matches!(parse_str(r#"{"split":"42"}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"icons":"emoji"}"#), Err(ConfigError::Json { .. })));
+    }
+
+    #[test]
+    fn an_old_split_field_loads_and_is_ignored() {
+        for text in [r#"{"split":42}"#, r#"{"split":95}"#, r#"{"split":"42"}"#, r#"{"split":null}"#] {
+            assert_eq!(parse_str(text).expect("loads"), Config::default(), "{text}");
+        }
+        let c = parse_str(r#"{"split":30,"icons":"nerdfont"}"#).expect("loads");
+        assert_eq!(c.icons, IconSet::NerdFont);
     }
 
     #[test]
@@ -432,7 +411,6 @@ mod tests {
         assert_eq!(keys, ["split", "icons", "detect_waiting", "claude_command"]);
         assert!(after.ends_with("}\n"));
         let reread = parse_str(&after).expect("valid");
-        assert_eq!(reread.split.percent(), 30);
         assert_eq!(reread.icons, IconSet::NerdFont);
         assert!(!reread.detect_waiting, "only the changed field is written");
         assert_eq!(reread.claude_command.words(), "my-claude --x");
@@ -445,7 +423,7 @@ mod tests {
         let after = edit(Some(before), Setting::Icons, &config).expect("ok").expect("written");
         assert!(!after.contains("icons"), "{after}");
         assert!(after.contains("split"), "{after}");
-        let emptied = edit(Some(r#"{"split":30}"#), Setting::Split, &Config::default()).expect("ok");
+        let emptied = edit(Some(r#"{"icons":"nerdfont"}"#), Setting::Icons, &Config::default()).expect("ok");
         assert_eq!(emptied.as_deref(), Some("{}\n"));
     }
 
@@ -468,7 +446,7 @@ mod tests {
     #[test]
     fn a_broken_file_is_an_error_and_never_overwritten() {
         let config = Config { detect_waiting: false, ..Config::default() };
-        for text in ["not json", r#"{"split":95}"#, r#"{"skills":[]}"#] {
+        for text in ["not json", r#"{"claude_command":[]}"#, r#"{"skills":[]}"#] {
             assert!(edit(Some(text), Setting::DetectWaiting, &config).is_err(), "{text}");
         }
     }
@@ -478,7 +456,6 @@ mod tests {
         let config = Config {
             detect_waiting: false,
             icons: IconSet::NerdFont,
-            split: Split::from_percent(65).expect("in range"),
             claude_command: ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid"),
             ..Config::default()
         };
@@ -513,21 +490,15 @@ mod tests {
     }
 
     #[test]
-    fn split_percent_is_the_inverse_of_from_percent() {
-        for percent in Split::PERCENT {
-            assert_eq!(Split::from_percent(percent).expect("in range").percent(), percent);
-        }
-        assert_eq!(Split::DEFAULT.percent(), 42);
-    }
-
-    #[test]
     fn typed_settings_check_text_like_the_file() {
         let mut config = Config::default();
-        assert!(matches!(Setting::Split.set_text(&mut config, "95"), Err(ConfigError::BadSplit(95))));
-        assert!(matches!(Setting::Split.set_text(&mut config, "abc"), Err(ConfigError::NotANumber(_))));
+        assert!(matches!(
+            Setting::ClaudeCommand.set_text(&mut config, "claude 'oops"),
+            Err(ConfigError::BadCommand(_))
+        ));
         assert_eq!(config, Config::default(), "an error changes nothing");
-        Setting::Split.set_text(&mut config, " 60 ").expect("valid");
-        assert_eq!(Setting::Split.show(&config), "60%");
+        Setting::ClaudeCommand.set_text(&mut config, "my-claude --x").expect("valid");
+        assert_eq!(Setting::ClaudeCommand.show(&config), "my-claude --x");
     }
 
     #[test]
