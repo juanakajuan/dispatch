@@ -3,13 +3,13 @@
 //! worker result is a `Msg`, so each behaviour is a unit test:
 //! "given this state, this msg -> this state and these cmds".
 
-use crate::config::Config;
+use crate::config::{Change, Config, SETTINGS, Setting};
 use crate::domain::{
     BranchName, GithubRef, Issue, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, Split,
 };
 use crate::merge::{MergeOutcome, MergeRun};
 use crate::rules::{self, MergePlan, MergeProblem};
-use crate::session::{Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
+use crate::session::{Launch, Session, SessionState, Sessions, StartFrom, StartOutcome, StartRequest, WindowId};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::collections::BTreeSet;
@@ -111,6 +111,20 @@ pub enum Focus {
     List,
     Filter,
     Dialog(Box<StartDialog>),
+    Settings(Box<SettingsMenu>),
+}
+
+/// The settings overlay. Browsing has no `edit`; a typed value has one.
+pub struct SettingsMenu {
+    pub at: Setting,
+    pub edit: Option<SettingEdit>,
+}
+
+/// A typed value being edited. The error belongs here, so a browsing menu
+/// can not show one.
+pub struct SettingEdit {
+    pub input: tui_textarea::TextArea<'static>,
+    pub error: Option<String>,
 }
 
 pub struct StartDialog {
@@ -214,6 +228,9 @@ pub enum OpenWith {
 
 pub struct State {
     pub context: Context,
+    /// The live config. The settings menu edits it, and `Job::SaveConfig`
+    /// writes the change to the file.
+    pub config: Config,
     pub tab: Tab,
     pub issues: Feed<Issue>,
     pub prs: Feed<PullRequest>,
@@ -360,6 +377,8 @@ pub enum Msg {
         ask: MergeAsk,
         run: MergeRun,
     },
+    /// A setting reached the config file.
+    Saved(Result<(), String>),
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
 }
@@ -386,14 +405,20 @@ pub enum Job {
     FetchPrs,
     ObserveSessions,
     Tail(WindowId),
-    Start(StartRequest),
+    Start(StartRequest, Launch),
     Stop(IssueNumber),
-    Resume(IssueNumber),
+    Resume(IssueNumber, Launch),
     /// Open the page in the browser. No inflight flag: two presses may open
     /// two tabs, which is what the user asked for.
     Open(GithubRef),
     /// Look up the page URL, for `OpenWith::Clipboard`.
     FetchPageUrl(GithubRef),
+    /// Save one setting to the config file. It runs on the writer thread, so
+    /// two quick saves can not interleave their read and write.
+    SaveConfig {
+        setting: Setting,
+        config: Config,
+    },
     /// Type a line into the session's Claude prompt and submit it.
     Send {
         issue: IssueNumber,
@@ -410,9 +435,10 @@ pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const TOAST_FOR: Duration = Duration::from_secs(5);
 const GITHUB_COOLDOWN: Duration = Duration::from_secs(5);
 
-pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>) {
+pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>) {
     let state = State {
         context,
+        split: config.split,
         tab: Tab::Issues,
         issues: Feed { items: Vec::new(), status: FeedStatus::Loading },
         prs: Feed { items: Vec::new(), status: FeedStatus::Loading },
@@ -434,11 +460,11 @@ pub fn init(now: Instant, config: &Config, context: Context) -> (State, Vec<Cmd>
         },
         hits: HitMap::default(),
         last_click: None,
-        split: config.split,
         dragging_split: false,
         armed: None,
         view: if cfg!(test) { View::Classic } else { View::Agent },
         summaries: std::collections::BTreeMap::new(),
+        config,
     };
     (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
 }
@@ -470,6 +496,7 @@ pub enum Action {
     SplitNarrower,
     SplitWider,
     SplitReset,
+    Settings,
     View,
     Quit,
 }
@@ -547,6 +574,8 @@ pub static BINDINGS: &[Binding] = &[
     Binding { keys: &[Key::Char('=')], action: Action::SplitReset, bar: &[] },
     Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[] },
     Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
+    // After quit: a narrow terminal clips the end of the bar, and `q quit` must stay.
+    Binding { keys: &[Key::Char(',')], action: Action::Settings, bar: &[bar(",", "settings", When::Always)] },
 ];
 
 /// The key bar for the current context: (keys, description).
@@ -584,22 +613,23 @@ fn action_for(ev: &KeyEvent) -> Option<Action> {
 
 /// The reducer.
 #[expect(clippy::too_many_lines, reason = "one flat match over every `Msg` reads better split no further")]
-pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
+pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Key(ev) if ev.kind == KeyEventKind::Release => Vec::new(),
         Msg::Key(ev) => match &state.focus {
             Focus::Dialog(_) => dialog_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
+            Focus::Settings(_) => settings_key(state, &ev),
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
-                    Some(action) => act(state, action, armed.as_ref(), config),
+                    Some(action) => act(state, action, armed.as_ref()),
                     None => Vec::new(),
                 }
             }
         },
         Msg::Mouse(ev, now) => on_mouse(state, ev, now),
-        Msg::Tick(now) => tick(state, now, config),
+        Msg::Tick(now) => tick(state, now),
         Msg::Issues { result, at } => {
             state.inflight.issues = false;
             apply_feed(&mut state.issues, result, at);
@@ -700,6 +730,12 @@ pub fn update(state: &mut State, msg: Msg, config: &Config) -> Vec<Cmd> {
             }
             observe_now(state)
         }
+        Msg::Saved(result) => {
+            if let Err(e) = result {
+                say(state, format!("Saving settings failed: {e}"));
+            }
+            Vec::new()
+        }
         Msg::FocusGained => {
             state.due.github_soon = true;
             Vec::new()
@@ -739,7 +775,7 @@ fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>, at: Instant
     }
 }
 
-fn tick(state: &mut State, now: Instant, config: &Config) -> Vec<Cmd> {
+fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
     if let Some(toast) = &mut state.toast {
         match toast.shown_at {
             None => toast.shown_at = Some(now),
@@ -755,7 +791,7 @@ fn tick(state: &mut State, now: Instant, config: &Config) -> Vec<Cmd> {
         if idle {
             state.due.github_soon = false;
         }
-        state.due.github = now + config.github_refresh;
+        state.due.github = now + state.config.github_refresh;
         state.due.github_sent = now;
         refresh_github(state, &mut cmds);
     }
@@ -786,7 +822,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 }
 
 /// `armed` is what a previous `m` armed; only the next `m` uses it.
-fn act(state: &mut State, action: Action, armed: Option<&Armed>, config: &Config) -> Vec<Cmd> {
+fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => {
             state.tab = tab;
@@ -829,7 +865,8 @@ fn act(state: &mut State, action: Action, armed: Option<&Armed>, config: &Config
         }
         Action::SplitNarrower => state.split = state.split.narrower(state.hits.panes.width),
         Action::SplitWider => state.split = state.split.wider(state.hits.panes.width),
-        Action::SplitReset => state.split = config.split,
+        Action::SplitReset => state.split = state.config.split,
+        Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::View => state.view = state.view.next(),
         Action::Quit => return vec![Cmd::Quit],
     }
@@ -846,7 +883,7 @@ fn attach_key(state: &mut State) -> Vec<Cmd> {
         vec![Cmd::Attach(w.id.clone())]
     } else {
         say(state, format!("Resuming #{} with claude --continue", issue.0));
-        vec![Cmd::Job(Job::Resume(issue))]
+        vec![Cmd::Job(Job::Resume(issue, Launch::from_config(&state.config)))]
     }
 }
 
@@ -965,7 +1002,7 @@ fn start_fix(state: &mut State, req: StartRequest) -> Vec<Cmd> {
     let n = req.issue;
     state.starting.insert(n);
     goto_session(state, n);
-    vec![Cmd::Job(Job::Start(req))]
+    vec![Cmd::Job(Job::Start(req, Launch::from_config(&state.config)))]
 }
 
 fn fix_request(
@@ -1200,6 +1237,60 @@ fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     Vec::new()
 }
 
+// ---- the settings menu -------------------------------------------------------
+
+fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
+    let Focus::Settings(menu) = &mut state.focus else { return Vec::new() };
+    let key = key_of(ev);
+    let Some(edit) = &mut menu.edit else {
+        let at = SETTINGS.iter().position(|s| *s == menu.at).unwrap_or(0);
+        match key {
+            Some(Key::Char('j') | Key::Code(KeyCode::Down)) => menu.at = SETTINGS[(at + 1).min(SETTINGS.len() - 1)],
+            Some(Key::Char('k') | Key::Code(KeyCode::Up)) => menu.at = SETTINGS[at.saturating_sub(1)],
+            Some(Key::Code(KeyCode::Esc) | Key::Char(',')) => state.focus = Focus::List,
+            Some(Key::Code(KeyCode::Enter)) => {
+                let setting = menu.at;
+                match setting.change(&mut state.config) {
+                    Change::Applied => return changed(state, setting),
+                    Change::Edit(text) => {
+                        let mut input = tui_textarea::TextArea::new(vec![text]);
+                        input.move_cursor(tui_textarea::CursorMove::End);
+                        menu.edit = Some(SettingEdit { input, error: None });
+                    }
+                }
+            }
+            _ => {}
+        }
+        return Vec::new();
+    };
+    match key {
+        Some(Key::Code(KeyCode::Esc)) => menu.edit = None,
+        Some(Key::Code(KeyCode::Enter)) => {
+            let setting = menu.at;
+            match setting.set_text(&mut state.config, &edit.input.lines().join("")) {
+                Ok(()) => {
+                    menu.edit = None;
+                    return changed(state, setting);
+                }
+                Err(e) => edit.error = Some(e.to_string()),
+            }
+        }
+        _ => {
+            edit.input.input(*ev);
+            edit.error = None;
+        }
+    }
+    Vec::new()
+}
+
+/// `state.config` already holds the new value. Save it, and move what is live.
+fn changed(state: &mut State, setting: Setting) -> Vec<Cmd> {
+    if setting == Setting::Split {
+        state.split = state.config.split;
+    }
+    vec![Cmd::Job(Job::SaveConfig { setting, config: state.config.clone() })]
+}
+
 // ---- the start dialog --------------------------------------------------------
 
 fn open_dialog(issue: &Issue) -> StartDialog {
@@ -1280,7 +1371,7 @@ fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     state.focus = Focus::List;
     goto_session(state, n);
     say(state, format!("Starting #{}", n.0));
-    vec![Cmd::Job(Job::Start(req))]
+    vec![Cmd::Job(Job::Start(req, Launch::from_config(&state.config)))]
 }
 
 // ---- pure view helpers, shared by update and ui ----------------------------
@@ -1402,6 +1493,7 @@ pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a Pul
 mod tests {
     use super::*;
     use crate::domain::{Mergeability, WorktreePath};
+    use crate::glyphs::IconSet;
     use crate::session::Window;
     use crate::testutil::{issue, pr};
     use ratatui::layout::Rect;
@@ -1446,10 +1538,9 @@ mod tests {
 
     /// Three issues (#3 bug, #2 docs, #1 feature) and two open PRs (#10
     /// newer, #11), idle jobs.
-    fn app() -> (State, Config, Instant) {
+    fn app() -> (State, Instant) {
         let now = Instant::now();
-        let config = Config::default();
-        let (mut state, _) = init(now, &config, Context::default());
+        let (mut state, _) = init(now, Config::default(), Context::default());
         state.issues = Feed {
             items: vec![
                 issue(3, "Retry queue drops jobs", &["bug"]),
@@ -1462,11 +1553,11 @@ mod tests {
         let items = vec![PullRequest { created_at: newer, ..pr(10, "fix/3-x", &[3]) }, pr(11, "other", &[])];
         state.prs = Feed { items, status: FeedStatus::Fresh { at: now } };
         state.inflight = Inflight::default();
-        (state, config, now)
+        (state, now)
     }
 
-    fn press(state: &mut State, config: &Config, msg: Msg) -> Vec<Cmd> {
-        update(state, msg, config)
+    fn press(state: &mut State, msg: Msg) -> Vec<Cmd> {
+        update(state, msg)
     }
 
     fn dialog(state: &State) -> &StartDialog {
@@ -1479,7 +1570,7 @@ mod tests {
     fn starts(cmds: &[Cmd]) -> Vec<&StartRequest> {
         cmds.iter()
             .filter_map(|c| match c {
-                Cmd::Job(Job::Start(r)) => Some(r),
+                Cmd::Job(Job::Start(r, _)) => Some(r),
                 _ => None,
             })
             .collect()
@@ -1487,7 +1578,7 @@ mod tests {
 
     #[test]
     fn init_asks_for_all_three_reads() {
-        let (state, cmds) = init(Instant::now(), &Config::default(), Context::default());
+        let (state, cmds) = init(Instant::now(), Config::default(), Context::default());
         let jobs: Vec<_> = cmds.iter().map(|c| matches!(c, Cmd::Job(_))).collect();
         assert_eq!(jobs, [true, true, true]);
         assert!(state.inflight.issues && state.inflight.prs && state.inflight.sessions);
@@ -1495,8 +1586,8 @@ mod tests {
 
     #[test]
     fn s_on_an_issue_opens_the_dialog_with_label_defaults() {
-        let (mut state, config, _) = app();
-        assert!(press(&mut state, &config, key('s')).is_empty());
+        let (mut state, _) = app();
+        assert!(press(&mut state, key('s')).is_empty());
         let d = dialog(&state);
         assert_eq!(d.branch.lines(), ["fix/3-retry-queue-drops-jobs"]);
         assert!(d.prompt.lines()[0].starts_with("Implement GitHub issue #3: Retry queue drops jobs"));
@@ -1504,9 +1595,9 @@ mod tests {
 
     #[test]
     fn s_on_an_issue_with_a_session_goes_to_it_and_opens_no_dialog() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, key('s'));
+        let cmds = press(&mut state, key('s'));
         assert!(cmds.is_empty());
         assert_eq!(state.tab, Tab::Sessions);
         assert_eq!(selected_row(&state), Some(RowKey::Session(IssueNumber(3))));
@@ -1515,12 +1606,12 @@ mod tests {
 
     #[test]
     fn confirm_with_an_invalid_branch_keeps_the_dialog_open_with_an_error() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('s'));
-        press(&mut state, &config, key('x'));
+        let (mut state, _) = app();
+        press(&mut state, key('s'));
+        press(&mut state, key('x'));
         let Focus::Dialog(d) = &mut state.focus else { panic!("dialog") };
         d.branch.insert_str(" bad name");
-        let cmds = press(&mut state, &config, ctrl('s'));
+        let cmds = press(&mut state, ctrl('s'));
         assert!(cmds.is_empty());
         assert!(dialog(&state).error.is_some());
         assert!(state.starting.is_empty());
@@ -1528,9 +1619,9 @@ mod tests {
 
     #[test]
     fn confirm_starts_once_and_a_second_s_emits_no_start() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('s'));
-        let cmds = press(&mut state, &config, ctrl('s'));
+        let (mut state, _) = app();
+        press(&mut state, key('s'));
+        let cmds = press(&mut state, ctrl('s'));
         let reqs = starts(&cmds);
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].issue, IssueNumber(3));
@@ -1539,218 +1630,218 @@ mod tests {
         assert_eq!(state.tab, Tab::Sessions);
         assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(3))]);
 
-        press(&mut state, &config, key('1'));
-        let again = press(&mut state, &config, key('s'));
+        press(&mut state, key('1'));
+        let again = press(&mut state, key('s'));
         assert!(again.is_empty());
         assert!(matches!(state.focus, Focus::List), "no dialog while starting");
     }
 
     #[test]
     fn enter_confirms_on_the_branch_field_but_adds_a_newline_in_the_prompt() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('s'));
+        let (mut state, _) = app();
+        press(&mut state, key('s'));
         for _ in 0..2 {
-            press(&mut state, &config, code(KeyCode::Tab));
+            press(&mut state, code(KeyCode::Tab));
         }
         assert_eq!(dialog(&state).field, DialogField::Prompt);
         let lines = dialog(&state).prompt.lines().len();
-        assert!(press(&mut state, &config, code(KeyCode::Enter)).is_empty());
+        assert!(press(&mut state, code(KeyCode::Enter)).is_empty());
         assert_eq!(dialog(&state).prompt.lines().len(), lines + 1);
-        press(&mut state, &config, code(KeyCode::Tab));
+        press(&mut state, code(KeyCode::Tab));
         assert_eq!(dialog(&state).field, DialogField::Branch);
-        let cmds = press(&mut state, &config, code(KeyCode::Enter));
+        let cmds = press(&mut state, code(KeyCode::Enter));
         assert_eq!(starts(&cmds).len(), 1);
     }
 
     #[test]
     fn dialog_mode_toggles_and_reaches_the_request() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('s'));
-        press(&mut state, &config, code(KeyCode::BackTab));
+        let (mut state, _) = app();
+        press(&mut state, key('s'));
+        press(&mut state, code(KeyCode::BackTab));
         assert_eq!(dialog(&state).field, DialogField::Prompt);
-        press(&mut state, &config, code(KeyCode::Tab));
-        press(&mut state, &config, code(KeyCode::Tab));
+        press(&mut state, code(KeyCode::Tab));
+        press(&mut state, code(KeyCode::Tab));
         assert_eq!(dialog(&state).field, DialogField::Mode);
-        press(&mut state, &config, code(KeyCode::Right));
+        press(&mut state, code(KeyCode::Right));
         assert_eq!(dialog(&state).mode, Mode::PlanFirst);
-        let cmds = press(&mut state, &config, ctrl('s'));
+        let cmds = press(&mut state, ctrl('s'));
         assert_eq!(starts(&cmds)[0].mode, Mode::PlanFirst);
     }
 
     #[test]
     fn esc_closes_the_dialog_without_a_command() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('s'));
-        assert!(press(&mut state, &config, code(KeyCode::Esc)).is_empty());
+        let (mut state, _) = app();
+        press(&mut state, key('s'));
+        assert!(press(&mut state, code(KeyCode::Esc)).is_empty());
         assert!(matches!(state.focus, Focus::List));
         assert!(state.starting.is_empty());
     }
 
     #[test]
     fn tick_does_not_stack_a_second_fetch_while_one_is_inflight() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         state.due.github = now;
         state.inflight.issues = true;
-        let cmds = press(&mut state, &config, Msg::Tick(now + Duration::from_millis(1)));
+        let cmds = press(&mut state, Msg::Tick(now + Duration::from_millis(1)));
         assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchIssues))));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
-        let later = press(&mut state, &config, Msg::Tick(now + Duration::from_millis(2)));
+        let later = press(&mut state, Msg::Tick(now + Duration::from_millis(2)));
         assert!(later.is_empty(), "due time moved forward");
     }
 
     #[test]
     fn tick_observes_sessions_every_two_seconds_once() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         let t = now + SESSIONS_EVERY;
-        let cmds = press(&mut state, &config, Msg::Tick(t));
+        let cmds = press(&mut state, Msg::Tick(t));
         assert_eq!(cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::ObserveSessions))).count(), 1);
-        let cmds = press(&mut state, &config, Msg::Tick(t + Duration::from_millis(100)));
+        let cmds = press(&mut state, Msg::Tick(t + Duration::from_millis(100)));
         assert!(cmds.is_empty());
     }
 
     #[test]
     fn issues_error_keeps_the_old_items_and_stamps_the_failure() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         state.inflight.issues = true;
         let failed = now + Duration::from_secs(5);
-        press(&mut state, &config, Msg::Issues { result: Err("offline".to_string()), at: failed });
+        press(&mut state, Msg::Issues { result: Err("offline".to_string()), at: failed });
         assert_eq!(state.issues.items.len(), 3);
         assert!(
             matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed)
         );
         assert!(!state.inflight.issues);
         let arrived = now + Duration::from_secs(9);
-        press(&mut state, &config, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
+        press(&mut state, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
         assert_eq!(state.issues.items.len(), 1);
         assert!(matches!(state.issues.status, FeedStatus::Fresh { at } if at == arrived));
     }
 
     #[test]
     fn new_data_resets_the_refresh_time_on_the_timer_and_after_r() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let due = state.due.github;
-        let cmds = press(&mut state, &config, Msg::Tick(due));
+        let cmds = press(&mut state, Msg::Tick(due));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         let first = due + Duration::from_secs(2);
-        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: first });
+        press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: first });
         assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == first));
 
-        let cmds = press(&mut state, &config, key('r'));
+        let cmds = press(&mut state, key('r'));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         let second = first + Duration::from_secs(30);
-        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: second });
+        press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: second });
         assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
     }
 
-    fn hit_state() -> (State, Config, Instant) {
-        let (mut state, config, now) = app();
+    fn hit_state() -> (State, Instant) {
+        let (mut state, now) = app();
         state.hits.targets = vec![
             (Rect::new(0, 0, 10, 1), HitTarget::Tab(Tab::Issues)),
             (Rect::new(10, 0, 10, 1), HitTarget::Tab(Tab::Prs)),
             (Rect::new(0, 2, 30, 1), HitTarget::Row(RowKey::Issue(IssueNumber(3)))),
             (Rect::new(0, 3, 30, 1), HitTarget::Row(RowKey::Issue(IssueNumber(2)))),
         ];
-        (state, config, now)
+        (state, now)
     }
 
     #[test]
     fn click_selects_a_row_and_a_tab() {
-        let (mut state, config, now) = hit_state();
-        press(&mut state, &config, click(5, 3, now));
+        let (mut state, now) = hit_state();
+        press(&mut state, click(5, 3, now));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
-        press(&mut state, &config, click(12, 0, now));
+        press(&mut state, click(12, 0, now));
         assert_eq!(state.tab, Tab::Prs);
     }
 
     #[test]
     fn double_click_inside_the_window_opens_the_dialog_and_outside_only_selects() {
-        let (mut state, config, now) = hit_state();
-        press(&mut state, &config, click(5, 3, now));
-        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK.saturating_sub(Duration::from_millis(1))));
+        let (mut state, now) = hit_state();
+        press(&mut state, click(5, 3, now));
+        press(&mut state, click(5, 3, now + DOUBLE_CLICK.saturating_sub(Duration::from_millis(1))));
         assert_eq!(dialog(&state).issue, IssueNumber(2));
 
-        let (mut state, config, now) = hit_state();
-        press(&mut state, &config, click(5, 3, now));
-        press(&mut state, &config, click(5, 3, now + DOUBLE_CLICK + Duration::from_millis(1)));
+        let (mut state, now) = hit_state();
+        press(&mut state, click(5, 3, now));
+        press(&mut state, click(5, 3, now + DOUBLE_CLICK + Duration::from_millis(1)));
         assert!(matches!(state.focus, Focus::List));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
     }
 
     #[test]
     fn wheel_moves_the_selection() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         let wheel = |kind| Msg::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }, now);
-        press(&mut state, &config, wheel(MouseEventKind::ScrollDown));
-        press(&mut state, &config, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
-        press(&mut state, &config, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))), "clamped at the end");
-        press(&mut state, &config, wheel(MouseEventKind::ScrollUp));
+        press(&mut state, wheel(MouseEventKind::ScrollUp));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
     }
 
     #[test]
     fn jk_move_and_stay_inside_the_list() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('k'));
+        let (mut state, _) = app();
+        press(&mut state, key('k'));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
-        press(&mut state, &config, key('j'));
-        press(&mut state, &config, code(KeyCode::Down));
-        press(&mut state, &config, key('j'));
+        press(&mut state, key('j'));
+        press(&mut state, code(KeyCode::Down));
+        press(&mut state, key('j'));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
     }
 
     #[test]
     fn a_filter_that_hides_the_selection_selects_the_first_visible_and_clearing_restores_it() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('j'));
+        let (mut state, _) = app();
+        press(&mut state, key('j'));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
-        press(&mut state, &config, key('/'));
+        press(&mut state, key('/'));
         assert!(matches!(state.focus, Focus::Filter));
         for c in "json".chars() {
-            press(&mut state, &config, key(c));
+            press(&mut state, key(c));
         }
-        press(&mut state, &config, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Enter));
         assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(1))]);
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
-        press(&mut state, &config, code(KeyCode::Esc));
+        press(&mut state, code(KeyCode::Esc));
         assert_eq!(visible_rows(&state).len(), 3);
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
     }
 
     #[test]
     fn filter_esc_clears_and_backspace_edits() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('/'));
-        press(&mut state, &config, key('a'));
-        press(&mut state, &config, key('b'));
-        press(&mut state, &config, code(KeyCode::Backspace));
+        let (mut state, _) = app();
+        press(&mut state, key('/'));
+        press(&mut state, key('a'));
+        press(&mut state, key('b'));
+        press(&mut state, code(KeyCode::Backspace));
         assert_eq!(state.filter, "a");
-        press(&mut state, &config, code(KeyCode::Esc));
+        press(&mut state, code(KeyCode::Esc));
         assert_eq!((state.filter.as_str(), matches!(state.focus, Focus::List)), ("", true));
     }
 
     #[test]
     fn stale_tail_is_dropped_and_current_tail_is_kept() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.inflight.tail = true;
         let old_window = WindowId::parse("@99").expect("id");
-        press(&mut state, &config, Msg::Tail { window: old_window, result: Ok(vec!["old".to_string()]) });
+        press(&mut state, Msg::Tail { window: old_window, result: Ok(vec!["old".to_string()]) });
         assert!(state.tail.is_none());
         assert!(!state.inflight.tail);
         let new_window = WindowId::parse("@3").expect("id");
-        press(&mut state, &config, Msg::Tail { window: new_window, result: Ok(vec!["new".to_string()]) });
+        press(&mut state, Msg::Tail { window: new_window, result: Ok(vec!["new".to_string()]) });
         assert_eq!(state.tail.as_ref().map(|t| t.lines.clone()), Some(vec!["new".to_string()]));
     }
 
     #[test]
     fn tick_asks_for_the_tail_of_the_session_in_view_only() {
-        let (mut state, config, now) = app();
-        let cmds = press(&mut state, &config, Msg::Tick(now));
+        let (mut state, now) = app();
+        let cmds = press(&mut state, Msg::Tick(now));
         assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(_)))));
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        let cmds = press(&mut state, &config, Msg::Tick(now));
+        let cmds = press(&mut state, Msg::Tick(now));
         assert!(
             cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(id)) if id.as_str() == "@3")),
             "dead panes have a tail too"
@@ -1759,55 +1850,55 @@ mod tests {
 
     #[test]
     fn a_attaches_a_live_session_and_resumes_an_exited_one() {
-        let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, key('a'));
+        let (mut state, _) = app();
+        let cmds = press(&mut state, key('a'));
         assert!(cmds.is_empty());
         assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("Press s")));
 
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, key('a'));
+        let cmds = press(&mut state, key('a'));
         assert!(matches!(cmds.as_slice(), [Cmd::Attach(id)] if id.as_str() == "@3"));
 
         state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
-        assert!(matches!(press(&mut state, &config, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
+        assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
 
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        let cmds = press(&mut state, &config, key('a'));
-        assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Resume(n))] if *n == IssueNumber(3)));
+        let cmds = press(&mut state, key('a'));
+        assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Resume(n, _))] if *n == IssueNumber(3)));
         assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("claude --continue")));
     }
 
     #[test]
     fn x_stops_only_a_live_session_by_issue_number() {
-        let (mut state, config, _) = app();
-        assert!(press(&mut state, &config, key('x')).is_empty());
+        let (mut state, _) = app();
+        assert!(press(&mut state, key('x')).is_empty());
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        assert!(press(&mut state, &config, key('x')).is_empty(), "exited has nothing to stop");
+        assert!(press(&mut state, key('x')).is_empty(), "exited has nothing to stop");
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, key('x'));
+        let cmds = press(&mut state, key('x'));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Stop(n))] if *n == IssueNumber(3)));
     }
 
     #[test]
     fn pr_enter_goes_to_the_closed_issue_and_pr_rows_show_the_session() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('2'));
+        let (mut state, _) = app();
+        press(&mut state, key('2'));
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         assert_eq!(current_session(&state).map(|s| s.issue), Some(IssueNumber(3)), "via closes");
-        press(&mut state, &config, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Enter));
         assert_eq!(state.tab, Tab::Issues);
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
 
-        press(&mut state, &config, key('2'));
-        press(&mut state, &config, key('j'));
+        press(&mut state, key('2'));
+        press(&mut state, key('j'));
         assert_eq!(selected_row(&state), Some(RowKey::Pr(PrNumber(11))));
-        press(&mut state, &config, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Enter));
         assert_eq!(state.tab, Tab::Prs, "a PR without closes stays");
     }
 
     #[test]
     fn lead_pr_prefers_merged_then_open_then_draft_and_skips_closed() {
-        let (mut state, _, _) = app();
+        let (mut state, _) = app();
         let with = |n: u32, s: PrState| PullRequest { state: s, ..pr(n, &format!("b{n}"), &[7]) };
         state.prs.items = vec![with(20, PrState::Closed)];
         assert!(lead_pr(&state, IssueNumber(7)).is_none(), "a closed PR never shows");
@@ -1823,7 +1914,7 @@ mod tests {
 
     #[test]
     fn session_pr_is_found_by_head_branch() {
-        let (state, _, _) = app();
+        let (state, _) = app();
         let s = session(3, None);
         assert_eq!(pr_for_session(&state, &s).map(|p| p.number), Some(PrNumber(10)));
         assert!(pr_for_session(&state, &session(4, None)).is_none());
@@ -1831,63 +1922,63 @@ mod tests {
 
     #[test]
     fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(1), session(1, None));
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.starting.insert(IssueNumber(2));
-        press(&mut state, &config, key('3'));
+        press(&mut state, key('3'));
         assert_eq!(
             visible_rows(&state),
             [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(1))]
         );
-        press(&mut state, &config, key('/'));
+        press(&mut state, key('/'));
         for c in "docs".chars() {
-            press(&mut state, &config, key(c));
+            press(&mut state, key(c));
         }
         assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "filters by the issue title");
     }
 
     #[test]
     fn results_of_writes_clear_starting_toast_and_ask_for_an_observation() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.starting.insert(IssueNumber(3));
-        let cmds = press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+        let cmds = press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
         assert!(state.starting.is_empty());
         assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("boom")));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::ObserveSessions)]));
-        let again = press(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+        let again = press(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
         assert!(again.is_empty(), "an observation is already in flight");
     }
 
     #[test]
     fn a_finished_start_shows_its_session_at_once_with_its_warning() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.starting.insert(IssueNumber(3));
         let outcome =
             StartOutcome { session: session(3, Some((true, false))), warnings: vec!["fetch failed".to_string()] };
-        press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+        press(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
         assert!(state.sessions.contains_key(&IssueNumber(3)));
         assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("fetch failed")));
     }
 
     #[test]
     fn toast_is_stamped_then_expires() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         say(&mut state, "hi".to_string());
-        press(&mut state, &config, Msg::Tick(now));
+        press(&mut state, Msg::Tick(now));
         assert!(state.toast.is_some());
-        press(&mut state, &config, Msg::Tick(now + TOAST_FOR));
+        press(&mut state, Msg::Tick(now + TOAST_FOR));
         assert!(state.toast.is_none());
     }
 
     #[test]
     fn r_refreshes_without_stacking_and_q_quits() {
-        let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, key('r'));
+        let (mut state, _) = app();
+        let cmds = press(&mut state, key('r'));
         assert_eq!(cmds.len(), 3);
-        assert!(press(&mut state, &config, key('r')).is_empty());
-        assert!(matches!(press(&mut state, &config, key('q')).as_slice(), [Cmd::Quit]));
-        assert!(matches!(press(&mut state, &config, ctrl('c')).as_slice(), [Cmd::Quit]));
+        assert!(press(&mut state, key('r')).is_empty());
+        assert!(matches!(press(&mut state, key('q')).as_slice(), [Cmd::Quit]));
+        assert!(matches!(press(&mut state, ctrl('c')).as_slice(), [Cmd::Quit]));
     }
 
     fn github_fetches(cmds: &[Cmd]) -> usize {
@@ -1896,46 +1987,34 @@ mod tests {
 
     /// Sends `msg`, then checks that the GitHub fetch waits for the cooldown,
     /// goes out once, and pushes the 60 s timer back.
-    fn assert_triggers_one_refresh(state: &mut State, config: &Config, msg: Msg) {
+    fn assert_triggers_one_refresh(state: &mut State, msg: Msg) {
         let from = state.due.github_sent;
-        assert_eq!(github_fetches(&press(state, config, msg)), 0, "the next tick fetches, not the event");
+        assert_eq!(github_fetches(&press(state, msg)), 0, "the next tick fetches, not the event");
         assert_eq!(
-            github_fetches(&press(
-                state,
-                config,
-                Msg::Tick(from + GITHUB_COOLDOWN.saturating_sub(Duration::from_millis(1)))
-            )),
+            github_fetches(&press(state, Msg::Tick(from + GITHUB_COOLDOWN.saturating_sub(Duration::from_millis(1))))),
             0,
             "cooldown"
         );
         let at = from + GITHUB_COOLDOWN;
-        assert_eq!(github_fetches(&press(state, config, Msg::Tick(at))), 2);
-        assert_eq!(state.due.github, at + config.github_refresh, "the timer starts again");
-        assert_eq!(
-            github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN))),
-            0,
-            "inflight, and no new event"
-        );
-        press(state, config, Msg::Issues { result: Ok(Vec::new()), at });
-        press(state, config, Msg::Prs { result: Ok(Vec::new()), at });
-        assert_eq!(
-            github_fetches(&press(state, config, Msg::Tick(at + GITHUB_COOLDOWN * 2))),
-            0,
-            "one event, one fetch"
-        );
+        assert_eq!(github_fetches(&press(state, Msg::Tick(at))), 2);
+        assert_eq!(state.due.github, at + state.config.github_refresh, "the timer starts again");
+        assert_eq!(github_fetches(&press(state, Msg::Tick(at + GITHUB_COOLDOWN))), 0, "inflight, and no new event");
+        press(state, Msg::Issues { result: Ok(Vec::new()), at });
+        press(state, Msg::Prs { result: Ok(Vec::new()), at });
+        assert_eq!(github_fetches(&press(state, Msg::Tick(at + GITHUB_COOLDOWN * 2))), 0, "one event, one fetch");
     }
 
     #[test]
     fn a_start_or_a_stop_refreshes_github() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: Vec::new() };
-        assert_triggers_one_refresh(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
-        assert_triggers_one_refresh(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+        assert_triggers_one_refresh(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+        assert_triggers_one_refresh(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
 
-        let (mut state, config, now) = app();
-        press(&mut state, &config, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+        let (mut state, now) = app();
+        press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
         assert_eq!(
-            github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))),
+            github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN))),
             0,
             "a failed start changes nothing"
         );
@@ -1953,58 +2032,58 @@ mod tests {
             (needs_you(), Some(exited())),
             (running(), None),
         ] {
-            let (mut state, config, _) = app();
+            let (mut state, _) = app();
             state.sessions.insert(IssueNumber(3), before);
-            assert_triggers_one_refresh(&mut state, &config, observe(after.into_iter().collect()));
+            assert_triggers_one_refresh(&mut state, observe(after.into_iter().collect()));
         }
         for (before, after) in
             [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())]
         {
-            let (mut state, config, now) = app();
+            let (mut state, now) = app();
             state.sessions.insert(IssueNumber(3), before);
-            press(&mut state, &config, observe(vec![after]));
-            assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN))), 0);
+            press(&mut state, observe(vec![after]));
+            assert_eq!(github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN))), 0);
         }
     }
 
     #[test]
     fn focus_gained_refreshes_github() {
-        let (mut state, config, _) = app();
-        assert_triggers_one_refresh(&mut state, &config, Msg::FocusGained);
+        let (mut state, _) = app();
+        assert_triggers_one_refresh(&mut state, Msg::FocusGained);
     }
 
     #[test]
     fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         for _ in 0..3 {
-            press(&mut state, &config, Msg::FocusGained);
-            press(&mut state, &config, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+            press(&mut state, Msg::FocusGained);
+            press(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
         }
         let at = now + GITHUB_COOLDOWN;
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(at))), 2);
+        assert_eq!(github_fetches(&press(&mut state, Msg::Tick(at))), 2);
 
         // This fetch may have started before the change, so another one follows it.
-        press(&mut state, &config, Msg::FocusGained);
+        press(&mut state, Msg::FocusGained);
         let later = at + GITHUB_COOLDOWN;
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "waits for the fetch in flight");
-        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: later });
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 0, "PRs still in flight");
-        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: later });
-        assert_eq!(github_fetches(&press(&mut state, &config, Msg::Tick(later))), 2);
+        assert_eq!(github_fetches(&press(&mut state, Msg::Tick(later))), 0, "waits for the fetch in flight");
+        press(&mut state, Msg::Issues { result: Ok(Vec::new()), at: later });
+        assert_eq!(github_fetches(&press(&mut state, Msg::Tick(later))), 0, "PRs still in flight");
+        press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: later });
+        assert_eq!(github_fetches(&press(&mut state, Msg::Tick(later))), 2);
     }
 
     #[test]
     fn the_timer_firing_during_a_fetch_keeps_the_pending_event() {
-        let (mut state, config, now) = app();
+        let (mut state, now) = app();
         state.inflight.issues = true;
-        press(&mut state, &config, Msg::FocusGained);
+        press(&mut state, Msg::FocusGained);
         state.due.github = now + GITHUB_COOLDOWN;
-        let cmds = press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN));
+        let cmds = press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
-        press(&mut state, &config, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
-        press(&mut state, &config, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
+        press(&mut state, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
+        press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
         assert_eq!(
-            github_fetches(&press(&mut state, &config, Msg::Tick(now + GITHUB_COOLDOWN * 2))),
+            github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN * 2))),
             2,
             "the issues fetch predated the event"
         );
@@ -2012,7 +2091,7 @@ mod tests {
 
     #[test]
     fn key_bar_follows_the_context() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let names = |s: &State| key_bar(s).iter().map(|(k, d)| format!("{k} {d}")).collect::<Vec<_>>();
         assert!(names(&state).contains(&"s start session".to_string()));
         assert!(names(&state).contains(&"o open on GitHub".to_string()));
@@ -2022,7 +2101,7 @@ mod tests {
         assert!(names(&state).contains(&"x stop".to_string()));
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
         assert!(names(&state).contains(&"a resume".to_string()));
-        press(&mut state, &config, key('2'));
+        press(&mut state, key('2'));
         assert!(names(&state).contains(&"enter go to issue".to_string()));
     }
 
@@ -2037,19 +2116,19 @@ mod tests {
 
     #[test]
     fn o_opens_the_selected_issue_pr_or_session_issue() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('j'));
-        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Issue(IssueNumber(2))]);
+        let (mut state, _) = app();
+        press(&mut state, key('j'));
+        assert_eq!(opens(&press(&mut state, key('o'))), [GithubRef::Issue(IssueNumber(2))]);
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Opening issue #2 on GitHub"));
 
-        press(&mut state, &config, key('2'));
-        press(&mut state, &config, key('j'));
-        assert_eq!(opens(&press(&mut state, &config, key('o'))), [GithubRef::Pr(PrNumber(11))]);
+        press(&mut state, key('2'));
+        press(&mut state, key('j'));
+        assert_eq!(opens(&press(&mut state, key('o'))), [GithubRef::Pr(PrNumber(11))]);
 
         state.sessions.insert(IssueNumber(7), session(7, Some((true, false))));
-        press(&mut state, &config, key('3'));
+        press(&mut state, key('3'));
         assert_eq!(
-            opens(&press(&mut state, &config, key('o'))),
+            opens(&press(&mut state, key('o'))),
             [GithubRef::Issue(IssueNumber(7))],
             "an issue not in the list still opens"
         );
@@ -2057,34 +2136,34 @@ mod tests {
 
     #[test]
     fn o_on_an_empty_list_sends_nothing() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('3'));
-        assert!(press(&mut state, &config, key('o')).is_empty());
+        let (mut state, _) = app();
+        press(&mut state, key('3'));
+        assert!(press(&mut state, key('o')).is_empty());
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Nothing to open."));
 
-        press(&mut state, &config, key('1'));
-        press(&mut state, &config, key('/'));
+        press(&mut state, key('1'));
+        press(&mut state, key('/'));
         for c in "zzz".chars() {
-            press(&mut state, &config, key(c));
+            press(&mut state, key(c));
         }
-        press(&mut state, &config, code(KeyCode::Enter));
-        assert!(press(&mut state, &config, key('o')).is_empty(), "a filter that hides every row");
+        press(&mut state, code(KeyCode::Enter));
+        assert!(press(&mut state, key('o')).is_empty(), "a filter that hides every row");
     }
 
     #[test]
     fn o_while_filtering_types_into_the_filter() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('/'));
-        assert!(press(&mut state, &config, key('o')).is_empty());
+        let (mut state, _) = app();
+        press(&mut state, key('/'));
+        assert!(press(&mut state, key('o')).is_empty());
         assert_eq!(state.filter, "o");
     }
 
     #[test]
     fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.context.open_with = OpenWith::Clipboard;
-        press(&mut state, &config, key('j'));
-        let cmds = press(&mut state, &config, key('o'));
+        press(&mut state, key('j'));
+        let cmds = press(&mut state, key('o'));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPageUrl(GithubRef::Issue(IssueNumber(2))))]));
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copying the issue #2 URL"));
         let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
@@ -2092,10 +2171,10 @@ mod tests {
 
         let target = GithubRef::Issue(IssueNumber(2));
         let url = "https://github.com/o/r/issues/2".to_string();
-        let cmds = press(&mut state, &config, Msg::PageUrl { target, result: Ok(url.clone()) });
+        let cmds = press(&mut state, Msg::PageUrl { target, result: Ok(url.clone()) });
         assert!(matches!(cmds.as_slice(), [Cmd::Copy { target: t, text }] if *t == target && *text == url));
 
-        press(&mut state, &config, Msg::Copied { target, result: Ok(url) });
+        press(&mut state, Msg::Copied { target, result: Ok(url) });
         assert!(
             state.toast.as_ref().is_some_and(|t| t.text == "Copied https://github.com/o/r/issues/2"),
             "the toast shows the URL, because a terminal can ignore OSC 52 without an error"
@@ -2104,21 +2183,21 @@ mod tests {
 
     #[test]
     fn a_failed_url_lookup_or_copy_shows_the_error() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let target = GithubRef::Pr(PrNumber(10));
-        assert!(press(&mut state, &config, Msg::PageUrl { target, result: Err("gh down".to_string()) }).is_empty());
+        assert!(press(&mut state, Msg::PageUrl { target, result: Err("gh down".to_string()) }).is_empty());
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: gh down"));
-        press(&mut state, &config, Msg::Copied { target, result: Err("no tmux".to_string()) });
+        press(&mut state, Msg::Copied { target, result: Err("no tmux".to_string()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: no tmux"));
     }
 
     #[test]
     fn a_failed_open_shows_the_error_and_a_success_is_quiet() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let target = GithubRef::Pr(PrNumber(10));
-        assert!(press(&mut state, &config, Msg::Opened { target, result: Ok(()) }).is_empty());
+        assert!(press(&mut state, Msg::Opened { target, result: Ok(()) }).is_empty());
         assert!(state.toast.is_none());
-        press(&mut state, &config, Msg::Opened { target, result: Err("no browser".to_string()) });
+        press(&mut state, Msg::Opened { target, result: Err("no browser".to_string()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Open PR #10 failed: no browser"));
     }
 
@@ -2173,66 +2252,66 @@ mod tests {
 
     #[test]
     fn m_twice_starts_a_merge_job_for_the_session_pr() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
-        press(&mut state, &config, key('3'));
+        press(&mut state, key('3'));
         assert!(key_bar(&state).contains(&("m", "merge")));
-        assert!(press(&mut state, &config, key('m')).is_empty(), "the first press only arms");
+        assert!(press(&mut state, key('m')).is_empty(), "the first press only arms");
         assert_eq!(toast(&state), "Press m again to merge PR #10");
-        let cmds = press(&mut state, &config, key('m'));
+        let cmds = press(&mut state, key('m'));
         assert_eq!(merges(&cmds), [ASK]);
         assert!(sends(&cmds).is_empty(), "no agent turn for the merge itself");
         assert!(state.armed.is_none());
-        assert!(press(&mut state, &config, key('m')).is_empty(), "a third press arms again");
+        assert!(press(&mut state, key('m')).is_empty(), "a third press arms again");
     }
 
     #[test]
     fn m_merges_without_a_session_from_the_pr_or_the_issue() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         assert!(key_bar(&state).contains(&("m", "merge")), "issue #3 has PR #10");
-        press(&mut state, &config, key('m'));
-        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK]);
+        press(&mut state, key('m'));
+        assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
 
-        press(&mut state, &config, key('2'));
-        press(&mut state, &config, key('j'));
-        press(&mut state, &config, key('m'));
+        press(&mut state, key('2'));
+        press(&mut state, key('j'));
+        press(&mut state, key('m'));
         assert_eq!(toast(&state), "Press m again to merge PR #11");
         assert_eq!(
-            merges(&press(&mut state, &config, key('m'))),
+            merges(&press(&mut state, key('m'))),
             [MergeAsk { pr: PrNumber(11), new_session_ok: false, ready_ok: false }]
         );
     }
 
     #[test]
     fn the_first_m_names_the_problem_and_the_agent_of_a_running_session() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
         state.prs.items[0].mergeability = Mergeability::Conflict;
-        press(&mut state, &config, key('3'));
-        press(&mut state, &config, key('m'));
+        press(&mut state, key('3'));
+        press(&mut state, key('m'));
         assert_eq!(
             toast(&state),
             "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it."
         );
-        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK], "the job decides, not the cached list");
+        assert_eq!(merges(&press(&mut state, key('m'))), [ASK], "the job decides, not the cached list");
     }
 
     #[test]
     fn without_a_running_session_the_first_m_offers_a_new_session() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.prs.items[0].mergeability = Mergeability::Conflict;
-        press(&mut state, &config, key('m'));
+        press(&mut state, key('m'));
         assert_eq!(
             toast(&state),
             "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it."
         );
-        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK_FIX]);
+        assert_eq!(merges(&press(&mut state, key('m'))), [ASK_FIX]);
     }
 
     #[test]
     fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
-        let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, with_ask(handoff(MergeProblem::Conflict), ASK_FIX));
+        let (mut state, _) = app();
+        let cmds = press(&mut state, with_ask(handoff(MergeProblem::Conflict), ASK_FIX));
         let started = starts(&cmds);
         assert_eq!(started.len(), 1);
         let req = started[0];
@@ -2251,47 +2330,47 @@ mod tests {
 
     #[test]
     fn a_problem_the_list_did_not_show_needs_one_more_m_for_a_new_session() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('m'));
-        press(&mut state, &config, key('m'));
-        let cmds = press(&mut state, &config, handoff(MergeProblem::Conflict));
+        let (mut state, _) = app();
+        press(&mut state, key('m'));
+        press(&mut state, key('m'));
+        let cmds = press(&mut state, handoff(MergeProblem::Conflict));
         assert!(cmds.is_empty(), "no session before the user agrees");
         assert_eq!(
             toast(&state),
             "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it."
         );
-        let started = press(&mut state, &config, key('m'));
+        let started = press(&mut state, key('m'));
         assert_eq!(starts(&started).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
         assert!(merges(&started).is_empty());
     }
 
     #[test]
     fn another_key_cancels_the_new_session() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, handoff(MergeProblem::Conflict));
-        press(&mut state, &config, key('j'));
-        press(&mut state, &config, key('k'));
-        let cmds = press(&mut state, &config, key('m'));
+        let (mut state, _) = app();
+        press(&mut state, handoff(MergeProblem::Conflict));
+        press(&mut state, key('j'));
+        press(&mut state, key('k'));
+        let cmds = press(&mut state, key('m'));
         assert!(starts(&cmds).is_empty() && merges(&cmds).is_empty());
         assert_eq!(toast(&state), "Press m again to merge PR #10", "the m arms a fresh merge");
     }
 
     #[test]
     fn an_exited_session_on_the_pr_branch_gets_a_new_session() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        let cmds = press(&mut state, &config, with_ask(handoff(MergeProblem::ChecksFailing), ASK_FIX));
+        let cmds = press(&mut state, with_ask(handoff(MergeProblem::ChecksFailing), ASK_FIX));
         assert!(sends(&cmds).is_empty());
         assert_eq!(starts(&cmds).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
     }
 
     #[test]
     fn a_problem_pr_with_no_issue_to_start_on_only_explains() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.prs.items[1].mergeability = Mergeability::Conflict;
-        press(&mut state, &config, key('2'));
+        press(&mut state, key('2'));
         state.selected.pr = Some(PrNumber(11));
-        assert!(press(&mut state, &config, key('m')).is_empty());
+        assert!(press(&mut state, key('m')).is_empty());
         assert_eq!(
             toast(&state),
             "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it."
@@ -2301,12 +2380,8 @@ mod tests {
 
     #[test]
     fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
-        let (mut state, config, _) = app();
-        let cmds = press(
-            &mut state,
-            &config,
-            Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) },
-        );
+        let (mut state, _) = app();
+        let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) });
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
         assert!(sends(&cmds).is_empty());
@@ -2329,9 +2404,9 @@ mod tests {
     #[test]
     fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
         for waiting in [false, true] {
-            let (mut state, config, _) = app();
+            let (mut state, _) = app();
             state.sessions.insert(IssueNumber(3), session(3, Some((true, waiting))));
-            let cmds = press(&mut state, &config, merged_squash());
+            let cmds = press(&mut state, merged_squash());
             assert_eq!(stops(&cmds), [IssueNumber(3)]);
             assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session");
             assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
@@ -2340,30 +2415,30 @@ mod tests {
 
     #[test]
     fn a_direct_merge_leaves_an_exited_or_unrelated_session_alone() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
         state.sessions.insert(IssueNumber(2), session(2, Some((true, false))));
-        let cmds = press(&mut state, &config, merged_squash());
+        let cmds = press(&mut state, merged_squash());
         assert!(stops(&cmds).is_empty(), "#3's window is gone and #2 is on another branch");
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
 
         state.sessions.insert(IssueNumber(3), session(3, None));
-        assert!(stops(&press(&mut state, &config, merged_squash())).is_empty(), "no window");
+        assert!(stops(&press(&mut state, merged_squash())).is_empty(), "no window");
     }
 
     #[test]
     fn a_queued_merge_keeps_the_session() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
+        let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
         assert!(stops(&cmds).is_empty(), "the PR can still drop out of the queue");
     }
 
     #[test]
     fn a_problem_pr_sends_the_running_agent_a_prompt_with_the_problem_and_method() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        let cmds = press(&mut state, &config, handoff(MergeProblem::ChecksFailing));
+        let cmds = press(&mut state, handoff(MergeProblem::ChecksFailing));
         let prompt = rules::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
         assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
         assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
@@ -2372,23 +2447,19 @@ mod tests {
 
     #[test]
     fn a_queued_merge_says_so() {
-        let (mut state, config, _) = app();
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
+        let (mut state, _) = app();
+        let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
         assert_eq!(toast(&state), "PR #10 is in the merge queue");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
     }
 
     #[test]
     fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast() {
-        let (mut state, config, _) = app();
-        let cmds = press(
-            &mut state,
-            &config,
-            Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Refused("wait".to_string()))) },
-        );
+        let (mut state, _) = app();
+        let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Refused("wait".to_string()))) });
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "a stale list catches up");
         assert_eq!(toast(&state), "wait");
-        let cmds = press(&mut state, &config, Msg::Merged { ask: ASK, run: ran(Err("not allowed".to_string())) });
+        let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Err("not allowed".to_string())) });
         assert!(cmds.is_empty());
         assert_eq!(toast(&state), "Merge PR #10 failed: not allowed");
     }
@@ -2397,12 +2468,12 @@ mod tests {
 
     #[test]
     fn m_on_a_draft_says_it_marks_it_ready_then_the_second_m_merges_with_consent() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.prs.items[0].state = PrState::Draft;
         assert!(key_bar(&state).contains(&("m", "merge")));
-        assert!(press(&mut state, &config, key('m')).is_empty());
+        assert!(press(&mut state, key('m')).is_empty());
         assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
-        let cmds = press(&mut state, &config, key('m'));
+        let cmds = press(&mut state, key('m'));
         assert_eq!(merges(&cmds), [ASK_READY]);
     }
 
@@ -2422,8 +2493,8 @@ mod tests {
             (Err("boom".to_string()), "Merge PR #10 failed: boom PR #10 is now ready for review."),
         ];
         for (result, text) in outcomes {
-            let (mut state, config, _) = app();
-            let cmds = press(&mut state, &config, Msg::Merged { ask: ASK_READY, run: ran_after_ready(result) });
+            let (mut state, _) = app();
+            let cmds = press(&mut state, Msg::Merged { ask: ASK_READY, run: ran_after_ready(result) });
             assert_eq!(toast(&state), text);
             assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "{text}");
             assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchIssues))), "{text}");
@@ -2432,57 +2503,57 @@ mod tests {
 
     #[test]
     fn a_merge_after_marking_ready_has_no_ready_note() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let msg = Msg::Merged { ask: ASK_READY, run: ran_after_ready(Ok(MergeOutcome::Merged(MergeMethod::Squash))) };
-        press(&mut state, &config, msg);
+        press(&mut state, msg);
         assert_eq!(toast(&state), "Merged PR #10 (squash)");
     }
 
     #[test]
     fn m_from_the_pr_row_reaches_the_same_pr() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        press(&mut state, &config, key('2'));
-        press(&mut state, &config, key('m'));
-        assert_eq!(merges(&press(&mut state, &config, key('m'))), [ASK]);
+        press(&mut state, key('2'));
+        press(&mut state, key('m'));
+        assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
     }
 
     #[test]
     fn another_key_between_the_two_m_presses_disarms() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        press(&mut state, &config, key('3'));
-        press(&mut state, &config, key('m'));
-        press(&mut state, &config, key('r'));
-        assert!(merges(&press(&mut state, &config, key('m'))).is_empty());
+        press(&mut state, key('3'));
+        press(&mut state, key('m'));
+        press(&mut state, key('r'));
+        assert!(merges(&press(&mut state, key('m'))).is_empty());
     }
 
     #[test]
     fn m_explains_why_it_can_not_merge() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, key('3'));
-        press(&mut state, &config, key('m'));
+        let (mut state, _) = app();
+        press(&mut state, key('3'));
+        press(&mut state, key('m'));
         assert_eq!(toast(&state), "Nothing is selected.");
 
-        press(&mut state, &config, key('1'));
+        press(&mut state, key('1'));
         state.prs.items[0].state = PrState::Draft;
-        press(&mut state, &config, key('m'));
+        press(&mut state, key('m'));
         assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
         assert!(key_bar(&state).contains(&("m", "merge")));
 
         state.prs.items.remove(0);
         for _ in 0..2 {
-            assert!(press(&mut state, &config, key('m')).is_empty());
+            assert!(press(&mut state, key('m')).is_empty());
         }
         assert_eq!(toast(&state), "#3 has no PR yet.");
     }
 
     #[test]
     fn a_sent_result_shows_a_toast() {
-        let (mut state, config, _) = app();
-        press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
+        let (mut state, _) = app();
+        press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Asked #3's agent to fix and merge its PR"));
-        press(&mut state, &config, Msg::Sent { issue: IssueNumber(3), result: Err("gone".to_string()) });
+        press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Err("gone".to_string()) });
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Merge request to #3 failed: gone"));
     }
 
@@ -2497,10 +2568,10 @@ mod tests {
 
     #[test]
     fn release_events_are_ignored() {
-        let (mut state, config, _) = app();
+        let (mut state, _) = app();
         let mut ev = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         ev.kind = KeyEventKind::Release;
-        assert!(press(&mut state, &config, Msg::Key(ev)).is_empty());
+        assert!(press(&mut state, Msg::Key(ev)).is_empty());
     }
 
     /// What a terminal sends for `S`.
@@ -2519,20 +2590,20 @@ mod tests {
     }
 
     /// `app()` plus: #1 needs you and has the most comments, #2 was updated last.
-    fn sortable() -> (State, Config) {
-        let (mut state, config, _) = app();
+    fn sortable() -> State {
+        let (mut state, _) = app();
         state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
         state.issues.items[2].comment_count = 5;
         state.issues.items[1].updated_at = jiff::Timestamp::from_second(60).expect("in range");
-        (state, config)
+        state
     }
 
     #[test]
     fn s_cycles_every_issue_mode_in_order_and_wraps() {
-        let (mut state, config) = sortable();
+        let mut state = sortable();
         let mut seen = vec![(state.sort.label(Tab::Issues), numbers(&state))];
         for _ in 0..IssueSort::ALL.len() {
-            assert!(press(&mut state, &config, shift_s()).is_empty());
+            assert!(press(&mut state, shift_s()).is_empty());
             seen.push((state.sort.label(Tab::Issues), numbers(&state)));
         }
         assert_eq!(
@@ -2551,59 +2622,294 @@ mod tests {
 
     #[test]
     fn each_tab_keeps_its_own_mode() {
-        let (mut state, config) = sortable();
-        press(&mut state, &config, shift_s());
-        press(&mut state, &config, key('2'));
+        let mut state = sortable();
+        press(&mut state, shift_s());
+        press(&mut state, key('2'));
         assert_eq!(state.sort.label(Tab::Prs), "attention");
         assert_eq!(numbers(&state), [10, 11]);
         for _ in 0..4 {
-            press(&mut state, &config, shift_s());
+            press(&mut state, shift_s());
         }
         assert_eq!(state.sort.label(Tab::Prs), "number");
         assert_eq!(numbers(&state), [10, 11]);
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(state.sort.label(Tab::Prs), "attention", "PRs have no comment mode");
 
-        press(&mut state, &config, key('3'));
+        press(&mut state, key('3'));
         state.sessions.insert(IssueNumber(9), session(9, Some((true, false))));
         state.sessions.insert(IssueNumber(10), session(10, None));
         assert_eq!(numbers(&state), [1, 9, 10]);
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(state.sort.label(Tab::Sessions), "number");
         assert_eq!(numbers(&state), [1, 9, 10]);
         state.sessions.insert(IssueNumber(1), session(1, None));
         assert_eq!(numbers(&state), [1, 9, 10], "number mode ignores the state");
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(numbers(&state), [9, 1, 10]);
 
-        press(&mut state, &config, key('1'));
+        press(&mut state, key('1'));
         assert_eq!(state.sort.label(Tab::Issues), "newest");
     }
 
     #[test]
     fn re_sorting_keeps_the_selected_row_even_when_it_was_only_the_first() {
-        let (mut state, config) = sortable();
+        let mut state = sortable();
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(numbers(&state), [3, 2, 1]);
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(1))));
-        press(&mut state, &config, key('k'));
+        press(&mut state, key('k'));
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(2))));
     }
 
     #[test]
     fn the_sort_applies_to_the_filtered_rows_and_typing_s_in_the_filter_is_text() {
-        let (mut state, config) = sortable();
-        press(&mut state, &config, key('/'));
-        press(&mut state, &config, key('j'));
-        press(&mut state, &config, shift_s());
+        let mut state = sortable();
+        press(&mut state, key('/'));
+        press(&mut state, key('j'));
+        press(&mut state, shift_s());
         assert_eq!(state.filter, "jS");
         state.filter = "j".to_string();
-        press(&mut state, &config, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Enter));
         assert_eq!(numbers(&state), [1, 3]);
-        press(&mut state, &config, shift_s());
+        press(&mut state, shift_s());
         assert_eq!(numbers(&state), [3, 1]);
+    }
+
+    // ---- the settings menu ----
+
+    fn menu(state: &State) -> &SettingsMenu {
+        match &state.focus {
+            Focus::Settings(m) => m,
+            _ => panic!("the settings menu is not open"),
+        }
+    }
+
+    fn open_menu_at(state: &mut State, setting: Setting) {
+        press(state, key(','));
+        while menu(state).at != setting {
+            press(state, key('j'));
+        }
+    }
+
+    fn type_text(state: &mut State, text: &str) {
+        for c in text.chars() {
+            press(state, key(c));
+        }
+    }
+
+    fn clear_input(state: &mut State) {
+        for _ in 0..40 {
+            press(state, code(KeyCode::Backspace));
+        }
+    }
+
+    fn saves(cmds: &[Cmd]) -> Vec<(Setting, &Config)> {
+        cmds.iter()
+            .filter_map(|c| match c {
+                Cmd::Job(Job::SaveConfig { setting, config }) => Some((*setting, config)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn comma_opens_the_menu_and_the_key_bar_lists_it() {
+        let (mut state, _) = app();
+        assert!(key_bar(&state).contains(&(",", "settings")));
+        assert!(press(&mut state, key(',')).is_empty());
+        assert_eq!(menu(&state).at, SETTINGS[0]);
+        assert!(menu(&state).edit.is_none());
+        press(&mut state, key(','));
+        assert!(matches!(state.focus, Focus::List), "comma closes it again");
+        press(&mut state, key(','));
+        press(&mut state, code(KeyCode::Esc));
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn j_and_k_move_and_stop_at_the_ends() {
+        let (mut state, _) = app();
+        press(&mut state, key(','));
+        press(&mut state, key('k'));
+        assert_eq!(menu(&state).at, SETTINGS[0]);
+        for _ in 0..SETTINGS.len() + 2 {
+            press(&mut state, key('j'));
+        }
+        assert_eq!(menu(&state).at, SETTINGS[SETTINGS.len() - 1], "no wrap");
+        press(&mut state, code(KeyCode::Up));
+        assert_eq!(menu(&state).at, SETTINGS[SETTINGS.len() - 2]);
+        press(&mut state, code(KeyCode::Down));
+        assert_eq!(menu(&state).at, SETTINGS[SETTINGS.len() - 1]);
+    }
+
+    #[test]
+    fn enter_toggles_detect_waiting_and_saves_it() {
+        let (mut state, _) = app();
+        press(&mut state, key(','));
+        let cmds = press(&mut state, code(KeyCode::Enter));
+        assert!(!state.config.detect_waiting);
+        let [(Setting::DetectWaiting, saved)] = saves(&cmds)[..] else { panic!("one save: {}", cmds.len()) };
+        assert!(!saved.detect_waiting);
+        assert!(menu(&state).edit.is_none());
+        let cmds = press(&mut state, code(KeyCode::Enter));
+        assert!(state.config.detect_waiting);
+        assert!(saves(&cmds)[0].1.detect_waiting);
+    }
+
+    #[test]
+    fn enter_cycles_the_icons_and_saves_them() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::Icons);
+        let cmds = press(&mut state, code(KeyCode::Enter));
+        assert_eq!(state.config.icons, IconSet::NerdFont);
+        assert_eq!(saves(&cmds)[0].0, Setting::Icons);
+        press(&mut state, code(KeyCode::Enter));
+        assert_eq!(state.config.icons, IconSet::Unicode);
+    }
+
+    #[test]
+    fn a_valid_split_applies_now_and_saves() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::Split);
+        assert!(press(&mut state, code(KeyCode::Enter)).is_empty(), "enter opens the editor");
+        assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.lines().join("")), Some("42".to_string()));
+        clear_input(&mut state);
+        type_text(&mut state, "60");
+        let cmds = press(&mut state, code(KeyCode::Enter));
+        assert_eq!(state.config.split, Split::from_percent(60).expect("in range"));
+        assert_eq!(state.split, state.config.split, "the live border moves");
+        assert_eq!(saves(&cmds)[0].0, Setting::Split);
+        assert!(menu(&state).edit.is_none());
+    }
+
+    #[test]
+    fn an_invalid_split_shows_an_error_and_keeps_editing() {
+        for bad in ["95", "abc", ""] {
+            let (mut state, _) = app();
+            open_menu_at(&mut state, Setting::Split);
+            press(&mut state, code(KeyCode::Enter));
+            clear_input(&mut state);
+            type_text(&mut state, bad);
+            let cmds = press(&mut state, code(KeyCode::Enter));
+            assert!(cmds.is_empty(), "{bad:?}");
+            let edit = menu(&state).edit.as_ref().expect("still editing");
+            assert!(edit.error.is_some(), "{bad:?}");
+            assert_eq!(state.config.split, Split::DEFAULT);
+            assert_eq!(state.split, Split::DEFAULT);
+            type_text(&mut state, "5");
+            assert!(menu(&state).edit.as_ref().is_some_and(|e| e.error.is_none()), "typing clears the error");
+        }
+    }
+
+    #[test]
+    fn the_split_error_says_what_the_file_says() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::Split);
+        press(&mut state, code(KeyCode::Enter));
+        clear_input(&mut state);
+        type_text(&mut state, "95");
+        press(&mut state, code(KeyCode::Enter));
+        let error = menu(&state).edit.as_ref().and_then(|e| e.error.clone());
+        assert_eq!(error, Some("invalid config: split 95 is not a percent from 10 to 90".to_string()));
+    }
+
+    #[test]
+    fn a_claude_command_edit_applies_and_saves() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::ClaudeCommand);
+        press(&mut state, code(KeyCode::Enter));
+        type_text(&mut state, " --model 'big one'");
+        let cmds = press(&mut state, code(KeyCode::Enter));
+        assert_eq!(state.config.claude_command.argv(&[]), ["claude", "--model", "big one"]);
+        assert_eq!(saves(&cmds)[0].0, Setting::ClaudeCommand);
+    }
+
+    #[test]
+    fn a_blank_claude_command_is_refused() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::ClaudeCommand);
+        press(&mut state, code(KeyCode::Enter));
+        clear_input(&mut state);
+        assert!(press(&mut state, code(KeyCode::Enter)).is_empty());
+        assert!(menu(&state).edit.as_ref().is_some_and(|e| e.error.is_some()));
+        assert_eq!(state.config, Config::default());
+    }
+
+    #[test]
+    fn esc_while_editing_cancels_the_edit_only() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::Split);
+        press(&mut state, code(KeyCode::Enter));
+        type_text(&mut state, "7");
+        press(&mut state, code(KeyCode::Esc));
+        assert!(menu(&state).edit.is_none(), "the menu stays open");
+        assert_eq!(menu(&state).at, Setting::Split);
+        assert_eq!(state.config.split, Split::DEFAULT);
+        press(&mut state, code(KeyCode::Esc));
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn keys_in_the_editor_do_not_move_or_close_the_menu() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::ClaudeCommand);
+        press(&mut state, code(KeyCode::Enter));
+        type_text(&mut state, "j,q");
+        assert_eq!(menu(&state).at, Setting::ClaudeCommand);
+        assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.lines().join("")), Some("claudej,q".to_string()));
+    }
+
+    #[test]
+    fn a_new_start_uses_the_changed_settings() {
+        let (mut state, _) = app();
+        press(&mut state, key(','));
+        press(&mut state, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Esc));
+        press(&mut state, key('s'));
+        let cmds = press(&mut state, ctrl('s'));
+        let [Cmd::Job(Job::Start(_, launch))] = cmds.as_slice() else { panic!("one start") };
+        assert!(!launch.detect_waiting, "the toggle reaches the next start");
+        assert_eq!(*launch, Launch::from_config(&state.config));
+    }
+
+    #[test]
+    fn a_resume_uses_the_changed_command() {
+        let (mut state, _) = app();
+        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+        open_menu_at(&mut state, Setting::ClaudeCommand);
+        press(&mut state, code(KeyCode::Enter));
+        type_text(&mut state, " --x");
+        press(&mut state, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Esc));
+        press(&mut state, key('3'));
+        let cmds = press(&mut state, key('a'));
+        let [Cmd::Job(Job::Resume(_, launch))] = cmds.as_slice() else { panic!("one resume") };
+        assert_eq!(launch.claude.words(), "claude --x");
+    }
+
+    #[test]
+    fn the_split_reset_key_returns_to_the_saved_split() {
+        let (mut state, _) = app();
+        open_menu_at(&mut state, Setting::Split);
+        press(&mut state, code(KeyCode::Enter));
+        clear_input(&mut state);
+        type_text(&mut state, "70");
+        press(&mut state, code(KeyCode::Enter));
+        press(&mut state, code(KeyCode::Esc));
+        state.split = Split::DEFAULT;
+        press(&mut state, key('='));
+        assert_eq!(state.split, Split::from_percent(70).expect("in range"));
+    }
+
+    #[test]
+    fn a_failed_save_toasts_and_a_good_one_does_not() {
+        let (mut state, _) = app();
+        assert!(press(&mut state, Msg::Saved(Ok(()))).is_empty());
+        assert!(state.toast.is_none());
+        press(&mut state, Msg::Saved(Err("disk full".to_string())));
+        assert_eq!(state.toast.as_ref().map(|t| t.text.as_str()), Some("Saving settings failed: disk full"));
     }
 }

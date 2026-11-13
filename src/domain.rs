@@ -240,6 +240,12 @@ impl Split {
         Self::PERCENT.contains(&p).then(|| Split(u16::try_from(p * 10).unwrap_or(1000)))
     }
 
+    /// The percent that `from_percent` reads, rounded: a drag can leave the
+    /// split between two percents.
+    pub fn percent(self) -> u64 {
+        (u64::from(self.0) + 5) / 10
+    }
+
     /// The list pane's width in a body `body` columns wide; the detail pane
     /// gets the rest. The one place a split becomes columns. Each pane keeps
     /// its minimum while the body has room for both; a narrower body shares

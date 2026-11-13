@@ -93,6 +93,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `<` / `>` | Move the border between the list and the details left or right by 5% |
 | `=` | Put the border back where it started |
 | `q`, Ctrl-C | Quit |
+| `,` | Open the settings menu. See [Config](#config) |
 
 In the dialog: Tab and Shift-Tab change the field, Left and Right change the mode, Esc cancels.
 
@@ -182,6 +183,12 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
 An invalid file stops dispatch at start with a message. Unknown fields are errors.
+
+### Settings menu
+
+Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons`. For `split` and `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
+
+Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` and `split` apply at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change.
 
 ## How sessions are tracked
 

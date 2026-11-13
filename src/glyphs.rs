@@ -68,6 +68,20 @@ pub const NERD_FONT: Icons = Icons {
 };
 
 impl IconSet {
+    pub fn next(self) -> IconSet {
+        match self {
+            IconSet::Unicode => IconSet::NerdFont,
+            IconSet::NerdFont => IconSet::Unicode,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            IconSet::Unicode => "unicode",
+            IconSet::NerdFont => "nerdfont",
+        }
+    }
+
     pub fn icons(self) -> &'static Icons {
         match self {
             IconSet::Unicode => &UNICODE,

@@ -163,8 +163,21 @@ pub struct Workspace {
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
     place: tmux::Place,
-    detect_waiting: bool,
-    claude: ClaudeCommand,
+}
+
+/// The config that shapes a start or resume. It is a value the caller passes
+/// per call, so a settings change reaches the next session with no shared
+/// state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launch {
+    pub detect_waiting: bool,
+    pub claude: ClaudeCommand,
+}
+
+impl Launch {
+    pub fn from_config(config: &Config) -> Launch {
+        Launch { detect_waiting: config.detect_waiting, claude: config.claude_command.clone() }
+    }
 }
 
 #[derive(Debug)]
@@ -188,7 +201,7 @@ impl fmt::Display for SetupError {
 
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
-    pub fn discover(cwd: &std::path::Path, config: &Config) -> Result<Workspace, SetupError> {
+    pub fn discover(cwd: &std::path::Path) -> Result<Workspace, SetupError> {
         let git::RepoDirs { root: repo_root, common: git_common_dir } =
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
@@ -199,14 +212,7 @@ impl Workspace {
         let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
         let place =
             tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
-        Ok(Workspace {
-            repo_root,
-            git_common_dir,
-            base,
-            place,
-            detect_waiting: config.detect_waiting,
-            claude: config.claude_command.clone(),
-        })
+        Ok(Workspace { repo_root, git_common_dir, base, place })
     }
 
     pub fn repo_root(&self) -> &std::path::Path {
@@ -240,21 +246,21 @@ impl Workspace {
         })
     }
 
-    fn layout(&self) -> Layout {
+    fn layout(&self, launch: &Launch) -> Layout {
         Layout {
             repo_root: self.repo_root.clone(),
             base: self.base.clone(),
-            hooks: self.detect_waiting.then_some(WAITING_HOOKS),
-            claude: self.claude.clone(),
+            hooks: launch.detect_waiting.then_some(WAITING_HOOKS),
+            claude: launch.claude.clone(),
         }
     }
 
     /// Converges to "a live window runs Claude in this issue's worktree".
     /// Safe to call twice, and safe to call again after a crash at any step:
     /// it re-observes, plans only the missing steps, and runs them.
-    pub fn start(&self, req: &StartRequest) -> Result<StartOutcome, SessionError> {
+    pub fn start(&self, req: &StartRequest, launch: &Launch) -> Result<StartOutcome, SessionError> {
         let obs = self.observe_for_start(req)?;
-        match plan_start(&obs, req, &self.layout()).map_err(SessionError::Conflict)? {
+        match plan_start(&obs, req, &self.layout(launch)).map_err(SessionError::Conflict)? {
             StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
             StartPlan::Steps(steps) => {
                 let warnings = self.run_steps(steps)?;
@@ -298,12 +304,12 @@ impl Workspace {
     /// the dead pane is still there (same window id), else a new tagged window
     /// as in `start`. No-op if the window is alive. It observes again first, so
     /// a stale row can not aim at a window id that tmux reused.
-    pub fn resume(&self, issue: IssueNumber) -> Result<(), SessionError> {
+    pub fn resume(&self, issue: IssueNumber, launch: &Launch) -> Result<(), SessionError> {
         let Some(session) = self.observe()?.remove(&issue) else {
             return Err(SessionError::Command(format!("no session for #{}", issue.0)));
         };
-        let hooks = self.detect_waiting.then_some(WAITING_HOOKS);
-        let argv = self.claude.argv(&rules::continue_args(hooks));
+        let hooks = launch.detect_waiting.then_some(WAITING_HOOKS);
+        let argv = launch.claude.argv(&rules::continue_args(hooks));
         match &session.window {
             Some(w) if w.alive => Ok(()),
             Some(w) => Ok(tmux::respawn(&w.id, &session.worktree, &argv)?),
@@ -905,9 +911,11 @@ mod tests {
             git_common_dir: base.join("orbit").join(".git"),
             base: "origin/main".to_string(),
             place: tmux::Place::Inside { session_id: "$1".to_string() },
-            detect_waiting: false,
-            claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
         }
+    }
+
+    fn launch() -> Launch {
+        Launch { detect_waiting: false, claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() } }
     }
 
     fn mutating(calls: &[String]) -> Vec<&str> {
@@ -928,7 +936,7 @@ mod tests {
         let ws = workspace(&base);
         let r = req();
         install_world(base.clone(), Rc::new(RefCell::new(Sim::default())));
-        let out = ws.start(&r).expect("start");
+        let out = ws.start(&r, &launch()).expect("start");
         assert_eq!(out.session.state(), SessionState::Running);
         assert!(out.warnings.is_empty());
         let dir = base.join("orbit/.claude/worktrees/142");
@@ -947,7 +955,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
 
         let before = fake::calls().len();
-        let again = ws.start(&r).expect("second start");
+        let again = ws.start(&r, &launch()).expect("second start");
         assert_eq!(again.session, out.session);
         assert!(mutating(&fake::calls()[before..]).is_empty(), "second start must not mutate");
     }
@@ -959,7 +967,7 @@ mod tests {
         std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
         let sim = Sim { added: true, ..Sim::default() };
         install_world(base.clone(), Rc::new(RefCell::new(sim)));
-        let out = ws.start(&req()).expect("start");
+        let out = ws.start(&req(), &launch()).expect("start");
         assert_eq!(out.session.branch, br("fix/142-x"));
         let calls = fake::calls();
         let ran = mutating(&calls);
@@ -973,7 +981,7 @@ mod tests {
         let base = temp_dir("fetch");
         let ws = workspace(&base);
         install_world(base.clone(), Rc::new(RefCell::new(Sim { fetch_fails: true, ..Sim::default() })));
-        let out = ws.start(&req()).expect("start continues");
+        let out = ws.start(&req(), &launch()).expect("start continues");
         assert_eq!(out.warnings.len(), 1);
         assert!(out.warnings[0].contains("origin/main") && out.warnings[0].contains("no network"));
     }
@@ -993,7 +1001,7 @@ mod tests {
                 Ok(String::new())
             }
         });
-        let err = ws.start(&req()).expect_err("fails");
+        let err = ws.start(&req(), &launch()).expect_err("fails");
         assert!(err.to_string().contains("fatal: boom"), "{err}");
         assert!(!fake::calls().iter().any(|c| c.starts_with("tmux new-")));
     }
@@ -1033,7 +1041,7 @@ mod tests {
                 Ok(String::new())
             }
         });
-        ws.resume(IssueNumber(142)).expect("resume");
+        ws.resume(IssueNumber(142), &launch()).expect("resume");
         let last = fake::calls().pop().expect("a call");
         assert_eq!(last, format!("tmux respawn-window -k -t @4 -c {} -- claude --continue", dir.display()));
     }
