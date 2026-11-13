@@ -1,6 +1,6 @@
 # Issue and PR lists
 
-dispatch shows three tabs: Issues, Pull requests, and Sessions, with a list on the left and details on the right. It fetches issues and PRs every 60 s, on `r`, and a few seconds after events that change GitHub data. The tab row shows how old the data is. A user can filter, sort, and resize the panes.
+dispatch shows three tabs: Issues, Pull requests, and Sessions, with a list on the left and details on the right. It fetches issues and PRs every 60 s, on `r`, and a few seconds after events that change GitHub data. The tab row shows how old the data is. A user can filter and sort the rows.
 
 ## Sub-features
 
@@ -11,7 +11,6 @@ dispatch shows three tabs: Issues, Pull requests, and Sessions, with a list on t
 - `lists-sort` cycles the order of the current tab with `S`, shown as `S sort: <order>`.
 - `lists-pr-icon` shows the state of the PR that closes each issue between the number and the title.
 - `lists-details` shows the issue body as Markdown, or the PR state, checks, branch, diff, and closed issues.
-- `lists-resize` moves the border with `<` and `>` by 5 %, and back with `=`.
 
 ## How to get to it (user POV)
 
@@ -31,7 +30,6 @@ Preconditions:
 - **Sort.** Press `S` on the PR tab. Run `$V keys "$RUN" S` and `$V wait "$RUN" 'S sort: newest'`. Each press moves to the next order: `attention`, `newest`, `oldest`, `recently updated`, `number`, then `attention` again. The selected row stays selected.
 - **Details.** On the PR tab, select a PR. The detail pane shows `state`, `checks`, `branch` (`<head> → <base>`), `diff` (`+N -N`), and `closes` for a PR that closes issues. The key column has a width of 9 cells, so the screen shows `closes   #N`. Use `$V wait "$RUN" 'closes +#N'`, not `closes #N`.
 - **PR icon.** On the Issues tab, an issue with an open PR shows `●` after `#N`. A draft PR shows `◌` and a merged PR shows `✓`. A closed PR shows no mark. The color of `●` follows the checks: green pass, red fail, yellow pending. Compare with the PR tab: the PR's detail pane lists `closes   #N`.
-- **Resize.** Press `>`, then `=`. Run `$V keys "$RUN" '>'`, `$V shot "$RUN" wider-list`, `$V keys "$RUN" =`, `$V shot "$RUN" split-reset`. The `│` border moves right by 5 % of 160 columns (8 columns), then returns.
 - **Fetch failure.** Not driven by default. To see it, copy `$RUN/bin/gh`, make `gh issue list` exit 1 in it, press `r` on tab 1, then restore the copy. The tab row shows `refresh failed Ns ago` in yellow, the message row shows `gh failed, showing old data: …`, and the old rows stay. When no rows were loaded before, the message row shows `gh failed: …` and the list is empty.
 
 ## Gotchas

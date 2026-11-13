@@ -22,9 +22,9 @@ Then run `dispatch` in the checkout.
 
 ## Use
 
-There are three tabs: Issues, Pull requests, and Sessions. The list is on the left and the details are on the right.
+There are three tabs: Issues, Pull requests, and Sessions. Each tab shows its rows in groups, for example `Needs you`, `Working`, and `Open` on the Issues tab. Press `v` to show the details of the selected row under the list. Press `v` again to hide them.
 
-dispatch fetches the issues and the pull requests every 60 seconds. Press `r` to fetch them now. On the Issues and Pull requests tabs, the right end of the tab row shows how old the list is:
+dispatch fetches the issues and the pull requests every 60 seconds. Press `r` to fetch them now. On the Issues and Pull requests tabs, the header shows how old the list is, after the repo name:
 
 | Text | Meaning |
 |---|---|
@@ -53,11 +53,11 @@ Worktrees that an older dispatch made next to the repo, at `../<repo>-<issue>`, 
 
 If dispatch runs inside tmux, the window goes into your current tmux session. If not, dispatch creates a detached session named `dispatch-<repo>`. In that case `a` suspends dispatch and runs `tmux attach`. Detach with `Ctrl-b d` to come back.
 
-Each issue row shows the state of the pull request that closes it, between the number and the title:
+An issue row without a session shows the state of the pull request that closes it, before the number:
 
 | Icon | Meaning |
 |---|---|
-| none | No PR, or only closed PRs |
+| `·` gray | No PR, or only closed PRs |
 | `◌` gray | Draft PR |
 | `●` yellow | Open PR, checks running |
 | `●` red | Open PR, checks failing |
@@ -90,18 +90,15 @@ A burst of events makes one load, at most one each 5 seconds.
 | `r` | Fetch the issues and pull requests now |
 | `/` | Filter. Enter keeps it, Esc clears it |
 | `S` | Change the sort order of the tab. See [Order](#order) |
-| `<` / `>` | Move the border between the list and the details left or right by 5% |
-| `=` | Put the border back where it started |
+| `v` | Show or hide the details of the selected row |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
 
 In the dialog: Tab and Shift-Tab change the field, Left and Right change the mode, Esc cancels.
 
-Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection. Drag the border between the list and the details to resize them.
+Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection.
 
-The border is the same on all three tabs. Each side keeps at least 24 columns for the list and 30 for the details. On a terminal too narrow for both, the panes share the width and the border does not move. A resize lasts until you quit. To change where the border starts, set `split` in the config.
-
-The Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+With the details shown, the Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
 
 ## Order
 
@@ -113,7 +110,7 @@ Each tab opens in the `attention` order. Items that need you come first:
 
 A session that is starting counts as running.
 
-Press `S` to change the order of the tab that you see. Each tab keeps its own order. The right end of the tab row shows the order, for example `S sort: newest`. The order applies to the rows that the `/` filter keeps. The selected row stays selected.
+Press `S` to change the order of the tab that you see. Each tab keeps its own order. The footer shows the order, for example `S sort: newest`. The order applies inside each group. The groups stay in their order. The order applies to the rows that the `/` filter keeps. The selected row stays selected.
 
 | Order | Issues | Pull requests | Sessions |
 |---|---|---|---|
@@ -172,23 +169,21 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 {
   "detect_waiting": true,
   "claude_command": ["claude"],
-  "split": 42,
   "icons": "unicode"
 }
 ```
 
 - `detect_waiting` is on by default. dispatch passes `--settings` with four hooks to `claude`. They set a flag on the tmux window when Claude waits for you. Set it to `false` if the hooks conflict with yours.
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
-- `split` is the width of the list as a percent of the window, from 10 to 90. The default is 42. `=` puts the border back here.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
-An invalid file stops dispatch at start with a message. Unknown fields are errors.
+An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 
 ### Settings menu
 
-Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons`. For `split` and `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
+Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
 
-Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` and `split` apply at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change.
+Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` applies at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change.
 
 ## How sessions are tracked
 
