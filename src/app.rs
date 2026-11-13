@@ -109,6 +109,10 @@ pub enum Focus {
     Filter,
     Dialog(Box<StartDialog>),
     Settings(Box<SettingsMenu>),
+    /// The keybinds overlay, scrolled down by `scroll` lines.
+    Keybinds {
+        scroll: u16,
+    },
 }
 
 /// The settings overlay. Browsing has no `edit`; a typed value has one.
@@ -185,6 +189,8 @@ pub struct Toast {
 #[derive(Default)]
 pub struct HitMap {
     pub targets: Vec<(ratatui::layout::Rect, HitTarget)>,
+    /// How far the keybinds overlay can scroll at the last drawn size.
+    pub keybinds_max_scroll: u16,
 }
 
 impl HitMap {
@@ -480,8 +486,34 @@ pub enum Action {
     ClearFilter,
     Sort,
     Settings,
+    Keybinds,
     View,
     Quit,
+}
+
+/// The heading a binding shows under in the keybinds menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyGroup {
+    Navigation,
+    Sessions,
+    PullRequests,
+    View,
+    App,
+}
+
+impl KeyGroup {
+    /// The menu order.
+    pub const ALL: [Self; 5] = [Self::Navigation, Self::Sessions, Self::PullRequests, Self::View, Self::App];
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Navigation => "Navigation",
+            Self::Sessions => "Sessions",
+            Self::PullRequests => "Pull requests",
+            Self::View => "View",
+            Self::App => "App",
+        }
+    }
 }
 
 /// When a key bar entry shows. Key handling does not use it: a key always
@@ -508,54 +540,168 @@ pub struct BarEntry {
 pub struct Binding {
     pub keys: &'static [Key],
     pub action: Action,
+    pub group: KeyGroup,
+    /// What the keybinds menu says the keys do.
+    pub desc: &'static str,
     pub bar: &'static [BarEntry],
+}
+
+impl Key {
+    /// How the keybinds menu writes the key: `j`, `down`, `ctrl+c`.
+    pub fn label(self) -> String {
+        match self {
+            Self::Char(c) => c.to_string(),
+            Self::Ctrl(c) => format!("ctrl+{c}"),
+            Self::Code(code) => code.to_string().to_lowercase(),
+        }
+    }
 }
 
 const fn bar(keys: &'static str, desc: &'static str, when: When) -> BarEntry {
     BarEntry { keys, desc, when }
 }
 
-/// The one table behind both key handling and the key bar.
+/// The one table behind key handling, the key bar, and the keybinds menu.
 pub static BINDINGS: &[Binding] = &[
+    // First: the key bar keeps this order and a narrow terminal clips its end.
+    Binding {
+        keys: &[Key::Char('?')],
+        action: Action::Keybinds,
+        group: KeyGroup::App,
+        desc: "show all keys",
+        bar: &[bar("?", "keys", When::Always)],
+    },
     Binding {
         keys: &[Key::Char('j'), Key::Code(KeyCode::Down)],
         action: Action::Down,
+        group: KeyGroup::Navigation,
+        desc: "move down",
         bar: &[bar("j/k", "move", When::Always)],
     },
-    Binding { keys: &[Key::Char('k'), Key::Code(KeyCode::Up)], action: Action::Up, bar: &[] },
-    Binding { keys: &[Key::Char('1')], action: Action::GoTab(Tab::Issues), bar: &[bar("1-3", "tabs", When::Always)] },
-    Binding { keys: &[Key::Char('2')], action: Action::GoTab(Tab::Prs), bar: &[] },
-    Binding { keys: &[Key::Char('3')], action: Action::GoTab(Tab::Sessions), bar: &[] },
-    Binding { keys: &[Key::Char('s')], action: Action::Start, bar: &[bar("s", "start session", When::OnIssues)] },
+    Binding {
+        keys: &[Key::Char('k'), Key::Code(KeyCode::Up)],
+        action: Action::Up,
+        group: KeyGroup::Navigation,
+        desc: "move up",
+        bar: &[],
+    },
+    Binding {
+        keys: &[Key::Char('1')],
+        action: Action::GoTab(Tab::Issues),
+        group: KeyGroup::Navigation,
+        desc: "go to the issues tab",
+        bar: &[bar("1-3", "tabs", When::Always)],
+    },
+    Binding {
+        keys: &[Key::Char('2')],
+        action: Action::GoTab(Tab::Prs),
+        group: KeyGroup::Navigation,
+        desc: "go to the pull requests tab",
+        bar: &[],
+    },
+    Binding {
+        keys: &[Key::Char('3')],
+        action: Action::GoTab(Tab::Sessions),
+        group: KeyGroup::Navigation,
+        desc: "go to the sessions tab",
+        bar: &[],
+    },
+    Binding {
+        keys: &[Key::Char('s')],
+        action: Action::Start,
+        group: KeyGroup::Sessions,
+        desc: "start a session for the issue",
+        bar: &[bar("s", "start session", When::OnIssues)],
+    },
     Binding {
         keys: &[Key::Code(KeyCode::Enter)],
         action: Action::Enter,
+        group: KeyGroup::Navigation,
+        desc: "start, go to the PR's issue, or attach",
         bar: &[bar("enter", "go to issue", When::OnPrs), bar("enter", "attach", When::OnSessions)],
     },
     Binding {
         keys: &[Key::Char('a')],
         action: Action::Attach,
+        group: KeyGroup::Sessions,
+        desc: "attach to the session, or resume it",
         bar: &[bar("a", "attach", When::SessionLive), bar("a", "resume", When::SessionExited)],
     },
-    Binding { keys: &[Key::Char('x')], action: Action::Stop, bar: &[bar("x", "stop", When::SessionLive)] },
-    Binding { keys: &[Key::Char('m')], action: Action::Merge, bar: &[bar("m", "merge", When::Mergeable)] },
+    Binding {
+        keys: &[Key::Char('x')],
+        action: Action::Stop,
+        group: KeyGroup::Sessions,
+        desc: "stop the session",
+        bar: &[bar("x", "stop", When::SessionLive)],
+    },
+    Binding {
+        keys: &[Key::Char('m')],
+        action: Action::Merge,
+        group: KeyGroup::PullRequests,
+        desc: "merge the PR (press twice)",
+        bar: &[bar("m", "merge", When::Mergeable)],
+    },
     Binding {
         keys: &[Key::Char('o')],
         action: Action::Open,
+        group: KeyGroup::PullRequests,
+        desc: "open on GitHub, or copy the URL",
         bar: &[
             bar("o", "open on GitHub", When::OpenWith(OpenWith::Browser)),
             bar("o", "copy URL", When::OpenWith(OpenWith::Clipboard)),
         ],
     },
-    Binding { keys: &[Key::Char('r')], action: Action::Refresh, bar: &[bar("r", "refresh", When::Always)] },
-    Binding { keys: &[Key::Char('/')], action: Action::Filter, bar: &[bar("/", "filter", When::Always)] },
-    Binding { keys: &[Key::Code(KeyCode::Esc)], action: Action::ClearFilter, bar: &[] },
+    Binding {
+        keys: &[Key::Char('r')],
+        action: Action::Refresh,
+        group: KeyGroup::App,
+        desc: "load issues and PRs from GitHub now",
+        bar: &[bar("r", "refresh", When::Always)],
+    },
+    Binding {
+        keys: &[Key::Char('/')],
+        action: Action::Filter,
+        group: KeyGroup::View,
+        desc: "filter the list",
+        bar: &[bar("/", "filter", When::Always)],
+    },
+    Binding {
+        keys: &[Key::Code(KeyCode::Esc)],
+        action: Action::ClearFilter,
+        group: KeyGroup::View,
+        desc: "clear the filter",
+        bar: &[],
+    },
     // Not in the key bar: the footer shows `S sort: <mode>`.
-    Binding { keys: &[Key::Char('S')], action: Action::Sort, bar: &[] },
-    Binding { keys: &[Key::Char('v')], action: Action::View, bar: &[] },
-    Binding { keys: &[Key::Char('q'), Key::Ctrl('c')], action: Action::Quit, bar: &[bar("q", "quit", When::Always)] },
+    Binding {
+        keys: &[Key::Char('S')],
+        action: Action::Sort,
+        group: KeyGroup::View,
+        desc: "change the sort order",
+        bar: &[],
+    },
+    Binding {
+        keys: &[Key::Char('v')],
+        action: Action::View,
+        group: KeyGroup::View,
+        desc: "show or hide the details",
+        bar: &[],
+    },
+    Binding {
+        keys: &[Key::Char('q'), Key::Ctrl('c')],
+        action: Action::Quit,
+        group: KeyGroup::App,
+        desc: "quit",
+        bar: &[bar("q", "quit", When::Always)],
+    },
     // After quit: a narrow terminal clips the end of the bar, and `q quit` must stay.
-    Binding { keys: &[Key::Char(',')], action: Action::Settings, bar: &[bar(",", "settings", When::Always)] },
+    Binding {
+        keys: &[Key::Char(',')],
+        action: Action::Settings,
+        group: KeyGroup::App,
+        desc: "open the settings menu",
+        bar: &[bar(",", "settings", When::Always)],
+    },
 ];
 
 /// The key bar for the current context: (keys, description).
@@ -600,6 +746,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Focus::Dialog(_) => dialog_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
             Focus::Settings(_) => settings_key(state, &ev),
+            Focus::Keybinds { .. } => keybinds_key(state, &ev),
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
@@ -844,6 +991,7 @@ fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
             state.sort.cycle(state.tab);
         }
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
+        Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
         Action::View => state.view = state.view.next(),
         Action::Quit => return vec![Cmd::Quit],
     }
@@ -1199,6 +1347,21 @@ fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
         }
         Some(Key::Ctrl('c')) => return vec![Cmd::Quit],
         Some(Key::Char(c)) => state.filter.push(c),
+        _ => {}
+    }
+    Vec::new()
+}
+
+// ---- the keybinds menu -------------------------------------------------------
+
+fn keybinds_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
+    let Focus::Keybinds { scroll } = &mut state.focus else { return Vec::new() };
+    match key_of(ev) {
+        Some(Key::Char('j') | Key::Code(KeyCode::Down)) => {
+            *scroll = scroll.saturating_add(1).min(state.hits.keybinds_max_scroll);
+        }
+        Some(Key::Char('k') | Key::Code(KeyCode::Up)) => *scroll = scroll.saturating_sub(1),
+        Some(Key::Code(KeyCode::Esc) | Key::Char('?')) => state.focus = Focus::List,
         _ => {}
     }
     Vec::new()
@@ -2478,6 +2641,29 @@ mod tests {
         press(&mut state, key('2'));
         press(&mut state, key('m'));
         assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
+    }
+
+    #[test]
+    fn every_binding_has_a_description() {
+        for b in BINDINGS {
+            assert!(!b.desc.trim().is_empty(), "{:?} has no description", b.action);
+        }
+    }
+
+    #[test]
+    fn question_mark_opens_and_closes_the_keybinds_menu() {
+        let (mut state, _) = app();
+        assert_eq!(key_bar(&state).first(), Some(&("?", "keys")), "a narrow terminal still shows it");
+        assert!(press(&mut state, key('?')).is_empty());
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 0 }));
+        assert!(press(&mut state, key('q')).is_empty(), "list keys do not act while the menu is open");
+        assert!(press(&mut state, key('j')).is_empty());
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 0 }), "a menu that fits does not scroll");
+        press(&mut state, key('?'));
+        assert!(matches!(state.focus, Focus::List), "? closes it again");
+        press(&mut state, key('?'));
+        press(&mut state, code(KeyCode::Esc));
+        assert!(matches!(state.focus, Focus::List), "esc closes it");
     }
 
     #[test]

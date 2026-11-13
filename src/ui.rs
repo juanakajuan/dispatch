@@ -6,7 +6,8 @@
 //! selected row under the rows. The dialog is a centered overlay.
 
 use crate::app::{
-    self, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, RowKey, SettingsMenu, StartDialog, State, Tab, View,
+    self, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, KeyGroup, RowKey, SettingsMenu,
+    StartDialog, State, Tab, View,
 };
 use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
@@ -71,11 +72,12 @@ const DETAIL_MAX_WIDTH: u16 = 100;
 
 pub use agent::draw;
 
-/// The dialog or the settings menu, over the screen of either view.
-fn draw_overlay(frame: &mut Frame, state: &State) {
+/// The dialog or a menu, over the screen of either view.
+fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
     match &state.focus {
         Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog),
         Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu),
+        Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll),
         Focus::List | Focus::Filter => {}
     }
 }
@@ -571,6 +573,51 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
     if let Some(e) = &d.error {
         frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
     }
+}
+
+// ---- keybinds --------------------------------------------------------------
+
+/// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
+fn keybinds_lines() -> Vec<Line<'static>> {
+    let keys = |b: &Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
+    let key_width = BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
+    let mut lines = Vec::new();
+    for group in KeyGroup::ALL {
+        if !lines.is_empty() {
+            lines.push(Line::raw(""));
+        }
+        lines.push(Line::from(span(group.title(), palette::HEADING)));
+        for b in BINDINGS.iter().filter(|b| b.group == group) {
+            lines.push(Line::from(vec![
+                span(format!("  {:key_width$}  ", keys(b)), palette::ACCENT),
+                span(b.desc, palette::PLAIN),
+            ]));
+        }
+    }
+    lines
+}
+
+/// Draws the menu scrolled down by `scroll` lines, and returns how far it
+/// can scroll at this size.
+fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
+    let lines = keybinds_lines();
+    let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
+    let width = screen.width.min(64);
+    // The margin keeps the footer and its `esc to close` in view.
+    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let area = Rect::new(screen.x + (screen.width - width) / 2, screen.y + (screen.height - height) / 2, width, height);
+    frame.render_widget(Clear, area);
+    frame.buffer_mut().set_style(area, palette::PLAIN);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(palette::DIM)
+        .title(span(" Keys ", palette::HEADING))
+        .padding(Padding::new(2, 2, 1, 0));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let max_scroll = wanted.saturating_sub(inner.height);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
+    max_scroll
 }
 
 // ---- settings --------------------------------------------------------------
@@ -1114,6 +1161,53 @@ mod tests {
         }
         assert!(!screen.contains("Applies to sessions"), "the error takes the note's line\n{screen}");
     }
+
+    /// Draws like the main loop does, so the reducer sees this frame's size.
+    fn draw_into(state: &mut State, w: u16, h: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+        let mut hits = HitMap::default();
+        terminal.draw(|f| hits = draw(f, state)).expect("draw");
+        state.hits = hits;
+        text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn the_keybinds_menu_shows_every_key_in_bindings() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        let screen = draw_into(&mut state, 100, 60);
+        for group in KeyGroup::ALL {
+            assert!(screen.contains(group.title()), "missing heading {:?} in\n{screen}", group.title());
+        }
+        for b in BINDINGS {
+            let keys = b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
+            let shown = screen.lines().any(|l| l.contains(&format!(" {keys} ")) && l.contains(b.desc));
+            assert!(shown, "no row shows {keys:?} with {:?} in\n{screen}", b.desc);
+        }
+        for want in ["j / down", "q / ctrl+c", "esc ", "j/k to scroll · esc to close"] {
+            assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+        }
+    }
+
+    #[test]
+    fn a_short_terminal_scrolls_the_keybinds_menu_with_j_and_k() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        let screen = draw_into(&mut state, 100, 16);
+        assert!(screen.contains("Navigation"), "the menu starts at the top\n{screen}");
+        assert!(!screen.contains("show all keys"), "the end is below the menu\n{screen}");
+        let max = state.hits.keybinds_max_scroll;
+        assert!(max > 0);
+        for _ in 0..u32::from(max) + 5 {
+            send(&mut state, KeyCode::Char('j'));
+        }
+        assert!(matches!(state.focus, Focus::Keybinds { scroll } if scroll == max), "j stops at the end");
+        let screen = draw_into(&mut state, 100, 16);
+        assert!(screen.contains("show all keys"), "j scrolls to the end\n{screen}");
+        assert!(!screen.contains("Navigation"), "the top scrolled out\n{screen}");
+        send(&mut state, KeyCode::Char('k'));
+        assert!(matches!(state.focus, Focus::Keybinds { scroll } if scroll == max - 1), "one k moves back one line");
+    }
 }
 
 // ---- layout ----------------------------------------------------------------
@@ -1179,7 +1273,7 @@ mod agent {
         frame.render_widget(rule(), rule2);
         draw_prompt(frame, prompt, state);
         draw_footer(frame, footer, state);
-        draw_overlay(frame, state);
+        draw_overlay(frame, state, &mut hits);
         hits
     }
 
@@ -1462,6 +1556,7 @@ mod agent {
             Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
             Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
             Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
+            Focus::Keybinds { .. } => vec![("j/k", "scroll"), ("esc", "close")],
             Focus::List => app::key_bar(state),
         };
         let mut spans = vec![Span::raw("")];
