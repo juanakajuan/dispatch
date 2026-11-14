@@ -4,6 +4,7 @@
 //! command parser still treats an argument that ends in `;` as a command
 //! separator, which `escape_argv` handles.
 
+use super::WindowObs;
 use crate::domain::WorktreePath;
 use crate::proc::{self, ProcError};
 use std::path::Path;
@@ -87,13 +88,6 @@ where
     proc::run("tmux", args, Path::new("."))
 }
 
-pub(super) struct WindowObs {
-    pub id: WindowId,
-    pub worktree: WorktreePath,
-    pub dead: bool,
-    pub waiting: bool,
-}
-
 /// tab-separated format; tags are set by dispatch only.
 const LIST_FORMAT: &str = "#{window_id}\t#{pane_dead}\t#{@dispatch-worktree}\t#{@dispatch-waiting}";
 
@@ -121,7 +115,7 @@ fn parse_windows(text: &str) -> Vec<WindowObs> {
                 return None;
             }
             Some(WindowObs {
-                id: WindowId::parse(id).ok()?,
+                id: super::WindowId::Tmux(WindowId::parse(id).ok()?),
                 worktree: WorktreePath::from_observed(worktree)?,
                 dead: *dead == "1",
                 waiting: *waiting == "1",

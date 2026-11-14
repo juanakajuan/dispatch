@@ -26,7 +26,40 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use tmux::WindowId;
+/// Where Claude runs for one session, in whichever multiplexer dispatch
+/// started in. The variant is the adapter, so no call can mix the two.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WindowId {
+    Tmux(tmux::WindowId),
+}
+
+#[cfg(test)]
+impl WindowId {
+    /// A tmux id such as `@3`, so tests build ids without a multiplexer.
+    pub fn parse(raw: &str) -> Result<WindowId, String> {
+        tmux::WindowId::parse(raw).map(WindowId::Tmux)
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            WindowId::Tmux(id) => id.as_str(),
+        }
+    }
+}
+
+/// What one adapter saw of one window. `join` turns these into sessions.
+struct WindowObs {
+    id: WindowId,
+    worktree: WorktreePath,
+    dead: bool,
+    waiting: bool,
+}
+
+/// The multiplexer dispatch runs in, with that multiplexer's startup facts.
+#[derive(Clone, Debug)]
+enum Mux {
+    Tmux(tmux::Place),
+}
 
 /// One issue being worked in one worktree. Derived, never stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -162,7 +195,7 @@ pub struct Workspace {
     git_common_dir: PathBuf,
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
-    place: tmux::Place,
+    mux: Mux,
 }
 
 /// The config that shapes a start or resume. It is a value the caller passes
@@ -184,7 +217,7 @@ impl Launch {
 pub enum SetupError {
     NotARepo(String),
     NoOriginHead(String),
-    TmuxMissing,
+    ProgramMissing(&'static str),
     Command(String),
 }
 
@@ -193,7 +226,7 @@ impl fmt::Display for SetupError {
         match self {
             SetupError::NotARepo(m) => write!(f, "dispatch must run inside a git repository: {m}"),
             SetupError::NoOriginHead(m) => write!(f, "cannot find the default branch of origin: {m}"),
-            SetupError::TmuxMissing => f.write_str("tmux is not installed or not on PATH"),
+            SetupError::ProgramMissing(program) => write!(f, "{program} is not installed or not on PATH"),
             SetupError::Command(m) => f.write_str(m),
         }
     }
@@ -206,13 +239,13 @@ impl Workspace {
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
         crate::proc::run("tmux", ["-V"], &repo_root).map_err(|e| match e {
-            crate::proc::ProcError::Spawn { .. } => SetupError::TmuxMissing,
+            crate::proc::ProcError::Spawn { .. } => SetupError::ProgramMissing("tmux"),
             other => SetupError::Command(other.to_string()),
         })?;
         let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
         let place =
             tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
-        Ok(Workspace { repo_root, git_common_dir, base, place })
+        Ok(Workspace { repo_root, git_common_dir, base, mux: Mux::Tmux(place) })
     }
 
     pub fn repo_root(&self) -> &std::path::Path {
@@ -231,8 +264,11 @@ impl Workspace {
         Ok(join(&worktrees, &markers, &windows))
     }
 
-    fn read_world(&self) -> Result<(Vec<git::Worktree>, git::Markers, Vec<tmux::WindowObs>), String> {
-        Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, tmux::list_windows()?))
+    fn read_world(&self) -> Result<(Vec<git::Worktree>, git::Markers, Vec<WindowObs>), String> {
+        let windows = match &self.mux {
+            Mux::Tmux(_) => tmux::list_windows()?,
+        };
+        Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, windows))
     }
 
     fn observe_for_start(&self, req: &StartRequest) -> Result<StartObservation, String> {
@@ -292,9 +328,11 @@ impl Workspace {
                     git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
                 }
                 Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
-                Step::OpenWindow { dir, name, argv } => {
-                    tmux::open_window(&self.place, &dir, &name, &argv)?;
-                }
+                Step::OpenWindow { dir, name, argv } => match &self.mux {
+                    Mux::Tmux(place) => {
+                        tmux::open_window(place, &dir, &name, &argv)?;
+                    }
+                },
             }
         }
         Ok(warnings)
@@ -312,11 +350,15 @@ impl Workspace {
         let argv = launch.claude.argv(&rules::continue_args(hooks));
         match &session.window {
             Some(w) if w.alive => Ok(()),
-            Some(w) => Ok(tmux::respawn(&w.id, &session.worktree, &argv)?),
-            None => {
-                tmux::open_window(&self.place, &session.worktree, &format!("#{}", issue.0), &argv)?;
-                Ok(())
-            }
+            Some(w) => match &w.id {
+                WindowId::Tmux(id) => Ok(tmux::respawn(id, &session.worktree, &argv)?),
+            },
+            None => match &self.mux {
+                Mux::Tmux(place) => {
+                    tmux::open_window(place, &session.worktree, &format!("#{}", issue.0), &argv)?;
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -324,7 +366,7 @@ impl Workspace {
     /// already gone counts as success.
     pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(w) => Ok(tmux::kill_window(&w.id)?),
+            Some(Window { id: WindowId::Tmux(id), .. }) => Ok(tmux::kill_window(&id)?),
             None => Ok(()),
         }
     }
@@ -334,7 +376,7 @@ impl Workspace {
     /// go nowhere.
     pub fn send(&self, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(w) if w.alive => Ok(tmux::send_line(&w.id, text)?),
+            Some(Window { id: WindowId::Tmux(id), alive: true, .. }) => Ok(tmux::send_line(&id, text)?),
             _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
         }
     }
@@ -343,22 +385,26 @@ impl Workspace {
     /// `-e`, so no escape codes reach the UI). Works on dead panes too.
     #[expect(clippy::unused_self, reason = "keeps every session operation a `Workspace` method")]
     pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {
-        Ok(tmux::capture(window, lines)?)
+        match window {
+            WindowId::Tmux(id) => Ok(tmux::capture(id, lines)?),
+        }
     }
 
     pub fn attach_plan(&self, window: &WindowId) -> AttachPlan {
-        let id = window.as_str().to_string();
-        let session = self.place.session_target();
-        let select = ["tmux", "select-window", "-t", id.as_str()].map(String::from);
-        match &self.place {
-            tmux::Place::Inside { .. } => AttachPlan::Switch(
-                select.into_iter().chain([";", "switch-client", "-t", session.as_str()].map(String::from)).collect(),
-            ),
-            tmux::Place::Detached { .. } => AttachPlan::Suspend(
-                select.into_iter().chain([";", "attach-session", "-t", session.as_str()].map(String::from)).collect(),
-            ),
+        match (&self.mux, window) {
+            (Mux::Tmux(place), WindowId::Tmux(id)) => tmux_attach_plan(place, id),
         }
     }
+}
+
+fn tmux_attach_plan(place: &tmux::Place, window: &tmux::WindowId) -> AttachPlan {
+    let session = place.session_target();
+    let select = ["tmux", "select-window", "-t", window.as_str()].map(String::from);
+    let (verb, plan): (&str, fn(Vec<String>) -> AttachPlan) = match place {
+        tmux::Place::Inside { .. } => ("switch-client", AttachPlan::Switch),
+        tmux::Place::Detached { .. } => ("attach-session", AttachPlan::Suspend),
+    };
+    plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
 }
 
 // ---- pure core -------------------------------------------------------------
@@ -370,7 +416,7 @@ impl Workspace {
 ///   invariant holds even after manual meddling.
 /// - A tagged window whose worktree is gone is ignored; it is not a session.
 /// - Two windows tagged for one worktree: a live one wins.
-fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[tmux::WindowObs]) -> Sessions {
+fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[WindowObs]) -> Sessions {
     let mut by_path: Vec<&git::Worktree> = worktrees.iter().collect();
     by_path.sort_by(|a, b| a.path.cmp(&b.path));
     let mut sessions = Sessions::new();
@@ -541,8 +587,8 @@ mod tests {
         rows.iter().map(|(b, n)| (br(b), IssueNumber(*n))).collect()
     }
 
-    fn win(id: &str, path: &str, dead: bool, waiting: bool) -> tmux::WindowObs {
-        tmux::WindowObs { id: WindowId::parse(id).expect("window id"), worktree: wp(path), dead, waiting }
+    fn win(id: &str, path: &str, dead: bool, waiting: bool) -> WindowObs {
+        WindowObs { id: WindowId::parse(id).expect("window id"), worktree: wp(path), dead, waiting }
     }
 
     // ---- join ----
@@ -614,7 +660,7 @@ mod tests {
     struct World {
         worktrees: Vec<git::Worktree>,
         markers: git::Markers,
-        windows: Vec<tmux::WindowObs>,
+        windows: Vec<WindowObs>,
         target_dir_exists: bool,
         branch_exists: bool,
     }
@@ -659,7 +705,7 @@ mod tests {
                     self.markers.insert(branch.clone(), *issue);
                 }
                 Step::OpenWindow { dir, .. } => {
-                    self.windows.push(tmux::WindowObs {
+                    self.windows.push(WindowObs {
                         id: WindowId::parse("@9").expect("id"),
                         worktree: dir.clone(),
                         dead: false,
@@ -910,7 +956,7 @@ mod tests {
             repo_root: base.join("orbit"),
             git_common_dir: base.join("orbit").join(".git"),
             base: "origin/main".to_string(),
-            place: tmux::Place::Inside { session_id: "$1".to_string() },
+            mux: Mux::Tmux(tmux::Place::Inside { session_id: "$1".to_string() }),
         }
     }
 
@@ -1057,7 +1103,7 @@ mod tests {
                 ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
             )
         );
-        ws.place = tmux::Place::Detached { session_name: "dispatch-orbit".to_string() };
+        ws.mux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
         assert_eq!(
             ws.attach_plan(&id),
             AttachPlan::Suspend(
