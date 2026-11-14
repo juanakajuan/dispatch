@@ -55,7 +55,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let config = config::load().map_err(|e| e.to_string())?;
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
-    let ws = Workspace::discover(&cwd).map_err(|e| e.to_string())?;
+    let ws = Workspace::discover(&cwd, config.multiplexer).map_err(|e| e.to_string())?;
 
     let mut terminal = ratatui::init();
     // A crashed earlier run can leave the alternate screen dirty, and the

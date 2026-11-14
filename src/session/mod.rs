@@ -7,7 +7,7 @@
 //!   branches dispatch made, for which issue
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
 //!   window runs Claude in which worktree
-//! - herdr (instead of tmux, when dispatch runs inside herdr): a workspace
+//! - herdr (instead of tmux, by the `multiplexer` setting): a workspace
 //!   whose worktree checkout is the issue's directory, and the pane in it that
 //!   hosts an agent
 //!
@@ -23,7 +23,7 @@ mod git;
 mod herdr;
 mod tmux;
 
-use crate::config::{ClaudeCommand, Config};
+use crate::config::{ClaudeCommand, Config, Multiplexer};
 use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
 use crate::rules;
 use std::collections::BTreeMap;
@@ -62,7 +62,7 @@ struct WindowObs {
 }
 
 /// The multiplexer dispatch runs in, with that multiplexer's startup facts.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Mux {
     Tmux(tmux::Place),
     Herdr(herdr::Place),
@@ -207,7 +207,7 @@ pub enum AttachPlan {
     /// Inside tmux or herdr: select the window or workspace; dispatch keeps
     /// running in its own.
     Switch(Vec<String>),
-    /// Outside tmux: the shell leaves the alternate screen, runs this argv in
+    /// Outside the multiplexer: the shell leaves the alternate screen, runs this argv in
     /// the foreground, and restores the TUI when it returns.
     Suspend(Vec<String>),
 }
@@ -266,29 +266,47 @@ fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> 
     })
 }
 
-/// Inside herdr (`HERDR_ENV=1`) dispatch uses herdr, else tmux.
-fn detect_mux(repo_root: &std::path::Path) -> Result<Mux, SetupError> {
-    let herdr_env = std::env::var("HERDR_ENV").ok();
-    let herdr_workspace = std::env::var("HERDR_WORKSPACE_ID").ok();
-    if let Some(place) =
-        herdr::Place::detect(herdr_env.as_deref(), herdr_workspace.as_deref()).map_err(SetupError::Command)?
-    {
+/// The environment variables that pick and place a multiplexer, read once.
+#[derive(Clone, Debug, Default)]
+struct MuxEnv {
+    herdr_env: Option<String>,
+    herdr_workspace: Option<String>,
+    tmux: Option<String>,
+}
+
+impl MuxEnv {
+    fn from_process() -> MuxEnv {
+        let var = |name| std::env::var(name).ok();
+        MuxEnv { herdr_env: var("HERDR_ENV"), herdr_workspace: var("HERDR_WORKSPACE_ID"), tmux: var("TMUX") }
+    }
+}
+
+/// `Auto` uses herdr inside herdr (`HERDR_ENV=1`), else tmux. `Tmux` always
+/// uses tmux. `Herdr` always uses herdr: inside herdr it uses dispatch's own
+/// workspace, outside it a detached one.
+fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) -> Result<Mux, SetupError> {
+    let inside_herdr = env.herdr_env.as_deref() == Some("1");
+    let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
+    if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
         require("herdr", "--version", repo_root)?;
+        let place = herdr::Place::detect(env.herdr_env.as_deref(), env.herdr_workspace.as_deref(), &dir_name)
+            .map_err(SetupError::Command)?;
         return Ok(Mux::Herdr(place));
     }
     require("tmux", "-V", repo_root)?;
-    let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
-    let place = tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
+    let place = tmux::Place::detect(env.tmux.as_deref(), &dir_name).map_err(SetupError::Command)?;
     Ok(Mux::Tmux(place))
 }
 
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
-    pub fn discover(cwd: &std::path::Path) -> Result<Workspace, SetupError> {
+    /// `multiplexer` is chosen once here, so a settings change applies at the
+    /// next launch.
+    pub fn discover(cwd: &std::path::Path, multiplexer: Multiplexer) -> Result<Workspace, SetupError> {
         let git::RepoDirs { root: repo_root, common: git_common_dir } =
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
-        let mux = detect_mux(&repo_root)?;
+        let mux = detect_mux(multiplexer, &MuxEnv::from_process(), &repo_root)?;
         Ok(Workspace { repo_root, git_common_dir, base, mux })
     }
 
@@ -372,7 +390,9 @@ impl Workspace {
                     }
                     match &self.mux {
                         Mux::Tmux(_) => git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?,
-                        Mux::Herdr(place) => herdr::create_worktree(place, &dir, &branch, from.as_deref(), issue)?,
+                        Mux::Herdr(place) => {
+                            herdr::create_worktree(place, &self.repo_root, &dir, &branch, from.as_deref(), issue)?;
+                        }
                     }
                 }
                 Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
@@ -385,9 +405,14 @@ impl Workspace {
     fn open_window(&self, dir: &WorktreePath, name: &str, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
         match &self.mux {
             Mux::Tmux(place) => tmux::open_window(place, dir, name, argv).map(|_| ()),
-            Mux::Herdr(place) => {
-                herdr::open_window(place, dir, issue, argv, &herdr::prompt_file(&self.git_common_dir, issue))
-            }
+            Mux::Herdr(place) => herdr::open_window(
+                place,
+                &self.repo_root,
+                dir,
+                issue,
+                argv,
+                &herdr::prompt_file(&self.git_common_dir, issue),
+            ),
         }
     }
 
@@ -444,13 +469,19 @@ impl Workspace {
     }
 
     /// Fails only when the window belongs to the other multiplexer, which
-    /// `observe` never produces.
+    /// `observe` never produces. A detached herdr runs `workspace focus` here,
+    /// before the plan comes back, so the herdr that the plan opens shows the
+    /// session.
     pub fn attach_plan(&self, window: &WindowId) -> Result<AttachPlan, SessionError> {
         match (&self.mux, window) {
             (Mux::Tmux(place), WindowId::Tmux(id)) => Ok(tmux_attach_plan(place, id)),
-            (Mux::Herdr(_), WindowId::Herdr(pane)) => Ok(AttachPlan::Switch(
+            (Mux::Herdr(herdr::Place::Inside { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Switch(
                 ["herdr", "workspace", "focus", pane.workspace.as_str()].map(String::from).to_vec(),
             )),
+            (Mux::Herdr(herdr::Place::Detached { .. }), WindowId::Herdr(pane)) => {
+                herdr::focus(&pane.workspace)?;
+                Ok(AttachPlan::Suspend(vec!["herdr".to_string()]))
+            }
             _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
         }
     }
@@ -1245,7 +1276,7 @@ mod tests {
 
     fn herdr_workspace(base: &std::path::Path) -> Workspace {
         let mut ws = workspace(base);
-        let place = herdr::Place::detect(Some("1"), Some("w1")).expect("detect").expect("inside herdr");
+        let place = herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside herdr");
         ws.mux = Mux::Herdr(place);
         ws
     }
@@ -1412,6 +1443,75 @@ mod tests {
     #[test]
     fn a_missing_multiplexer_is_named_in_the_setup_error() {
         assert_eq!(SetupError::ProgramMissing("herdr").to_string(), "herdr is not installed or not on PATH");
-        assert!(herdr::Place::detect(Some("1"), None).is_err());
+        assert!(herdr::Place::detect(Some("1"), None, "orbit").is_err());
+    }
+
+    #[test]
+    fn a_detached_herdr_focuses_the_workspace_then_opens_herdr_itself() {
+        let base = temp_dir("herdr-attach-detached");
+        let mut ws = herdr_workspace(&base);
+        ws.mux = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+        fake::install(|_| Ok(String::new()));
+        let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
+        assert_eq!(ws.attach_plan(&id).expect("plan"), AttachPlan::Suspend(vec!["herdr".to_string()]));
+        assert_eq!(fake::calls(), ["herdr workspace focus w5"]);
+        fake::install(|_| Err(fake::fail("herdr", 1, r#"{"error":{"code":"server_not_running"}}"#)));
+        assert!(ws.attach_plan(&id).is_err(), "no server, no attach");
+    }
+
+    fn env(herdr: bool, tmux: bool) -> MuxEnv {
+        MuxEnv {
+            herdr_env: herdr.then(|| "1".to_string()),
+            herdr_workspace: herdr.then(|| "w1".to_string()),
+            tmux: tmux.then(|| "/tmp/tmux-1000/default,1,0".to_string()),
+        }
+    }
+
+    /// `(choice, in herdr, in tmux)` to the backend and where it puts sessions.
+    #[test]
+    fn the_multiplexer_choice_picks_the_backend_from_the_environment() {
+        use Multiplexer::{Auto, Herdr, Tmux};
+        let inside_herdr = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+        let detached_herdr = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+        let inside_tmux = Mux::Tmux(tmux::Place::Inside { session_id: "$1".to_string() });
+        let detached_tmux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+        let table = [
+            (Auto, false, false, &detached_tmux),
+            (Auto, false, true, &inside_tmux),
+            (Auto, true, false, &inside_herdr),
+            (Auto, true, true, &inside_herdr),
+            (Tmux, false, false, &detached_tmux),
+            (Tmux, false, true, &inside_tmux),
+            (Tmux, true, false, &detached_tmux),
+            (Tmux, true, true, &inside_tmux),
+            (Herdr, false, false, &detached_herdr),
+            (Herdr, false, true, &detached_herdr),
+            (Herdr, true, false, &inside_herdr),
+            (Herdr, true, true, &inside_herdr),
+        ];
+        for (choice, in_herdr, in_tmux, want) in table {
+            fake::install(|call| {
+                Ok(if call.starts_with("tmux display-message") { "$1\n".to_string() } else { String::new() })
+            });
+            let got = detect_mux(choice, &env(in_herdr, in_tmux), std::path::Path::new("/w/orbit")).expect("detects");
+            assert_eq!(&got, want, "{choice:?} herdr={in_herdr} tmux={in_tmux}");
+        }
+    }
+
+    #[test]
+    fn the_chosen_multiplexer_must_be_installed() {
+        fake::install(|_| Err(fake::fail("x", 1, "")));
+        let spawn = || crate::proc::ProcError::Spawn {
+            program: "x".to_string(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        fake::install(move |call| if call.starts_with("herdr") { Err(spawn()) } else { Ok(String::new()) });
+        let err = detect_mux(Multiplexer::Herdr, &env(false, true), std::path::Path::new("/w/orbit"));
+        assert!(matches!(err, Err(SetupError::ProgramMissing("herdr"))));
+        assert!(detect_mux(Multiplexer::Tmux, &env(false, false), std::path::Path::new("/w/orbit")).is_ok());
+        assert!(matches!(
+            detect_mux(Multiplexer::Auto, &env(true, false), std::path::Path::new("/w/orbit")),
+            Err(SetupError::ProgramMissing("herdr"))
+        ));
     }
 }

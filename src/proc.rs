@@ -87,6 +87,26 @@ where
     String::from_utf8(output.stdout).map_err(|_| ProcError::NotUtf8 { program: program.to_string() })
 }
 
+/// Starts `program` and returns at once, with no stdio and no wait. A process
+/// group of its own keeps it alive when the terminal that started dispatch
+/// closes. For a server that must outlive dispatch.
+pub fn spawn_detached<I, S>(program: &str, args: I, cwd: &Path) -> Result<(), ProcError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<_> = args.into_iter().collect();
+    #[cfg(test)]
+    if let Some(result) = fake::intercept_spawn(program, &args) {
+        return result.map(|_| ());
+    }
+    let mut command = Command::new(program);
+    command.args(&args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    command.spawn().map(|_| ()).map_err(|source| ProcError::Spawn { program: program.to_string(), source })
+}
+
 /// The test seam. A test installs a script for its own thread, and `run`
 /// answers from it instead of spawning. Each test runs on its own thread, so
 /// scripts never leak between tests.
@@ -126,7 +146,16 @@ pub mod fake {
         args: &[S],
         _cwd: &Path,
     ) -> Option<Result<String, ProcError>> {
-        let mut call = program.to_string();
+        record(program.to_string(), args)
+    }
+
+    /// A spawn is recorded as `spawn program arg ...`, apart from a run.
+    pub(super) fn intercept_spawn<S: AsRef<OsStr>>(program: &str, args: &[S]) -> Option<Result<String, ProcError>> {
+        record(format!("spawn {program}"), args)
+    }
+
+    fn record<S: AsRef<OsStr>>(head: String, args: &[S]) -> Option<Result<String, ProcError>> {
+        let mut call = head;
         for a in args {
             call.push(' ');
             call.push_str(&a.as_ref().to_string_lossy());

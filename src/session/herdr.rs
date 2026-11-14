@@ -52,23 +52,31 @@ impl PaneRef {
     }
 }
 
-/// Startup facts for a dispatch that runs inside herdr.
+/// Where dispatch puts the source workspace that herdr makes each issue's
+/// worktree from.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Place {
-    /// The workspace dispatch itself runs in. herdr makes each issue's
-    /// worktree from this workspace's repository.
-    pub source: WorkspaceId,
+pub(super) enum Place {
+    /// `HERDR_ENV=1`: the workspace dispatch itself runs in.
+    Inside { source: WorkspaceId },
+    /// Not in herdr: a workspace labelled `dispatch-<repo dir>` on the repo
+    /// root. It is found, or created, on the first start, so dispatch launches
+    /// with no herdr server running.
+    Detached { label: String },
 }
 
 impl Place {
-    /// `Ok(None)` when dispatch does not run inside herdr. `HERDR_ENV=1` with
-    /// no workspace id is a setup error, not a fall back to tmux.
-    pub(super) fn detect(herdr_env: Option<&str>, workspace_id: Option<&str>) -> Result<Option<Place>, String> {
+    /// `HERDR_ENV=1` with no workspace id is a setup error, not a fall back to
+    /// detached.
+    pub(super) fn detect(
+        herdr_env: Option<&str>,
+        workspace_id: Option<&str>,
+        repo_dir_name: &str,
+    ) -> Result<Place, String> {
         if herdr_env != Some("1") {
-            return Ok(None);
+            return Ok(Place::Detached { label: format!("dispatch-{repo_dir_name}") });
         }
         match workspace_id.filter(|id| !id.is_empty()) {
-            Some(id) => Ok(Some(Place { source: WorkspaceId(id.to_string()) })),
+            Some(id) => Ok(Place::Inside { source: WorkspaceId(id.to_string()) }),
             None => Err("HERDR_ENV is set but HERDR_WORKSPACE_ID is not".to_string()),
         }
     }
@@ -89,6 +97,7 @@ struct WorkspaceList {
 #[derive(Deserialize)]
 struct WorkspaceRow {
     workspace_id: WorkspaceId,
+    label: Option<String>,
     worktree: Option<WorktreeRow>,
 }
 
@@ -136,6 +145,11 @@ impl AgentStatus {
 struct Opened {
     workspace: OpenedWorkspace,
     root_pane: OpenedPane,
+}
+
+#[derive(Deserialize)]
+struct Created {
+    workspace: OpenedWorkspace,
 }
 
 #[derive(Deserialize)]
@@ -231,19 +245,70 @@ fn label(issue: IssueNumber) -> String {
     format!("#{}", issue.0)
 }
 
+/// How long a start waits for a server it spawned to answer.
+const SERVER_WAIT: Duration = Duration::from_secs(5);
+const SERVER_POLL: Duration = Duration::from_millis(100);
+
+/// `herdr workspace list`, starting the server first when none runs. The
+/// server is spawned detached, so it outlives dispatch.
+fn workspaces_with_server(budget: Duration) -> Result<WorkspaceList, String> {
+    let list = || herdr_raw(["workspace", "list"]);
+    match list() {
+        Ok(text) => return parse(&text),
+        Err(e) if is_no_server(e.stderr()) => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    proc::spawn_detached("herdr", ["server"], Path::new(".")).map_err(|e| e.to_string())?;
+    let start = Instant::now();
+    loop {
+        std::thread::sleep(SERVER_POLL);
+        match list() {
+            Ok(text) => return parse(&text),
+            Err(e) if is_no_server(e.stderr()) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        if start.elapsed() >= budget {
+            return Err(format!("herdr did not start within {budget:?}"));
+        }
+    }
+}
+
+/// The workspace to make worktrees from. `Detached` finds it by label, and
+/// creates it on the repo root when it is missing.
+fn source(place: &Place, repo_root: &Path) -> Result<WorkspaceId, String> {
+    source_within(place, repo_root, SERVER_WAIT)
+}
+
+fn source_within(place: &Place, repo_root: &Path, budget: Duration) -> Result<WorkspaceId, String> {
+    let label = match place {
+        Place::Inside { source } => return Ok(source.clone()),
+        Place::Detached { label } => label,
+    };
+    let known = workspaces_with_server(budget)?.workspaces;
+    if let Some(row) = known.into_iter().find(|ws| ws.label.as_deref() == Some(label.as_str())) {
+        return Ok(row.workspace_id);
+    }
+    let root = repo_root.to_string_lossy();
+    let created: Created =
+        call(&["workspace", "create", "--cwd", root.as_ref(), "--label", label.as_str(), "--no-focus"])?;
+    Ok(created.workspace.workspace_id)
+}
+
 /// `herdr worktree create --workspace <source> --branch <b> [--base <from>]
 /// --path <dir> --label #<n> --no-focus`. herdr makes the git worktree and
 /// opens a linked workspace for it. `from` is `None` for a branch that exists,
 /// so `--base` is left out.
 pub(super) fn create_worktree(
     place: &Place,
+    repo_root: &Path,
     dir: &Path,
     branch: &BranchName,
     from: Option<&str>,
     issue: IssueNumber,
 ) -> Result<(), String> {
+    let source = source(place, repo_root)?;
     let (dir, label) = (dir.to_string_lossy(), label(issue));
-    let mut args = vec!["worktree", "create", "--workspace", place.source.as_str(), "--branch", branch.as_str()];
+    let mut args = vec!["worktree", "create", "--workspace", source.as_str(), "--branch", branch.as_str()];
     args.extend(from.into_iter().flat_map(|base| ["--base", base]));
     args.extend(["--path", dir.as_ref(), "--label", label.as_str(), "--no-focus"]);
     herdr(args).map(|_| ())
@@ -254,6 +319,7 @@ pub(super) fn create_worktree(
 /// worktree has none (a reopen after the workspace was closed).
 pub(super) fn open_window(
     place: &Place,
+    repo_root: &Path,
     dir: &WorktreePath,
     issue: IssueNumber,
     argv: &[String],
@@ -262,19 +328,19 @@ pub(super) fn open_window(
     let open = list_windows()?.into_iter().find(|o| o.worktree == *dir);
     let pane = match open {
         Some(WindowObs { id: WindowId::Herdr(pane), .. }) => pane,
-        _ => open_worktree(place, dir, issue)?,
+        _ => open_worktree(&source(place, repo_root)?, dir, issue)?,
     };
     launch(&pane, argv, prompt_file)
 }
 
 /// `herdr worktree open --workspace <source> --path <dir> --label #<n> --no-focus`.
-fn open_worktree(place: &Place, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, String> {
+fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, String> {
     let (dir, label) = (dir.as_path().to_string_lossy(), label(issue));
     let args = [
         "worktree",
         "open",
         "--workspace",
-        place.source.as_str(),
+        source.as_str(),
         "--path",
         dir.as_ref(),
         "--label",
@@ -347,6 +413,11 @@ fn command_line(argv: &[String], prompt_file: &Path) -> String {
         )
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `herdr workspace focus <ws>`.
+pub(super) fn focus(workspace: &WorkspaceId) -> Result<(), String> {
+    herdr(["workspace", "focus", workspace.as_str()]).map(|_| ())
 }
 
 // ---- stop, send, tail ------------------------------------------------------
@@ -448,12 +519,124 @@ mod tests {
     }
 
     #[test]
-    fn place_needs_herdr_env_and_a_workspace() {
-        assert_eq!(Place::detect(None, Some("w1")), Ok(None));
-        assert_eq!(Place::detect(Some("0"), Some("w1")), Ok(None));
-        assert_eq!(Place::detect(Some("1"), Some("w1")), Ok(Some(Place { source: WorkspaceId("w1".to_string()) })));
-        assert!(Place::detect(Some("1"), None).is_err());
-        assert!(Place::detect(Some("1"), Some("")).is_err());
+    fn place_is_inside_with_herdr_env_and_detached_without() {
+        let inside = Place::Inside { source: WorkspaceId("w1".to_string()) };
+        let detached = Place::Detached { label: "dispatch-orbit".to_string() };
+        assert_eq!(Place::detect(None, Some("w1"), "orbit"), Ok(detached.clone()));
+        assert_eq!(Place::detect(Some("0"), Some("w1"), "orbit"), Ok(detached));
+        assert_eq!(Place::detect(Some("1"), Some("w1"), "orbit"), Ok(inside));
+        assert!(Place::detect(Some("1"), None, "orbit").is_err());
+        assert!(Place::detect(Some("1"), Some(""), "orbit").is_err());
+    }
+
+    const ROOT: &str = "/w/orbit";
+
+    fn detached() -> Place {
+        Place::Detached { label: "dispatch-orbit".to_string() }
+    }
+
+    fn list_reply(rows: &str) -> String {
+        format!(r#"{{"result":{{"workspaces":{rows}}}}}"#)
+    }
+
+    const NO_SERVER: &str = r#"{"error":{"code":"server_not_running","message":"no herdr server"}}"#;
+
+    #[test]
+    fn an_inside_source_is_used_with_no_call() {
+        fake::install(|_| Ok(String::new()));
+        let place = Place::Inside { source: WorkspaceId("w1".to_string()) };
+        assert_eq!(source(&place, Path::new(ROOT)).expect("ok"), WorkspaceId("w1".to_string()));
+        assert!(fake::calls().is_empty());
+    }
+
+    #[test]
+    fn a_detached_source_is_found_by_its_label() {
+        fake::install(|_| {
+            Ok(list_reply(
+                r#"[{"workspace_id":"w1","label":"other"},{"workspace_id":"w2","label":"dispatch-orbit"},{"workspace_id":"w3","label":null}]"#,
+            ))
+        });
+        assert_eq!(source(&detached(), Path::new(ROOT)).expect("ok"), WorkspaceId("w2".to_string()));
+        assert_eq!(fake::calls(), ["herdr workspace list"]);
+    }
+
+    #[test]
+    fn a_missing_detached_source_is_created_on_the_repo_root_without_focus() {
+        fake::install(|call| {
+            Ok(if call.starts_with("herdr workspace create") {
+                r#"{"result":{"workspace":{"workspace_id":"w9"}}}"#.to_string()
+            } else {
+                list_reply(r#"[{"workspace_id":"w1","label":"other"}]"#)
+            })
+        });
+        assert_eq!(source(&detached(), Path::new(ROOT)).expect("ok"), WorkspaceId("w9".to_string()));
+        assert_eq!(
+            fake::calls(),
+            ["herdr workspace list", "herdr workspace create --cwd /w/orbit --label dispatch-orbit --no-focus"]
+        );
+    }
+
+    #[test]
+    fn a_start_with_no_server_spawns_one_detached_then_polls_until_it_answers() {
+        let polls = std::cell::Cell::new(0);
+        fake::install(move |call| {
+            if call.starts_with("herdr workspace create") {
+                return Ok(r#"{"result":{"workspace":{"workspace_id":"w1"}}}"#.to_string());
+            }
+            if call.starts_with("spawn") {
+                return Ok(String::new());
+            }
+            polls.set(polls.get() + 1);
+            if polls.get() < 3 { Err(fake::fail("herdr", 1, NO_SERVER)) } else { Ok(list_reply("[]")) }
+        });
+        assert_eq!(source(&detached(), Path::new(ROOT)).expect("ok"), WorkspaceId("w1".to_string()));
+        assert_eq!(
+            fake::calls(),
+            [
+                "herdr workspace list",
+                "spawn herdr server",
+                "herdr workspace list",
+                "herdr workspace list",
+                "herdr workspace create --cwd /w/orbit --label dispatch-orbit --no-focus",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_server_that_never_answers_is_an_error_that_says_herdr_did_not_start() {
+        fake::install(|call| {
+            if call.starts_with("spawn") { Ok(String::new()) } else { Err(fake::fail("herdr", 1, NO_SERVER)) }
+        });
+        let err = source_within(&detached(), Path::new(ROOT), Duration::ZERO).expect_err("times out");
+        assert!(err.contains("herdr did not start"), "{err}");
+        fake::install(|_| Err(fake::fail("herdr", 1, r#"{"error":{"code":"internal"}}"#)));
+        assert!(source_within(&detached(), Path::new(ROOT), Duration::ZERO).is_err());
+        assert_eq!(fake::calls(), ["herdr workspace list"], "another error does not start a server");
+    }
+
+    #[test]
+    fn a_detached_worktree_create_goes_through_the_resolved_source() {
+        fake::install(|call| {
+            Ok(if call.starts_with("herdr workspace list") {
+                list_reply(r#"[{"workspace_id":"w2","label":"dispatch-orbit"}]"#)
+            } else {
+                String::new()
+            })
+        });
+        let branch = BranchName::parse("fix/7-x").expect("branch");
+        create_worktree(
+            &detached(),
+            Path::new(ROOT),
+            Path::new("/w/orbit/.claude/worktrees/7"),
+            &branch,
+            None,
+            IssueNumber(7),
+        )
+        .expect("ok");
+        assert_eq!(
+            fake::calls().pop().expect("a call"),
+            "herdr worktree create --workspace w2 --branch fix/7-x --path /w/orbit/.claude/worktrees/7 --label #7 --no-focus"
+        );
     }
 
     #[test]

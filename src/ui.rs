@@ -666,10 +666,7 @@ fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &Settings
     let error = menu.edit.as_ref().and_then(|e| e.error.as_ref());
     lines.push(match error {
         Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
-        None if menu.at.new_sessions_only() => {
-            Line::from(span("Applies to sessions you start or resume after this change.", palette::DIM))
-        }
-        None => Line::raw(""),
+        None => menu.at.applies_note().map_or_else(|| Line::raw(""), |note| Line::from(span(note, palette::DIM))),
     });
     lines.push(Line::from(span(
         if menu.edit.is_some() { "enter save · esc cancel" } else { "j/k move · enter change · esc close" },
@@ -1148,8 +1145,9 @@ mod tests {
     fn the_settings_menu_shows_the_editor_and_its_error() {
         let mut state = full_state();
         send(&mut state, KeyCode::Char(','));
-        send(&mut state, KeyCode::Char('j'));
-        send(&mut state, KeyCode::Char('j'));
+        for _ in 0..3 {
+            send(&mut state, KeyCode::Char('j'));
+        }
         send(&mut state, KeyCode::Enter);
         for c in " 'oops".chars() {
             send(&mut state, KeyCode::Char(c));
