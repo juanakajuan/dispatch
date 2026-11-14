@@ -93,6 +93,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `v` | Show or hide the details of the selected row |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
+| `?` | Show all keys. `j` / `k` scroll the list. `?` or Esc closes it |
 
 In the dialog: Tab and Shift-Tab change the field, Left and Right change the mode, Esc cancels.
 
