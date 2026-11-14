@@ -885,7 +885,7 @@ mod tests {
             "s to start session",
             "a to attach",
             "x to stop",
-            "S sort: attention · v layout",
+            "S sort: attention",
         ] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
@@ -1061,7 +1061,7 @@ mod tests {
     fn the_footer_shows_the_shown_tabs_sort_mode() {
         let mut state = full_state();
         let footer = |state: &State| text(&render(state, 120, 24)).lines().last().unwrap_or_default().to_string();
-        assert!(footer(&state).trim_end().ends_with("S sort: attention · v layout"), "{}", footer(&state));
+        assert!(footer(&state).trim_end().ends_with("S sort: attention"), "{}", footer(&state));
         let _ = app::update(&mut state, Msg::Key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT)));
         assert!(footer(&state).contains("S sort: newest"));
         send(&mut state, KeyCode::Char('2'));
@@ -1567,12 +1567,8 @@ mod agent {
             spans.push(span(k.to_string(), palette::ACCENT));
             spans.push(span(format!(" to {d}"), palette::DIM));
         }
-        let sort = vec![
-            span("S", palette::ACCENT),
-            span(format!(" sort: {} · ", state.sort.label(state.tab)), palette::DIM),
-            span("v", palette::ACCENT),
-            span(" layout", palette::DIM),
-        ];
+        let sort =
+            vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.sort.label(state.tab)), palette::DIM)];
         frame.render_widget(Paragraph::new(row_line(area.width, spans, sort)), area);
     }
 }

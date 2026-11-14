@@ -576,7 +576,7 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Down,
         group: KeyGroup::Navigation,
         desc: "move down",
-        bar: &[bar("j/k", "move", When::Always)],
+        bar: &[],
     },
     Binding {
         keys: &[Key::Char('k'), Key::Code(KeyCode::Up)],
@@ -590,7 +590,7 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::GoTab(Tab::Issues),
         group: KeyGroup::Navigation,
         desc: "go to the issues tab",
-        bar: &[bar("1-3", "tabs", When::Always)],
+        bar: &[],
     },
     Binding {
         keys: &[Key::Char('2')],
@@ -656,14 +656,14 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Refresh,
         group: KeyGroup::App,
         desc: "load issues and PRs from GitHub now",
-        bar: &[bar("r", "refresh", When::Always)],
+        bar: &[],
     },
     Binding {
         keys: &[Key::Char('/')],
         action: Action::Filter,
         group: KeyGroup::View,
         desc: "filter the list",
-        bar: &[bar("/", "filter", When::Always)],
+        bar: &[],
     },
     Binding {
         keys: &[Key::Code(KeyCode::Esc)],
@@ -694,13 +694,12 @@ pub static BINDINGS: &[Binding] = &[
         desc: "quit",
         bar: &[bar("q", "quit", When::Always)],
     },
-    // After quit: a narrow terminal clips the end of the bar, and `q quit` must stay.
     Binding {
         keys: &[Key::Char(',')],
         action: Action::Settings,
         group: KeyGroup::App,
         desc: "open the settings menu",
-        bar: &[bar(",", "settings", When::Always)],
+        bar: &[],
     },
 ];
 
@@ -2228,6 +2227,7 @@ mod tests {
         assert!(names(&state).contains(&"a resume".to_string()));
         press(&mut state, key('2'));
         assert!(names(&state).contains(&"enter go to issue".to_string()));
+        assert_eq!(names(&state), ["? keys", "enter go to issue", "a resume", "m merge", "o open on GitHub", "q quit"]);
     }
 
     fn opens(cmds: &[Cmd]) -> Vec<GithubRef> {
@@ -2881,9 +2881,8 @@ mod tests {
     }
 
     #[test]
-    fn comma_opens_the_menu_and_the_key_bar_lists_it() {
+    fn comma_opens_and_closes_the_settings_menu() {
         let (mut state, _) = app();
-        assert!(key_bar(&state).contains(&(",", "settings")));
         assert!(press(&mut state, key(',')).is_empty());
         assert_eq!(menu(&state).at, SETTINGS[0]);
         assert!(menu(&state).edit.is_none());
