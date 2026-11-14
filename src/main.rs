@@ -219,7 +219,7 @@ fn spawn_read(ws: &Workspace, tx: &Sender<Msg>, job: impl FnOnce(&Workspace) -> 
 /// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
 /// inherited stdio and wait, then restore the TUI.
 fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, window: &session::WindowId) -> Result<(), String> {
-    match ws.attach_plan(window) {
+    match ws.attach_plan(window).map_err(|e| e.to_string())? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or("empty attach command")?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(|e| e.to_string())

@@ -208,11 +208,7 @@ pub(super) fn send_line(id: &WindowId, text: &str) -> Result<(), String> {
 pub(super) fn capture(id: &WindowId, lines: u16) -> Result<Vec<String>, String> {
     let start = format!("-{lines}");
     let text = tmux(["capture-pane", "-p", "-J", "-t", id.as_str(), "-S", start.as_str()])?;
-    let mut out: Vec<String> = text.lines().map(str::to_string).collect();
-    while out.last().is_some_and(|l| l.trim().is_empty()) {
-        out.pop();
-    }
-    Ok(out)
+    Ok(super::text_lines(&text))
 }
 
 #[cfg(test)]
