@@ -61,6 +61,14 @@ struct WindowObs {
     waiting: bool,
 }
 
+/// Which multiplexer runs the sessions, for the view to show the right commands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backend {
+    #[default]
+    Tmux,
+    Herdr,
+}
+
 /// The multiplexer dispatch runs in, with that multiplexer's startup facts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mux {
@@ -312,6 +320,13 @@ impl Workspace {
 
     pub fn repo_root(&self) -> &std::path::Path {
         &self.repo_root
+    }
+
+    pub fn backend(&self) -> Backend {
+        match self.mux {
+            Mux::Tmux(_) => Backend::Tmux,
+            Mux::Herdr(_) => Backend::Herdr,
+        }
     }
 
     /// `origin/main`, for the dialog preview.

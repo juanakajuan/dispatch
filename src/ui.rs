@@ -14,7 +14,7 @@ use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
 use crate::markdown;
 use crate::rules;
-use crate::session::{Session, SessionState};
+use crate::session::{Backend, Session, SessionState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -491,10 +491,14 @@ fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
         .map(|a| if a.contains([' ', '\n', '"']) { format!("{:?}", one_line(&a)) } else { a })
         .collect();
     let base = if state.context.base.is_empty() { "origin/main" } else { state.context.base.as_str() };
-    vec![
-        format!("git worktree add {}/{} -b {} {base}", rules::WORKTREES_DIR, dialog.issue.0, branch.trim()),
-        shown.join(" "),
-    ]
+    let (dir, n, branch) = (rules::WORKTREES_DIR, dialog.issue.0, branch.trim());
+    let create = match state.context.backend {
+        Backend::Tmux => format!("git worktree add {dir}/{n} -b {branch} {base}"),
+        Backend::Herdr => {
+            format!("herdr worktree create --branch {branch} --base {base} --path {dir}/{n} --label #{n}")
+        }
+    };
+    vec![create, shown.join(" ")]
 }
 
 fn styled_input(source: &tui_textarea::TextArea<'static>, focused: bool) -> tui_textarea::TextArea<'static> {
@@ -981,6 +985,18 @@ mod tests {
         ] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
+    }
+
+    #[test]
+    fn dialog_previews_the_herdr_command_on_herdr() {
+        let mut state = full_state();
+        state.context.backend = Backend::Herdr;
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        let screen = text(&render(&state, 140, 30));
+        let want = "$ herdr worktree create --branch docs/2-docs --base origin/main --path .claude/worktree";
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+        assert!(!screen.contains("git worktree add"), "{screen}");
     }
 
     #[test]
