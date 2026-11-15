@@ -195,6 +195,8 @@ pub enum HitTarget {
         top: u16,
         left: u16,
     },
+    /// Settings menu row.
+    Setting(Setting),
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -1329,7 +1331,22 @@ fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
                 click_dialog(dialog, target, (column - rect.x, row - rect.y));
             }
         }
+        HitTarget::Setting(setting) => return click_setting(state, setting),
     }
+    Vec::new()
+}
+
+/// A click on a settings row selects it. A click on the selected row is
+/// enter, so a double click changes the setting.
+fn click_setting(state: &mut State, setting: Setting) -> Vec<Cmd> {
+    let Focus::Settings(menu) = &mut state.focus else { return Vec::new() };
+    if menu.edit.is_some() {
+        return Vec::new();
+    }
+    if menu.at == setting {
+        return press_key(state, Key::Code(KeyCode::Enter));
+    }
+    menu.at = setting;
     Vec::new()
 }
 
@@ -1346,7 +1363,7 @@ fn click_dialog(dialog: &mut StartDialog, target: HitTarget, at: (u16, u16)) {
             let input = if field == DialogField::Branch { &mut dialog.branch } else { &mut dialog.prompt };
             input.move_cursor(tui_textarea::CursorMove::Jump(top.saturating_add(at.1), left.saturating_add(at.0)));
         }
-        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) => {}
+        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) | HitTarget::Setting(_) => {}
     }
 }
 
@@ -3049,6 +3066,82 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn menu_with_rows() -> (State, Instant) {
+        let (mut state, now) = app();
+        press(&mut state, key(','));
+        state.hits.targets = vec![
+            (Rect::new(0, 0, 20, 1), HitTarget::Setting(Setting::DetectWaiting)),
+            (Rect::new(0, 1, 20, 1), HitTarget::Setting(Setting::Icons)),
+            (Rect::new(0, 3, 20, 1), HitTarget::Setting(Setting::ClaudeCommand)),
+            (Rect::new(30, 0, 5, 1), HitTarget::Key(Key::Code(KeyCode::Esc))),
+        ];
+        (state, now)
+    }
+
+    #[test]
+    fn a_click_selects_a_settings_row_and_a_second_click_changes_it() {
+        let (mut state, now) = menu_with_rows();
+        assert!(press(&mut state, click(1, 1, now)).is_empty(), "the first click only selects");
+        assert_eq!(menu(&state).at, Setting::Icons);
+        let before = state.config.icons;
+        let cmds = press(&mut state, click(1, 1, now + Duration::from_millis(100)));
+        assert_ne!(state.config.icons, before, "the second click changes the value");
+        assert_eq!(saves(&cmds).len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_typed_setting_twice_opens_its_editor_and_rows_stop_reacting_there() {
+        let (mut state, now) = menu_with_rows();
+        press(&mut state, click(1, 3, now));
+        press(&mut state, click(1, 3, now + Duration::from_secs(1)));
+        assert!(menu(&state).edit.is_some());
+        let detect = state.config.detect_waiting;
+        press(&mut state, click(1, 0, now + Duration::from_secs(2)));
+        press(&mut state, click(1, 0, now + Duration::from_secs(3)));
+        assert_eq!((menu(&state).at, state.config.detect_waiting), (Setting::ClaudeCommand, detect));
+    }
+
+    #[test]
+    fn the_close_control_closes_the_settings_menu() {
+        let (mut state, now) = menu_with_rows();
+        press(&mut state, click(31, 0, now));
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn the_wheel_moves_through_the_settings_and_scrolls_the_keybinds() {
+        let (mut state, now) = app();
+        let wheel = |kind| Msg::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }, now);
+        press(&mut state, key(','));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        assert_eq!(menu(&state).at, SETTINGS[2]);
+        press(&mut state, wheel(MouseEventKind::ScrollUp));
+        assert_eq!(menu(&state).at, SETTINGS[1]);
+        press(&mut state, code(KeyCode::Esc));
+
+        press(&mut state, key('?'));
+        state.hits.keybinds_max_scroll = 5;
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 2 }));
+        press(&mut state, wheel(MouseEventKind::ScrollUp));
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 1 }));
+    }
+
+    #[test]
+    fn the_wheel_does_not_move_the_list_behind_the_dialog() {
+        let (mut state, now) = app();
+        press(&mut state, key('s'));
+        let wheel = Msg::Mouse(
+            MouseEvent { kind: MouseEventKind::ScrollDown, column: 0, row: 0, modifiers: KeyModifiers::NONE },
+            now,
+        );
+        press(&mut state, wheel);
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
+        assert!(matches!(state.focus, Focus::Dialog(_)));
     }
 
     #[test]

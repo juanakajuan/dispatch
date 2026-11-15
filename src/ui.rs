@@ -68,8 +68,8 @@ pub use agent::draw;
 fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
     match &state.focus {
         Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog, hits),
-        Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu),
-        Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll),
+        Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu, hits),
+        Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll, hits),
         Focus::List | Focus::Filter => {}
     }
 }
@@ -456,6 +456,19 @@ fn text_target(input: &tui_textarea::TextArea<'static>, field: DialogField, rect
     (rect, HitTarget::Text { field, top: scrolled(row, rect.height), left: scrolled(col, rect.width) })
 }
 
+const CLOSE: &str = " esc ✕ ";
+
+/// A close control in the top-right of an overlay's border: it presses esc.
+fn draw_close(frame: &mut Frame, area: Rect, hits: &mut HitMap) {
+    let w = u16::try_from(cells(CLOSE)).unwrap_or(u16::MAX);
+    if area.width < w + 4 {
+        return;
+    }
+    let rect = Rect::new(area.right() - w - 2, area.y, w, 1);
+    frame.render_widget(Paragraph::new(span(CLOSE, palette::DIM)), rect);
+    hits.targets.push((rect, HitTarget::Key(Key::Code(KeyCode::Esc))));
+}
+
 // ---- keybinds --------------------------------------------------------------
 
 /// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
@@ -480,7 +493,7 @@ fn keybinds_lines() -> Vec<Line<'static>> {
 
 /// Draws the menu scrolled down by `scroll` lines, and returns how far it
 /// can scroll at this size.
-fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
+fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap) -> u16 {
     let lines = keybinds_lines();
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
     let width = screen.width.min(64);
@@ -496,6 +509,7 @@ fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    draw_close(frame, area, hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
     max_scroll
@@ -503,7 +517,7 @@ fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
 
 // ---- settings --------------------------------------------------------------
 
-fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &SettingsMenu) {
+fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &SettingsMenu, hits: &mut HitMap) {
     let width = screen.width.min(76);
     let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
     let area = Rect::new(
@@ -521,11 +535,14 @@ fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &Settings
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    draw_close(frame, area, hits);
     let default = Config::default();
     let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for setting in SETTINGS {
+    for (row, setting) in (0..).zip(SETTINGS) {
         let on = setting == menu.at;
+        let line = Rect::new(inner.x, inner.y.saturating_add(row), inner.width, 1).intersection(inner);
+        hits.targets.push((line, HitTarget::Setting(setting)));
         let room = usize::from(inner.width).saturating_sub(4 + name_width);
         let mut spans = vec![
             span(if on { "› " } else { "  " }, palette::ACCENT),
@@ -561,6 +578,7 @@ fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &Settings
 mod tests {
     use super::*;
     use crate::app::{Context, Msg};
+    use crate::config::Setting;
     use crate::domain::{BranchName, WorktreePath};
     use crate::glyphs::IconSet;
     use crate::session::{Window, WindowId};
@@ -1276,6 +1294,63 @@ mod tests {
         click_at(&mut state, rect.x + 4, rect.y);
         let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
         assert_eq!(d.branch.cursor(), (0, first + 4));
+    }
+
+    #[test]
+    fn settings_rows_and_the_close_control_are_clickable() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char(','));
+        let screen = draw_into(&mut state, 100, 30);
+        for (needle, setting) in [
+            ("detect_waiting", Setting::DetectWaiting),
+            ("icons ", Setting::Icons),
+            ("multiplexer", Setting::Multiplexer),
+            ("claude_command  ", Setting::ClaudeCommand),
+        ] {
+            assert_clickable(&state, &screen, needle, HitTarget::Setting(setting));
+        }
+        assert_clickable(&state, &screen, "esc ✕", HitTarget::Key(app::Key::Code(KeyCode::Esc)));
+        let (x, y) = find(&screen, "Saved to config.json");
+        assert_eq!(state.hits.at(x, y), None, "the notes under the rows are not targets");
+    }
+
+    #[test]
+    fn clicking_drawn_settings_selects_then_changes_and_the_close_control_closes() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char(','));
+        let screen = draw_into(&mut state, 100, 30);
+        let (x, y) = find(&screen, "icons ");
+        click_at(&mut state, x, y);
+        let Focus::Settings(m) = &state.focus else { panic!("settings open") };
+        assert_eq!(m.at, Setting::Icons);
+        let before = state.config.icons;
+        click_at(&mut state, x, y);
+        assert_ne!(state.config.icons, before);
+        let (x, y) = find(&screen, "esc ✕");
+        click_at(&mut state, x, y);
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn the_keybinds_close_control_is_clickable_and_closes_the_menu() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        let screen = draw_into(&mut state, 100, 60);
+        assert_clickable(&state, &screen, "esc ✕", HitTarget::Key(app::Key::Code(KeyCode::Esc)));
+        let (x, y) = find(&screen, "esc ✕");
+        click_at(&mut state, x + 1, y);
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn a_click_outside_an_overlay_does_nothing() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char(','));
+        let screen = draw_into(&mut state, 100, 30);
+        let (x, y) = find(&screen, "#3 Ret");
+        click_at(&mut state, x, y);
+        click_at(&mut state, 20, 1);
+        assert!(matches!(state.focus, Focus::Settings(_)), "the base screen is not clickable under an overlay");
     }
 
     #[test]
