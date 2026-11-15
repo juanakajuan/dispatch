@@ -1,16 +1,9 @@
-//! herdr app adapter (herdr-core, the `hc` CLI). Private to `session`.
-//! Checked against hc 0.1.21. This is not the `herdr` server in `herdr.rs`.
+//! Checked against hc 0.1.21.
 //!
 //! `hc run` execs argv directly, so the Claude prompt is one argv element and
-//! needs no shell, no quoting, and no prompt file. hc has no worktree command,
-//! so the worktree is a plain `git worktree add`. The app shows a terminal
+//! needs no shell, no quoting, and no prompt file. The app shows a terminal
 //! labelled `herdr.space=sp<32 hex>` (an id it has never seen) with its cwd in
 //! a git worktree as a new space nested under the repo.
-//!
-//! dispatch keeps no state of its own. Every terminal it runs carries labels
-//! (`dispatch.repo`, `dispatch.issue`, `herdr.space`), and `hc ls --label`
-//! finds them again. The space id is a pure function of the worktree path, so
-//! a resume lands in the same space.
 //!
 //! hc starts its core on the first command, so there is no "core not running"
 //! case to map to an empty list.
@@ -21,7 +14,6 @@ use crate::proc::{self, ProcError};
 use serde::Deserialize;
 use std::path::Path;
 
-/// hc's terminal address, for example `t7`. Opaque: taken from hc's JSON.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 pub struct Address(String);
 
@@ -43,7 +35,6 @@ impl Pane {
     }
 }
 
-/// The app's id for an issue's space, the `herdr.space` label value.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Space(String);
 
@@ -59,22 +50,17 @@ impl std::fmt::Display for Space {
     }
 }
 
-/// One terminal and the space it lives in. `attach` needs both: the address
-/// outside the app, the space inside it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Pane {
     pub address: Address,
     pub space: Space,
 }
 
-/// Whether dispatch runs in a terminal of the app (`HC_TERMINAL_SOCKET` set).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place {
     App,
     Outside,
 }
-
-// ---- JSON boundary ---------------------------------------------------------
 
 #[derive(Deserialize)]
 struct TerminalList {
@@ -98,8 +84,6 @@ enum TerminalState {
     Other,
 }
 
-/// What the program in a terminal reports. A word that a later hc adds counts
-/// as `Unknown`, so one new word does not hide every session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum Status {
@@ -112,7 +96,6 @@ enum Status {
 }
 
 impl Status {
-    /// The program stopped and the user is next.
     fn waiting(self) -> bool {
         matches!(self, Status::Blocked | Status::Done | Status::Idle)
     }
@@ -122,8 +105,6 @@ impl Status {
 struct Started {
     address: Address,
 }
-
-// ---- commands --------------------------------------------------------------
 
 fn hc_raw<I, S>(args: I) -> Result<String, ProcError>
 where
@@ -146,7 +127,9 @@ fn is_not_found(e: &ProcError) -> bool {
     e.exit_code() == Some(3) && e.stderr().contains("\"not_found\"")
 }
 
-// ---- observe ---------------------------------------------------------------
+fn is_finished(e: &ProcError) -> bool {
+    e.exit_code() == Some(11)
+}
 
 pub(super) fn list_windows(repo_root: &Path) -> Result<Vec<WindowObs>, String> {
     let repo = format!("dispatch.repo={}", repo_root.display());
@@ -155,9 +138,7 @@ pub(super) fn list_windows(repo_root: &Path) -> Result<Vec<WindowObs>, String> {
     Ok(window_obs(&list))
 }
 
-/// One window per terminal whose launch folder still exists. Newest first
-/// (hc lists in creation order), so when `join` meets several dead windows for
-/// one worktree it shows the latest. A live one always wins in `join`.
+/// hc lists in creation order.
 fn window_obs(list: &TerminalList) -> Vec<WindowObs> {
     list.terminals
         .iter()
@@ -174,8 +155,6 @@ fn window_obs(list: &TerminalList) -> Vec<WindowObs> {
         .collect()
 }
 
-// ---- start -----------------------------------------------------------------
-
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_OFFSET_2: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -184,15 +163,12 @@ fn fnv1a(offset: u64, bytes: &[u8]) -> u64 {
     bytes.iter().fold(offset, |h, b| (h ^ u64::from(*b)).wrapping_mul(FNV_PRIME))
 }
 
-/// The app's space id, `sp` and 32 lowercase hex digits, derived from the
-/// worktree path alone. The same worktree always lands in the same space, and
-/// no id is stored anywhere.
+/// The app's space id, `sp` and 32 lowercase hex digits.
 pub(super) fn space_id(worktree: &Path) -> Space {
     let bytes = worktree.as_os_str().as_encoded_bytes();
     Space(format!("sp{:016x}{:016x}", fnv1a(FNV_OFFSET, bytes), fnv1a(FNV_OFFSET_2, bytes)))
 }
 
-/// `hc run --bg --json --no-parent --no-notify --cwd <dir> --label ... -- <argv>`.
 /// `--no-parent` keeps the terminal alive when dispatch exits.
 pub(super) fn open_window(
     repo_root: &Path,
@@ -216,8 +192,6 @@ pub(super) fn open_window(
     serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| format!("hc printed unexpected JSON: {e}"))
 }
 
-/// `hc rm <t>` for a finished terminal, before its replacement starts. A
-/// terminal that is already gone counts as removed.
 pub(super) fn remove(address: &Address) -> Result<(), String> {
     match hc_raw(["rm", address.as_str()]) {
         Ok(_) => Ok(()),
@@ -226,21 +200,17 @@ pub(super) fn remove(address: &Address) -> Result<(), String> {
     }
 }
 
-// ---- stop, send, tail ------------------------------------------------------
-
-/// `hc kill <t>` then `hc rm <t>`. The worktree stays. A terminal that is
-/// already gone counts as stopped, and a finished one only needs the `rm`.
 pub(super) fn stop(address: &Address) -> Result<(), String> {
     match hc_raw(["kill", address.as_str()]) {
         Ok(_) => {}
         Err(e) if is_not_found(&e) => return Ok(()),
-        Err(e) if e.exit_code() == Some(11) => {}
+        Err(e) if is_finished(&e) => {}
         Err(e) => return Err(e.to_string()),
     }
     remove(address)
 }
 
-/// `--force` types even when Claude waits on a dialog, like tmux `send-keys`.
+/// `--force` types even when Claude waits on a dialog.
 pub(super) fn send_line(address: &Address, text: &str) -> Result<(), String> {
     hc(["send", "--force", address.as_str(), text]).map(|_| ())
 }
@@ -251,8 +221,6 @@ pub(super) fn read_tail(address: &Address, lines: u16) -> Result<Vec<String>, St
     Ok(super::text_lines(&text))
 }
 
-/// Outside the app, `hc attach` takes over the terminal. Inside it, the
-/// app's own CLI shows the issue's space and dispatch keeps its pane.
 pub(super) fn attach_plan(place: Place, pane: &Pane) -> AttachPlan {
     match place {
         Place::App => AttachPlan::Switch(

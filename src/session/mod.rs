@@ -1524,8 +1524,6 @@ mod tests {
         }
     }
 
-    /// The hc rows: `(choice, env)` to the backend, with the app's socket set
-    /// or not.
     #[test]
     fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
         use Multiplexer::{Auto, Herdr, HerdrApp, Tmux};
@@ -1582,15 +1580,11 @@ mod tests {
         ));
     }
 
-    // ---- herdr app (hc), through the proc fake ----
-
     #[derive(Default)]
     struct HcSim {
         added: bool,
         marked: bool,
-        /// `(address, state, status)` rows that `hc ls` prints, oldest first.
         terminals: Vec<(&'static str, &'static str, Option<&'static str>)>,
-        /// An `hc rm` or `hc kill` for these addresses answers `not_found`.
         gone: bool,
     }
 
