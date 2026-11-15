@@ -30,7 +30,7 @@ use std::path::PathBuf;
 pub enum WindowId {
     Tmux(tmux::WindowId),
     Herdr(herdr::PaneRef),
-    Hc(hc::Address),
+    Hc(hc::Pane),
 }
 
 #[cfg(test)]
@@ -43,7 +43,7 @@ impl WindowId {
         match self {
             WindowId::Tmux(id) => id.as_str(),
             WindowId::Herdr(p) => p.pane.as_str(),
-            WindowId::Hc(a) => a.as_str(),
+            WindowId::Hc(p) => p.address.as_str(),
         }
     }
 }
@@ -67,8 +67,9 @@ pub enum Backend {
 enum Mux {
     Tmux(tmux::Place),
     Herdr(herdr::Place),
-    /// The herdr app. It needs no startup facts: hc finds its core itself.
-    Hc,
+    /// The herdr app. hc finds its core itself, so the only fact is whether
+    /// dispatch runs inside the app.
+    Hc(hc::Place),
 }
 
 impl Mux {
@@ -286,7 +287,7 @@ fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) ->
     let inside_app = env.hc_socket.as_deref().is_some_and(|s| !s.is_empty());
     if choice == Multiplexer::HerdrApp || (choice == Multiplexer::Auto && !inside_herdr && inside_app) {
         require("hc", "--version", repo_root)?;
-        return Ok(Mux::Hc);
+        return Ok(Mux::Hc(if inside_app { hc::Place::App } else { hc::Place::Outside }));
     }
     if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
         require("herdr", "--version", repo_root)?;
@@ -317,7 +318,7 @@ impl Workspace {
         match self.mux {
             Mux::Tmux(_) => Backend::Tmux,
             Mux::Herdr(_) => Backend::Herdr,
-            Mux::Hc => Backend::Hc,
+            Mux::Hc(_) => Backend::Hc,
         }
     }
 
@@ -337,7 +338,7 @@ impl Workspace {
         let windows = match &self.mux {
             Mux::Tmux(_) => tmux::list_windows()?,
             Mux::Herdr(_) => herdr::list_windows()?,
-            Mux::Hc => hc::list_windows(&self.repo_root)?,
+            Mux::Hc(_) => hc::list_windows(&self.repo_root)?,
         };
         Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, windows))
     }
@@ -397,7 +398,9 @@ impl Workspace {
                         warnings.push(format!("{} still shows in git status: {e}", rules::WORKTREES_DIR));
                     }
                     match &self.mux {
-                        Mux::Tmux(_) | Mux::Hc => git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?,
+                        Mux::Tmux(_) | Mux::Hc(_) => {
+                            git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
+                        }
                         Mux::Herdr(place) => {
                             herdr::create_worktree(place, &self.repo_root, &dir, &branch, from.as_deref(), issue)?;
                         }
@@ -421,7 +424,7 @@ impl Workspace {
                 argv,
                 &herdr::script_file(&self.git_common_dir, issue),
             ),
-            Mux::Hc => hc::open_window(&self.repo_root, dir, issue, argv).map(|_| ()),
+            Mux::Hc(_) => hc::open_window(&self.repo_root, dir, issue, argv).map(|_| ()),
         }
     }
 
@@ -441,8 +444,8 @@ impl Workspace {
                 WindowId::Herdr(pane) => {
                     Ok(herdr::launch(pane, &argv, &herdr::script_file(&self.git_common_dir, issue))?)
                 }
-                WindowId::Hc(address) => {
-                    hc::remove(address)?;
+                WindowId::Hc(pane) => {
+                    hc::remove(&pane.address)?;
                     Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?)
                 }
             },
@@ -456,7 +459,7 @@ impl Workspace {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
             Some(Window { id: WindowId::Tmux(id), .. }) => Ok(tmux::kill_window(&id)?),
             Some(Window { id: WindowId::Herdr(pane), .. }) => Ok(herdr::close_workspace(&pane.workspace)?),
-            Some(Window { id: WindowId::Hc(address), .. }) => Ok(hc::stop(&address)?),
+            Some(Window { id: WindowId::Hc(pane), .. }) => Ok(hc::stop(&pane.address)?),
             None => Ok(()),
         }
     }
@@ -468,7 +471,7 @@ impl Workspace {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
             Some(Window { id: WindowId::Tmux(id), alive: true, .. }) => Ok(tmux::send_line(&id, text)?),
             Some(Window { id: WindowId::Herdr(pane), alive: true, .. }) => Ok(herdr::send_line(&pane, text)?),
-            Some(Window { id: WindowId::Hc(address), alive: true, .. }) => Ok(hc::send_line(&address, text)?),
+            Some(Window { id: WindowId::Hc(pane), alive: true, .. }) => Ok(hc::send_line(&pane.address, text)?),
             _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
         }
     }
@@ -480,7 +483,7 @@ impl Workspace {
         match window {
             WindowId::Tmux(id) => Ok(tmux::capture(id, lines)?),
             WindowId::Herdr(pane) => Ok(herdr::read_tail(pane, lines)?),
-            WindowId::Hc(address) => Ok(hc::read_tail(address, lines)?),
+            WindowId::Hc(pane) => Ok(hc::read_tail(&pane.address, lines)?),
         }
     }
 
@@ -495,7 +498,7 @@ impl Workspace {
                     .map(String::from)
                     .to_vec(),
             )),
-            (Mux::Hc, WindowId::Hc(address)) => Ok(AttachPlan::Suspend(hc::attach_argv(address))),
+            (Mux::Hc(place), WindowId::Hc(pane)) => Ok(hc::attach_plan(*place, pane)),
             _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
         }
     }
@@ -1528,16 +1531,18 @@ mod tests {
         use Multiplexer::{Auto, Herdr, HerdrApp, Tmux};
         let tmux_detached = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
         let herdr_inside = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+        let (app, outside) = (Mux::Hc(hc::Place::App), Mux::Hc(hc::Place::Outside));
         let table = [
-            (Auto, in_app(env(false, false)), &Mux::Hc),
-            (Auto, in_app(env(false, true)), &Mux::Hc),
+            (Auto, in_app(env(false, false)), &app),
+            (Auto, in_app(env(false, true)), &app),
             (Auto, in_app(env(true, false)), &herdr_inside),
             (Auto, env(false, false), &tmux_detached),
             (Tmux, in_app(env(false, false)), &tmux_detached),
             (Herdr, in_app(env(true, false)), &herdr_inside),
-            (HerdrApp, env(false, false), &Mux::Hc),
-            (HerdrApp, env(true, true), &Mux::Hc),
-            (HerdrApp, in_app(env(false, false)), &Mux::Hc),
+            (HerdrApp, env(false, false), &outside),
+            (HerdrApp, env(true, true), &outside),
+            (HerdrApp, in_app(env(false, false)), &app),
+            (HerdrApp, in_app(env(true, true)), &app),
         ];
         for (choice, e, want) in table {
             fake::install(|_| Ok(String::new()));
@@ -1642,7 +1647,7 @@ mod tests {
 
     fn hc_workspace(base: &std::path::Path) -> Workspace {
         let mut ws = workspace(base);
-        ws.mux = Mux::Hc;
+        ws.mux = Mux::Hc(hc::Place::Outside);
         ws
     }
 
@@ -1785,7 +1790,12 @@ mod tests {
         let sim = HcSim { added: true, marked: true, terminals, gone: false };
         install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
         let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
-        assert_eq!(session.window.as_ref().expect("window").id, WindowId::Hc(hc::Address::new("t2")));
+        let space = hc::space_id(&base.join("orbit/.claude/worktrees/142"));
+        assert_eq!(
+            session.window.as_ref().expect("window").id,
+            WindowId::Hc(hc::Pane::new("t2", space.as_str())),
+            "the pane carries the space id derived from the worktree"
+        );
         assert_eq!(session.state(), SessionState::Running);
         assert_eq!(
             fake::calls().iter().find(|c| c.starts_with("hc ls")).map(String::as_str),
@@ -1802,7 +1812,7 @@ mod tests {
         install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
         ws.send(IssueNumber(142), "merge it").expect("send");
         assert_eq!(hc_calls(), ["hc send --force t4 merge it"]);
-        let tail = ws.tail(&WindowId::Hc(hc::Address::new("t4")), 20).expect("tail");
+        let tail = ws.tail(&WindowId::Hc(hc::Pane::new("t4", "sp4")), 20).expect("tail");
         assert_eq!(tail, ["one", "two"], "trailing blank lines are gone");
         assert_eq!(hc_calls()[1], "hc read t4 --lines 20");
     }
@@ -1818,13 +1828,18 @@ mod tests {
     }
 
     #[test]
-    fn hc_attach_suspends_into_hc_attach_inside_and_outside_the_app() {
+    fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
         let base = temp_dir("hc-attach");
-        let ws = hc_workspace(&base);
-        let id = WindowId::Hc(hc::Address::new("t4"));
+        let mut ws = hc_workspace(&base);
+        let id = WindowId::Hc(hc::Pane::new("t4", "sp4"));
         assert_eq!(
             ws.attach_plan(&id).expect("plan"),
             AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
+        );
+        ws.mux = Mux::Hc(hc::Place::App);
+        assert_eq!(
+            ws.attach_plan(&id).expect("plan"),
+            AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", "sp4"].map(String::from).to_vec())
         );
         assert!(ws.attach_plan(&WindowId::parse("@4").expect("id")).is_err(), "a tmux window is not ours");
     }

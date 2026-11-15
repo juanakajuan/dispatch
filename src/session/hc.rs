@@ -15,7 +15,7 @@
 //! hc starts its core on the first command, so there is no "core not running"
 //! case to map to an empty list.
 
-use super::{WindowId, WindowObs};
+use super::{AttachPlan, WindowId, WindowObs};
 use crate::domain::{IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
@@ -34,6 +34,44 @@ impl Address {
     pub(super) fn new(raw: &str) -> Address {
         Address(raw.to_string())
     }
+}
+
+#[cfg(test)]
+impl Pane {
+    pub(super) fn new(address: &str, space: &str) -> Pane {
+        Pane { address: Address::new(address), space: Space(space.to_string()) }
+    }
+}
+
+/// The app's id for an issue's space, the `herdr.space` label value.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Space(String);
+
+impl Space {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for Space {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// One terminal and the space it lives in. `attach` needs both: the address
+/// outside the app, the space inside it.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Pane {
+    pub address: Address,
+    pub space: Space,
+}
+
+/// Whether dispatch runs in a terminal of the app (`HC_TERMINAL_SOCKET` set).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    App,
+    Outside,
 }
 
 // ---- JSON boundary ---------------------------------------------------------
@@ -125,9 +163,10 @@ fn window_obs(list: &TerminalList) -> Vec<WindowObs> {
         .iter()
         .rev()
         .filter_map(|row| {
+            let worktree = WorktreePath::from_observed(&row.cwd)?;
             Some(WindowObs {
-                id: WindowId::Hc(row.address.clone()),
-                worktree: WorktreePath::from_observed(&row.cwd)?,
+                id: WindowId::Hc(Pane { address: row.address.clone(), space: space_id(worktree.as_path()) }),
+                worktree,
                 dead: row.state != TerminalState::Live,
                 waiting: row.status.is_some_and(Status::waiting),
             })
@@ -148,9 +187,9 @@ fn fnv1a(offset: u64, bytes: &[u8]) -> u64 {
 /// The app's space id, `sp` and 32 lowercase hex digits, derived from the
 /// worktree path alone. The same worktree always lands in the same space, and
 /// no id is stored anywhere.
-pub(super) fn space_id(worktree: &Path) -> String {
+pub(super) fn space_id(worktree: &Path) -> Space {
     let bytes = worktree.as_os_str().as_encoded_bytes();
-    format!("sp{:016x}{:016x}", fnv1a(FNV_OFFSET, bytes), fnv1a(FNV_OFFSET_2, bytes))
+    Space(format!("sp{:016x}{:016x}", fnv1a(FNV_OFFSET, bytes), fnv1a(FNV_OFFSET_2, bytes)))
 }
 
 /// `hc run --bg --json --no-parent --no-notify --cwd <dir> --label ... -- <argv>`.
@@ -212,8 +251,15 @@ pub(super) fn read_tail(address: &Address, lines: u16) -> Result<Vec<String>, St
     Ok(super::text_lines(&text))
 }
 
-pub(super) fn attach_argv(address: &Address) -> Vec<String> {
-    ["hc", "attach", address.as_str()].map(String::from).to_vec()
+/// Outside the app, `hc attach` takes over the terminal. Inside it, the
+/// app's own CLI shows the issue's space and dispatch keeps its pane.
+pub(super) fn attach_plan(place: Place, pane: &Pane) -> AttachPlan {
+    match place {
+        Place::App => AttachPlan::Switch(
+            ["herdr-app", "do", "space.select", "--id", pane.space.as_str()].map(String::from).to_vec(),
+        ),
+        Place::Outside => AttachPlan::Suspend(["hc", "attach", pane.address.as_str()].map(String::from).to_vec()),
+    }
 }
 
 #[cfg(test)]
@@ -222,9 +268,9 @@ mod tests {
 
     #[test]
     fn space_id_is_stable_well_formed_and_per_path() {
-        let a = space_id(Path::new("/w/orbit/.claude/worktrees/142"));
-        assert_eq!(a, space_id(Path::new("/w/orbit/.claude/worktrees/142")));
-        assert_ne!(a, space_id(Path::new("/w/orbit/.claude/worktrees/143")));
+        let a = space_id(Path::new("/w/orbit/.claude/worktrees/142")).to_string();
+        assert_eq!(a, space_id(Path::new("/w/orbit/.claude/worktrees/142")).to_string());
+        assert_ne!(a, space_id(Path::new("/w/orbit/.claude/worktrees/143")).to_string());
         assert_eq!(a.len(), 34);
         assert!(a.starts_with("sp"));
         assert!(a[2..].chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)), "{a}");
@@ -243,7 +289,7 @@ mod tests {
         let got: Vec<(&str, bool, bool)> = obs
             .iter()
             .map(|o| match &o.id {
-                WindowId::Hc(a) => (a.as_str(), o.dead, o.waiting),
+                WindowId::Hc(p) => (p.address.as_str(), o.dead, o.waiting),
                 _ => panic!("not an hc window"),
             })
             .collect();
