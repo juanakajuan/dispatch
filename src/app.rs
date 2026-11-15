@@ -168,9 +168,11 @@ pub struct HitMap {
 }
 
 impl HitMap {
-    fn at(&self, column: u16, row: u16) -> Option<HitTarget> {
+    /// The target under a cell, with its rect. Later targets are drawn on top
+    /// of earlier ones, so the last match wins.
+    pub fn at(&self, column: u16, row: u16) -> Option<(ratatui::layout::Rect, HitTarget)> {
         let pos = ratatui::layout::Position { x: column, y: row };
-        self.targets.iter().find(|(rect, _)| rect.contains(pos)).map(|(_, t)| *t)
+        self.targets.iter().rev().find(|(rect, _)| rect.contains(pos)).copied()
     }
 }
 
@@ -178,6 +180,25 @@ impl HitMap {
 pub enum HitTarget {
     Tab(Tab),
     Row(RowKey),
+    /// Press `Key` in the current focus: key bar entries, the `S sort` footer,
+    /// footer pairs of overlays, overlay close controls, filter open and clear.
+    Key(Key),
+    /// Start dialog: focus this field (label rows, mode row).
+    Field(DialogField),
+    /// Start dialog: select this mode (each radio option) and focus Mode.
+    Mode(Mode),
+    /// Start dialog text input. `top`/`left` are the textarea scroll offset at
+    /// draw time, so a click at (x, y) in the rect puts the cursor at
+    /// `(top + y - rect.y, left + x - rect.x)`.
+    Text {
+        field: DialogField,
+        top: u16,
+        left: u16,
+    },
+    /// Settings menu row.
+    Setting(Setting),
+    /// Keybinds menu entry: close the menu and run the binding's action.
+    Binding(Action),
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -509,6 +530,15 @@ pub struct Binding {
 }
 
 impl Key {
+    /// The key press that `key_of` reads back as this key.
+    pub fn event(self) -> KeyEvent {
+        match self {
+            Self::Char(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            Self::Ctrl(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+            Self::Code(code) => KeyEvent::new(code, KeyModifiers::NONE),
+        }
+    }
+
     /// How the keybinds menu writes the key: `j`, `down`, `ctrl+c`.
     pub fn label(self) -> String {
         match self {
@@ -658,8 +688,16 @@ pub static BINDINGS: &[Binding] = &[
     },
 ];
 
-/// The key bar for the current context: (keys, description).
-pub fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
+/// One key bar entry: what it shows, and the key a click on it presses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BarItem {
+    pub keys: &'static str,
+    pub desc: &'static str,
+    pub key: Key,
+}
+
+/// The key bar for the current context.
+pub fn key_bar(state: &State) -> Vec<BarItem> {
     let session = current_session(state).map(Session::state);
     let shown = |when: When| match when {
         When::Always => true,
@@ -671,7 +709,13 @@ pub fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,
     };
-    BINDINGS.iter().flat_map(|b| b.bar).filter(|e| shown(e.when)).map(|e| (e.keys, e.desc)).collect()
+    BINDINGS
+        .iter()
+        .filter_map(|b| Some((b, *b.keys.first()?)))
+        .flat_map(|(b, key)| b.bar.iter().map(move |e| (e, key)))
+        .filter(|(e, _)| shown(e.when))
+        .map(|(e, key)| BarItem { keys: e.keys, desc: e.desc, key })
+        .collect()
 }
 
 fn key_of(ev: &KeyEvent) -> Option<Key> {
@@ -1239,29 +1283,96 @@ fn select(state: &mut State, key: RowKey) {
 }
 
 fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
-    if !matches!(state.focus, Focus::List) {
-        return Vec::new();
-    }
     match ev.kind {
-        MouseEventKind::ScrollDown => move_selection(state, Move::Down),
-        MouseEventKind::ScrollUp => move_selection(state, Move::Up),
-        MouseEventKind::Down(MouseButton::Left) => {
-            let Some(target) = state.hits.at(ev.column, ev.row) else { return Vec::new() };
-            let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
-            state.last_click = if double { None } else { Some((target, now)) };
-            match target {
-                HitTarget::Tab(tab) => state.tab = tab,
-                HitTarget::Row(key) => {
-                    select(state, key);
-                    if let (true, RowKey::Issue(n)) = (double, key) {
-                        start_issue(state, n);
-                    }
-                }
-            }
-        }
-        _ => {}
+        MouseEventKind::ScrollDown => wheel(state, Move::Down),
+        MouseEventKind::ScrollUp => wheel(state, Move::Up),
+        MouseEventKind::Down(MouseButton::Left) => click(state, ev.column, ev.row, now),
+        _ => Vec::new(),
+    }
+}
+
+/// The wheel moves the selection, or scrolls the menu that is open.
+fn wheel(state: &mut State, step: Move) -> Vec<Cmd> {
+    match &state.focus {
+        Focus::List | Focus::Filter => move_selection(state, step),
+        Focus::Keybinds { .. } => return press_key(state, wheel_key(step)),
+        Focus::Settings(menu) if menu.edit.is_none() => return press_key(state, wheel_key(step)),
+        Focus::Settings(_) | Focus::Dialog(_) => {}
     }
     Vec::new()
+}
+
+fn wheel_key(step: Move) -> Key {
+    Key::Code(match step {
+        Move::Down => KeyCode::Down,
+        Move::Up => KeyCode::Up,
+    })
+}
+
+fn press_key(state: &mut State, key: Key) -> Vec<Cmd> {
+    update(state, Msg::Key(key.event()))
+}
+
+fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
+    let Some((rect, target)) = state.hits.at(column, row) else { return Vec::new() };
+    let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
+    state.last_click = if double { None } else { Some((target, now)) };
+    let in_list = matches!(state.focus, Focus::List);
+    match target {
+        HitTarget::Key(key) => return press_key(state, key),
+        HitTarget::Tab(tab) if in_list => state.tab = tab,
+        HitTarget::Row(key) if in_list => {
+            select(state, key);
+            if double {
+                return act(state, Action::Enter, None);
+            }
+        }
+        HitTarget::Tab(_) | HitTarget::Row(_) => {}
+        HitTarget::Field(_) | HitTarget::Mode(_) | HitTarget::Text { .. } => {
+            if let Focus::Dialog(dialog) = &mut state.focus {
+                click_dialog(dialog, target, (column - rect.x, row - rect.y));
+            }
+        }
+        HitTarget::Setting(setting) => return click_setting(state, setting),
+        HitTarget::Binding(action) => {
+            if matches!(state.focus, Focus::Keybinds { .. }) {
+                state.focus = Focus::List;
+                return act(state, action, None);
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// A click on a settings row selects it. A click on the selected row is
+/// enter, so a double click changes the setting.
+fn click_setting(state: &mut State, setting: Setting) -> Vec<Cmd> {
+    let Focus::Settings(menu) = &mut state.focus else { return Vec::new() };
+    if menu.edit.is_some() {
+        return Vec::new();
+    }
+    if menu.at == setting {
+        return press_key(state, Key::Code(KeyCode::Enter));
+    }
+    menu.at = setting;
+    Vec::new()
+}
+
+/// A click inside the start dialog. `at` is the click's offset in the target's rect.
+fn click_dialog(dialog: &mut StartDialog, target: HitTarget, at: (u16, u16)) {
+    match target {
+        HitTarget::Field(field) => dialog.field = field,
+        HitTarget::Mode(mode) => {
+            dialog.mode = mode;
+            dialog.field = DialogField::Mode;
+        }
+        HitTarget::Text { field, top, left } => {
+            dialog.field = field;
+            let input = if field == DialogField::Branch { &mut dialog.branch } else { &mut dialog.prompt };
+            input.move_cursor(tui_textarea::CursorMove::Jump(top.saturating_add(at.1), left.saturating_add(at.0)));
+        }
+        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) | HitTarget::Setting(_) | HitTarget::Binding(_) => {}
+    }
 }
 
 fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
@@ -1787,6 +1898,200 @@ mod tests {
         assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
     }
 
+    fn shows(state: &State, keys: &str, desc: &str) -> bool {
+        key_bar(state).iter().any(|b| b.keys == keys && b.desc == desc)
+    }
+
+    /// A state whose hit map holds one target at (0,0).
+    fn with_target(target: HitTarget) -> (State, Instant) {
+        let (mut state, now) = app();
+        state.hits.targets = vec![(Rect::new(0, 0, 10, 1), target)];
+        (state, now)
+    }
+
+    #[test]
+    fn every_bound_key_round_trips_through_its_key_event() {
+        for key in BINDINGS.iter().flat_map(|b| b.keys) {
+            assert_eq!(key_of(&key.event()), Some(*key), "{}", key.label());
+        }
+    }
+
+    #[test]
+    fn every_key_bar_entry_carries_the_first_key_of_its_binding() {
+        let (mut state, _) = app();
+        let bar_keys = |state: &State| key_bar(state).iter().map(|b| (b.keys, b.key)).collect::<Vec<_>>();
+        assert_eq!(
+            bar_keys(&state),
+            [
+                ("?", Key::Char('?')),
+                ("s", Key::Char('s')),
+                ("m", Key::Char('m')),
+                ("o", Key::Char('o')),
+                ("q", Key::Char('q'))
+            ]
+        );
+        press(&mut state, key('2'));
+        press(&mut state, key('j'));
+        assert!(bar_keys(&state).contains(&("enter", Key::Code(KeyCode::Enter))));
+    }
+
+    #[test]
+    fn clicking_a_key_does_what_pressing_it_does() {
+        let (mut state, now) = with_target(HitTarget::Key(Key::Char('?')));
+        press(&mut state, click(3, 0, now));
+        assert!(matches!(state.focus, Focus::Keybinds { .. }), "the ? key bar entry opens the keys menu");
+
+        let (mut state, now) = with_target(HitTarget::Key(Key::Char('q')));
+        assert!(matches!(press(&mut state, click(0, 0, now)).as_slice(), [Cmd::Quit]));
+
+        let (mut state, now) = with_target(HitTarget::Key(Key::Char('S')));
+        press(&mut state, click(0, 0, now));
+        assert_eq!(state.sort.issues, IssueSort::default().next(), "the sort footer cycles the sort");
+    }
+
+    #[test]
+    fn clicking_a_keybinds_entry_closes_the_menu_and_runs_its_action() {
+        let (mut state, now) = app();
+        press(&mut state, key('?'));
+        state.hits.targets = vec![(Rect::new(0, 0, 10, 1), HitTarget::Binding(Action::Settings))];
+        press(&mut state, click(1, 0, now));
+        assert!(matches!(state.focus, Focus::Settings(_)), "the , entry opens settings");
+
+        let (mut state, now) = app();
+        press(&mut state, key('?'));
+        state.hits.targets = vec![(Rect::new(0, 0, 10, 1), HitTarget::Binding(Action::Refresh))];
+        let cmds = press(&mut state, click(1, 0, now));
+        assert!(matches!(state.focus, Focus::List));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "the r entry refreshes");
+    }
+
+    #[test]
+    fn clicking_the_filter_prompt_opens_the_filter_and_clicking_clear_removes_it() {
+        let (mut state, now) = with_target(HitTarget::Key(Key::Char('/')));
+        press(&mut state, click(0, 0, now));
+        assert!(matches!(state.focus, Focus::Filter));
+
+        let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
+        state.filter = "json".to_string();
+        press(&mut state, click(0, 0, now));
+        assert!(state.filter.is_empty());
+
+        let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
+        state.filter = "json".to_string();
+        state.focus = Focus::Filter;
+        press(&mut state, click(0, 0, now));
+        assert!(state.filter.is_empty() && matches!(state.focus, Focus::List), "in the filter, clear also closes it");
+    }
+
+    #[test]
+    fn tabs_and_rows_ignore_clicks_while_something_else_has_focus() {
+        let (mut state, now) = hit_state();
+        state.focus = Focus::Filter;
+        press(&mut state, click(12, 0, now));
+        press(&mut state, click(5, 3, now));
+        assert_eq!(state.tab, Tab::Issues);
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
+    }
+
+    #[test]
+    fn double_click_on_a_pr_row_goes_to_its_issue() {
+        let (mut state, now) = with_target(HitTarget::Row(RowKey::Pr(PrNumber(10))));
+        state.tab = Tab::Prs;
+        press(&mut state, click(0, 0, now));
+        press(&mut state, click(0, 0, now + Duration::from_millis(100)));
+        assert_eq!((state.tab, state.selected.issue), (Tab::Issues, Some(IssueNumber(3))));
+    }
+
+    #[test]
+    fn double_click_on_a_session_row_attaches_to_it() {
+        let (mut state, now) = with_target(HitTarget::Row(RowKey::Session(IssueNumber(3))));
+        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+        state.tab = Tab::Sessions;
+        assert!(press(&mut state, click(0, 0, now)).is_empty(), "one click only selects");
+        let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
+        assert!(matches!(cmds.as_slice(), [Cmd::Attach(id)] if id.as_str() == "@3"));
+    }
+
+    /// The start dialog for issue #3, with `targets` as the drawn hit map.
+    fn dialog_with(targets: Vec<(Rect, HitTarget)>) -> (State, Instant) {
+        let (mut state, now) = app();
+        press(&mut state, key('s'));
+        state.hits.targets = targets;
+        (state, now)
+    }
+
+    #[test]
+    fn clicking_a_label_focuses_its_field_and_a_radio_option_picks_its_mode() {
+        let (mut state, now) = dialog_with(vec![
+            (Rect::new(0, 0, 20, 1), HitTarget::Field(DialogField::Prompt)),
+            (Rect::new(0, 1, 20, 2), HitTarget::Field(DialogField::Mode)),
+            (Rect::new(0, 2, 10, 1), HitTarget::Mode(Mode::PlanFirst)),
+            (Rect::new(12, 2, 10, 1), HitTarget::Mode(Mode::Implement)),
+        ]);
+        press(&mut state, click(1, 0, now));
+        assert_eq!(dialog(&state).field, DialogField::Prompt);
+        press(&mut state, click(1, 1, now));
+        assert_eq!(dialog(&state).field, DialogField::Mode);
+        press(&mut state, code(KeyCode::Tab));
+        press(&mut state, click(13, 2, now));
+        assert_eq!((dialog(&state).mode, dialog(&state).field), (Mode::Implement, DialogField::Mode));
+        press(&mut state, click(2, 2, now));
+        assert_eq!(dialog(&state).mode, Mode::PlanFirst);
+    }
+
+    #[test]
+    fn clicking_a_text_input_focuses_it_and_puts_the_cursor_under_the_click() {
+        let target = HitTarget::Text { field: DialogField::Prompt, top: 2, left: 5 };
+        let (mut state, now) = dialog_with(vec![(Rect::new(10, 4, 30, 3), target)]);
+        let Focus::Dialog(d) = &mut state.focus else { panic!("dialog open") };
+        d.prompt = tui_textarea::TextArea::new((0..8).map(|i| format!("0123456789 line {i}")).collect());
+        press(&mut state, click(13, 5, now));
+        assert_eq!(dialog(&state).field, DialogField::Prompt);
+        assert_eq!(dialog(&state).prompt.cursor(), (3, 8), "row 2 + (5 - 4), col 5 + (13 - 10)");
+
+        press(&mut state, click(39, 6, now + Duration::from_secs(1)));
+        assert_eq!(dialog(&state).prompt.cursor(), (4, 17), "a click past the end of a line stops at its end");
+    }
+
+    #[test]
+    fn the_start_button_starts_and_the_cancel_button_closes() {
+        let buttons = vec![
+            (Rect::new(0, 0, 9, 1), HitTarget::Key(Key::Ctrl('s'))),
+            (Rect::new(11, 0, 10, 1), HitTarget::Key(Key::Code(KeyCode::Esc))),
+        ];
+        let (mut state, now) = dialog_with(buttons.clone());
+        let cmds = press(&mut state, click(2, 0, now));
+        assert_eq!(starts(&cmds).len(), 1);
+        assert!(matches!(state.focus, Focus::List));
+
+        let (mut state, now) = dialog_with(buttons);
+        let cmds = press(&mut state, click(12, 0, now));
+        assert!(cmds.is_empty() && matches!(state.focus, Focus::List), "cancel closes without a start");
+    }
+
+    #[test]
+    fn a_click_outside_the_dialog_keeps_it_open_with_its_text() {
+        let (mut state, now) = dialog_with(vec![(Rect::new(0, 0, 10, 1), HitTarget::Field(DialogField::Prompt))]);
+        press(&mut state, key('x'));
+        let typed = dialog(&state).branch.lines().join("");
+        press(&mut state, click(50, 20, now));
+        assert_eq!(dialog(&state).branch.lines().join(""), typed);
+        assert_eq!(dialog(&state).field, DialogField::Branch);
+    }
+
+    #[test]
+    fn list_targets_do_nothing_while_the_dialog_is_open() {
+        let (mut state, now) = dialog_with(vec![
+            (Rect::new(0, 0, 10, 1), HitTarget::Tab(Tab::Prs)),
+            (Rect::new(0, 1, 10, 1), HitTarget::Row(RowKey::Issue(IssueNumber(2)))),
+        ]);
+        press(&mut state, click(1, 0, now));
+        press(&mut state, click(1, 1, now));
+        press(&mut state, click(1, 1, now + Duration::from_millis(50)));
+        assert_eq!(state.tab, Tab::Issues);
+        assert_eq!(dialog(&state).issue, IssueNumber(3), "the same dialog is still open");
+    }
+
     fn hit_state() -> (State, Instant) {
         let (mut state, now) = app();
         state.hits.targets = vec![
@@ -2119,7 +2424,7 @@ mod tests {
     #[test]
     fn key_bar_follows_the_context() {
         let (mut state, _) = app();
-        let names = |s: &State| key_bar(s).iter().map(|(k, d)| format!("{k} {d}")).collect::<Vec<_>>();
+        let names = |s: &State| key_bar(s).iter().map(|b| format!("{} {}", b.keys, b.desc)).collect::<Vec<_>>();
         assert!(names(&state).contains(&"s start session".to_string()));
         assert!(names(&state).contains(&"o open on GitHub".to_string()));
         assert!(!names(&state).iter().any(|k| k.starts_with("x ")));
@@ -2194,8 +2499,8 @@ mod tests {
         let cmds = press(&mut state, key('o'));
         assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPageUrl(GithubRef::Issue(IssueNumber(2))))]));
         assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copying the issue #2 URL"));
-        let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
-        assert_eq!(bar, [("o", "copy URL")]);
+        let bar: Vec<_> = key_bar(&state).into_iter().filter(|b| b.keys == "o").collect();
+        assert_eq!(bar.iter().map(|b| (b.keys, b.desc)).collect::<Vec<_>>(), [("o", "copy URL")]);
 
         let target = GithubRef::Issue(IssueNumber(2));
         let url = "https://github.com/o/r/issues/2".to_string();
@@ -2283,7 +2588,7 @@ mod tests {
         let (mut state, _) = app();
         state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
         press(&mut state, key('3'));
-        assert!(key_bar(&state).contains(&("m", "merge")));
+        assert!(shows(&state, "m", "merge"));
         assert!(press(&mut state, key('m')).is_empty(), "the first press only arms");
         assert_eq!(toast(&state), "Press m again to merge PR #10");
         let cmds = press(&mut state, key('m'));
@@ -2296,7 +2601,7 @@ mod tests {
     #[test]
     fn m_merges_without_a_session_from_the_pr_or_the_issue() {
         let (mut state, _) = app();
-        assert!(key_bar(&state).contains(&("m", "merge")), "issue #3 has PR #10");
+        assert!(shows(&state, "m", "merge"), "issue #3 has PR #10");
         press(&mut state, key('m'));
         assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
 
@@ -2498,7 +2803,7 @@ mod tests {
     fn m_on_a_draft_says_it_marks_it_ready_then_the_second_m_merges_with_consent() {
         let (mut state, _) = app();
         state.prs.items[0].state = PrState::Draft;
-        assert!(key_bar(&state).contains(&("m", "merge")));
+        assert!(shows(&state, "m", "merge"));
         assert!(press(&mut state, key('m')).is_empty());
         assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
         let cmds = press(&mut state, key('m'));
@@ -2556,7 +2861,11 @@ mod tests {
     #[test]
     fn question_mark_opens_and_closes_the_keybinds_menu() {
         let (mut state, _) = app();
-        assert_eq!(key_bar(&state).first(), Some(&("?", "keys")), "a narrow terminal still shows it");
+        assert_eq!(
+            key_bar(&state).first().map(|b| (b.keys, b.desc)),
+            Some(("?", "keys")),
+            "a narrow terminal still shows it"
+        );
         assert!(press(&mut state, key('?')).is_empty());
         assert!(matches!(state.focus, Focus::Keybinds { scroll: 0 }));
         assert!(press(&mut state, key('q')).is_empty(), "list keys do not act while the menu is open");
@@ -2590,7 +2899,7 @@ mod tests {
         state.prs.items[0].state = PrState::Draft;
         press(&mut state, key('m'));
         assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
-        assert!(key_bar(&state).contains(&("m", "merge")));
+        assert!(shows(&state, "m", "merge"));
 
         state.prs.items.remove(0);
         for _ in 0..2 {
@@ -2781,6 +3090,82 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn menu_with_rows() -> (State, Instant) {
+        let (mut state, now) = app();
+        press(&mut state, key(','));
+        state.hits.targets = vec![
+            (Rect::new(0, 0, 20, 1), HitTarget::Setting(Setting::DetectWaiting)),
+            (Rect::new(0, 1, 20, 1), HitTarget::Setting(Setting::Icons)),
+            (Rect::new(0, 3, 20, 1), HitTarget::Setting(Setting::ClaudeCommand)),
+            (Rect::new(30, 0, 5, 1), HitTarget::Key(Key::Code(KeyCode::Esc))),
+        ];
+        (state, now)
+    }
+
+    #[test]
+    fn a_click_selects_a_settings_row_and_a_second_click_changes_it() {
+        let (mut state, now) = menu_with_rows();
+        assert!(press(&mut state, click(1, 1, now)).is_empty(), "the first click only selects");
+        assert_eq!(menu(&state).at, Setting::Icons);
+        let before = state.config.icons;
+        let cmds = press(&mut state, click(1, 1, now + Duration::from_millis(100)));
+        assert_ne!(state.config.icons, before, "the second click changes the value");
+        assert_eq!(saves(&cmds).len(), 1);
+    }
+
+    #[test]
+    fn clicking_a_typed_setting_twice_opens_its_editor_and_rows_stop_reacting_there() {
+        let (mut state, now) = menu_with_rows();
+        press(&mut state, click(1, 3, now));
+        press(&mut state, click(1, 3, now + Duration::from_secs(1)));
+        assert!(menu(&state).edit.is_some());
+        let detect = state.config.detect_waiting;
+        press(&mut state, click(1, 0, now + Duration::from_secs(2)));
+        press(&mut state, click(1, 0, now + Duration::from_secs(3)));
+        assert_eq!((menu(&state).at, state.config.detect_waiting), (Setting::ClaudeCommand, detect));
+    }
+
+    #[test]
+    fn the_close_control_closes_the_settings_menu() {
+        let (mut state, now) = menu_with_rows();
+        press(&mut state, click(31, 0, now));
+        assert!(matches!(state.focus, Focus::List));
+    }
+
+    #[test]
+    fn the_wheel_moves_through_the_settings_and_scrolls_the_keybinds() {
+        let (mut state, now) = app();
+        let wheel = |kind| Msg::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }, now);
+        press(&mut state, key(','));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        assert_eq!(menu(&state).at, SETTINGS[2]);
+        press(&mut state, wheel(MouseEventKind::ScrollUp));
+        assert_eq!(menu(&state).at, SETTINGS[1]);
+        press(&mut state, code(KeyCode::Esc));
+
+        press(&mut state, key('?'));
+        state.hits.keybinds_max_scroll = 5;
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        press(&mut state, wheel(MouseEventKind::ScrollDown));
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 2 }));
+        press(&mut state, wheel(MouseEventKind::ScrollUp));
+        assert!(matches!(state.focus, Focus::Keybinds { scroll: 1 }));
+    }
+
+    #[test]
+    fn the_wheel_does_not_move_the_list_behind_the_dialog() {
+        let (mut state, now) = app();
+        press(&mut state, key('s'));
+        let wheel = Msg::Mouse(
+            MouseEvent { kind: MouseEventKind::ScrollDown, column: 0, row: 0, modifiers: KeyModifiers::NONE },
+            now,
+        );
+        press(&mut state, wheel);
+        assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
+        assert!(matches!(state.focus, Focus::Dialog(_)));
     }
 
     #[test]
