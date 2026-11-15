@@ -21,23 +21,6 @@ pub enum Tab {
     Sessions,
 }
 
-/// Which layout draws the screen: the list alone, or the list over the
-/// details of the selected row. `v` toggles it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum View {
-    Agent,
-    AgentPreview,
-}
-
-impl View {
-    fn next(self) -> View {
-        match self {
-            View::Agent => View::AgentPreview,
-            View::AgentPreview => View::Agent,
-        }
-    }
-}
-
 /// The section a row sits in. Lower `rank` first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Group {
@@ -151,12 +134,10 @@ const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, Dialog
 /// One flag per job kind. The tick only schedules a job whose flag is clear,
 /// so a slow `gh` never stacks up a second call.
 #[derive(Default)]
-#[expect(clippy::struct_excessive_bools, reason = "one independent flag per job kind")]
 pub struct Inflight {
     pub issues: bool,
     pub prs: bool,
     pub sessions: bool,
-    pub tail: bool,
 }
 
 pub struct Due {
@@ -168,13 +149,6 @@ pub struct Due {
     /// When the last tick sent a GitHub fetch.
     pub github_sent: Instant,
     pub sessions: Instant,
-    /// `None` means "as soon as possible": set when the selection changes.
-    pub tail: Option<Instant>,
-}
-
-pub struct Tail {
-    pub window: WindowId,
-    pub lines: Vec<String>,
 }
 
 /// A message for the key bar. `update` has no clock for key presses, so the
@@ -244,7 +218,6 @@ pub struct State {
     pub sort: Sorts,
     pub filter: String,
     pub focus: Focus,
-    pub tail: Option<Tail>,
     pub toast: Option<Toast>,
     pub inflight: Inflight,
     pub due: Due,
@@ -253,7 +226,6 @@ pub struct State {
     /// Set by an `m` that waits for one more `m` on the same PR. Any other
     /// key clears it.
     pub armed: Option<Armed>,
-    pub view: View,
     pub summaries: std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>,
 }
 
@@ -335,10 +307,6 @@ pub enum Msg {
         at: Instant,
     },
     Sessions(Result<Sessions, String>),
-    Tail {
-        window: WindowId,
-        result: Result<Vec<String>, String>,
-    },
     Started {
         issue: IssueNumber,
         result: Result<StartOutcome, String>,
@@ -399,7 +367,6 @@ pub enum Job {
     FetchIssues,
     FetchPrs,
     ObserveSessions,
-    Tail(WindowId),
     Start(StartRequest, Launch),
     Stop(IssueNumber),
     Resume(IssueNumber, Launch),
@@ -424,8 +391,6 @@ pub enum Job {
 }
 
 pub const SESSIONS_EVERY: Duration = Duration::from_secs(2);
-pub const TAIL_EVERY: Duration = Duration::from_secs(1);
-pub const TAIL_LINES: u16 = 60;
 pub const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const TOAST_FOR: Duration = Duration::from_secs(5);
 const GITHUB_COOLDOWN: Duration = Duration::from_secs(5);
@@ -442,20 +407,17 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         sort: Sorts::default(),
         filter: String::new(),
         focus: Focus::List,
-        tail: None,
         toast: None,
-        inflight: Inflight { issues: true, prs: true, sessions: true, tail: false },
+        inflight: Inflight { issues: true, prs: true, sessions: true },
         due: Due {
             github: now + config.github_refresh,
             github_soon: false,
             github_sent: now,
             sessions: now + SESSIONS_EVERY,
-            tail: None,
         },
         hits: HitMap::default(),
         last_click: None,
         armed: None,
-        view: View::Agent,
         summaries: std::collections::BTreeMap::new(),
         config,
     };
@@ -488,7 +450,6 @@ pub enum Action {
     Sort,
     Settings,
     Keybinds,
-    View,
     Quit,
 }
 
@@ -682,13 +643,6 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[],
     },
     Binding {
-        keys: &[Key::Char('v')],
-        action: Action::View,
-        group: KeyGroup::View,
-        desc: "show or hide the details",
-        bar: &[],
-    },
-    Binding {
         keys: &[Key::Char('q'), Key::Ctrl('c')],
         action: Action::Quit,
         group: KeyGroup::App,
@@ -781,14 +735,6 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
                     state.sessions = sessions;
                 }
                 Err(e) => say(state, format!("sessions: {e}")),
-            }
-            Vec::new()
-        }
-        Msg::Tail { window, result } => {
-            state.inflight.tail = false;
-            let in_view = current_session(state).and_then(|s| s.window.as_ref()).is_some_and(|w| w.id == window);
-            if let (true, Ok(lines)) = (in_view, result) {
-                state.tail = Some(Tail { window, lines });
             }
             Vec::new()
         }
@@ -926,14 +872,6 @@ fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
         state.due.sessions = now + SESSIONS_EVERY;
         cmds.extend(observe_now(state));
     }
-    if !state.inflight.tail && state.due.tail.is_none_or(|at| now >= at) {
-        let window = current_session(state).and_then(|s| s.window.as_ref()).map(|w| w.id.clone());
-        if let Some(id) = window {
-            state.inflight.tail = true;
-            state.due.tail = Some(now + TAIL_EVERY);
-            cmds.push(Cmd::Job(Job::Tail(id)));
-        }
-    }
     cmds
 }
 
@@ -951,10 +889,7 @@ fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 /// `armed` is what a previous `m` armed; only the next `m` uses it.
 fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
     match action {
-        Action::GoTab(tab) => {
-            state.tab = tab;
-            state.due.tail = None;
-        }
+        Action::GoTab(tab) => state.tab = tab,
         Action::Down => move_selection(state, Move::Down),
         Action::Up => move_selection(state, Move::Up),
         Action::Start => return start_key(state),
@@ -992,7 +927,6 @@ fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
         }
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
-        Action::View => state.view = state.view.next(),
         Action::Quit => return vec![Cmd::Quit],
     }
     Vec::new()
@@ -1262,7 +1196,6 @@ fn goto_session(state: &mut State, n: IssueNumber) {
     state.tab = Tab::Sessions;
     state.selected.session = Some(n);
     state.filter.clear();
-    state.due.tail = None;
 }
 
 fn go_to_issue_of_pr(state: &mut State) {
@@ -1303,7 +1236,6 @@ fn select(state: &mut State, key: RowKey) {
         RowKey::Pr(n) => state.selected.pr = Some(n),
         RowKey::Session(n) => state.selected.session = Some(n),
     }
-    state.due.tail = None;
 }
 
 fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
@@ -1318,10 +1250,7 @@ fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
             let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
             state.last_click = if double { None } else { Some((target, now)) };
             match target {
-                HitTarget::Tab(tab) => {
-                    state.tab = tab;
-                    state.due.tail = None;
-                }
+                HitTarget::Tab(tab) => state.tab = tab,
                 HitTarget::Row(key) => {
                     select(state, key);
                     if let (true, RowKey::Issue(n)) = (double, key) {
@@ -1944,33 +1873,6 @@ mod tests {
         assert_eq!(state.filter, "a");
         press(&mut state, code(KeyCode::Esc));
         assert_eq!((state.filter.as_str(), matches!(state.focus, Focus::List)), ("", true));
-    }
-
-    #[test]
-    fn stale_tail_is_dropped_and_current_tail_is_kept() {
-        let (mut state, _) = app();
-        state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
-        state.inflight.tail = true;
-        let old_window = WindowId::parse("@99").expect("id");
-        press(&mut state, Msg::Tail { window: old_window, result: Ok(vec!["old".to_string()]) });
-        assert!(state.tail.is_none());
-        assert!(!state.inflight.tail);
-        let new_window = WindowId::parse("@3").expect("id");
-        press(&mut state, Msg::Tail { window: new_window, result: Ok(vec!["new".to_string()]) });
-        assert_eq!(state.tail.as_ref().map(|t| t.lines.clone()), Some(vec!["new".to_string()]));
-    }
-
-    #[test]
-    fn tick_asks_for_the_tail_of_the_session_in_view_only() {
-        let (mut state, now) = app();
-        let cmds = press(&mut state, Msg::Tick(now));
-        assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(_)))));
-        state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
-        let cmds = press(&mut state, Msg::Tick(now));
-        assert!(
-            cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Tail(id)) if id.as_str() == "@3")),
-            "dead panes have a tail too"
-        );
     }
 
     #[test]

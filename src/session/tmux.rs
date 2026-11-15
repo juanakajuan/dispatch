@@ -205,12 +205,6 @@ pub(super) fn send_line(id: &WindowId, text: &str) -> Result<(), String> {
     tmux(["send-keys", "-t", id.as_str(), "Enter"]).map(|_| ())
 }
 
-pub(super) fn capture(id: &WindowId, lines: u16) -> Result<Vec<String>, String> {
-    let start = format!("-{lines}");
-    let text = tmux(["capture-pane", "-p", "-J", "-t", id.as_str(), "-S", start.as_str()])?;
-    Ok(super::text_lines(&text))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,14 +303,6 @@ mod tests {
         let id = WindowId::parse("@9").expect("id");
         send_line(&id, "merge -it;").expect("ok");
         assert_eq!(fake::calls(), ["tmux send-keys -t @9 -l -- merge -it\\;", "tmux send-keys -t @9 Enter"]);
-    }
-
-    #[test]
-    fn capture_drops_trailing_blank_lines() {
-        fake::install(|_| Ok("one\n\ntwo\n\n  \n".to_string()));
-        let id = WindowId::parse("@9").expect("id");
-        assert_eq!(capture(&id, 10).expect("ok"), ["one", "", "two"]);
-        assert_eq!(fake::calls()[0], "tmux capture-pane -p -J -t @9 -S -10");
     }
 
     #[test]

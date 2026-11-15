@@ -1,6 +1,6 @@
 # Issue and PR lists
 
-dispatch shows three tabs: Issues, Pull requests, and Sessions. Each tab is a list of rows in groups. Press `v` to show the details of the selected row under the list. dispatch fetches issues and PRs every 60 s, on `r`, and 5 s after events that change GitHub data. The header shows how old the data is. A user can filter and sort the rows.
+dispatch shows three tabs: Issues, Pull requests, and Sessions. Each tab is a list of rows in groups. dispatch fetches issues and PRs every 60 s, on `r`, and 5 s after events that change GitHub data. The header shows how old the data is. A user can filter and sort the rows.
 
 ## Sub-features
 
@@ -11,13 +11,11 @@ dispatch shows three tabs: Issues, Pull requests, and Sessions. Each tab is a li
 - `lists-filter` keeps the rows that match the `/` text, without case. Issues match on number, title, and labels. PRs match on number, title, and head branch. Sessions match on number, issue title, and branch. Enter keeps the filter. Esc clears it, in the filter input and also from the list.
 - `lists-sort` cycles the order of the current tab with `S`, shown as `S sort: <order>` at the right end of the key bar. Rows are sorted inside each group.
 - `lists-pr-icon` shows the state of the lead PR of each issue in the glyph column before `#N`, and `PR #P open · <checks>` in the row summary.
-- `lists-details` (`v`) shows the issue body as Markdown, or the PR state, checks, branch, diff, and closed issues.
 
 ## How to get to it (user POV)
 
 - Start dispatch in a checkout. The Issues tab opens.
 - Press `1`, `2`, or `3`, or click a tab name.
-- Press `v` to show or hide the details.
 
 ## Driving it with verify.sh
 
@@ -30,8 +28,7 @@ Preconditions:
 - **Refresh.** Press `r`. Run `$V keys "$RUN" r` and `$V wait "$RUN" 'refreshing…|updated [0-9]s ago'`. `gh-calls.log` gets a new `gh issue list` and `gh pr list` line.
 - **Filter.** On the PR tab, press `/` and type a word from one title. Run `$V keys "$RUN" /` and `$V wait "$RUN" 'enter to keep · esc to clear'`, then `$V type "$RUN" '<word>'`, `$V keys "$RUN" Enter`, and `$V wait "$RUN" '❯ /<word>'` (the prompt line shows the kept filter). Only matching rows stay. Text that matches nothing shows `No pull requests match the filter.` Press Esc, `$V wait "$RUN" '/ to filter pull requests'`, and all rows come back.
 - **Sort.** Press `S` on the PR tab. Run `$V keys "$RUN" S` and `$V wait "$RUN" 'S sort: newest'`. Each press moves to the next order: `attention`, `newest`, `oldest`, `recently updated`, `number`, then `attention` again. The Issues tab adds `most comments` after `number`. The Sessions tab has only `attention` and `number`. The selected row stays selected.
-- **Details.** On the PR tab, select a PR and press `v`. Run `$V keys "$RUN" v` and `$V wait "$RUN" '── PR #P ─'`. The details show `state`, `checks`, `branch` (`<head> → <base>`), `diff` (`+N -N`), and `closes` for a PR that closes issues. The key column has a width of 9 cells, so the screen shows `closes   #N`. Use `$V wait "$RUN" 'closes +#N'`, not `closes #N`. Press `v` again to hide them.
-- **PR icon.** On the Issues tab, an issue with an open PR shows `●` before `#N`, for example `❯ ● #12 … PR #17 open · ✗ checks failing`. A draft PR shows `◌` and a merged PR shows `✓`. An issue with no PR, or a closed one, shows `·`. A session glyph (`▲`, `●`, `○`) takes the place of the PR mark. The color of `●` follows the checks: green pass, red fail, yellow pending, plain with no checks. Compare with the PR tab: the PR's details list `closes   #N`.
+- **PR icon.** On the Issues tab, an issue with an open PR shows `●` before `#N`, for example `❯ ● #12 … PR #17 open · ✗ checks failing`. A draft PR shows `◌` and a merged PR shows `✓`. An issue with no PR, or a closed one, shows `·`. A session glyph (`▲`, `●`, `○`) takes the place of the PR mark. The color of `●` follows the checks: green pass, red fail, yellow pending, plain with no checks.
 - **Fetch failure.** Not driven by default. To see it, copy `$RUN/bin/gh`, make `gh issue list` exit 1 in it, press `r` on tab 1, then restore the copy. The header shows `refresh failed Ns ago` in yellow, the message row shows `gh failed, showing old data: …`, and the old rows stay. When no rows were loaded before, the message row shows `gh failed: …` and the list is empty.
 
 ## Gotchas

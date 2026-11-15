@@ -18,7 +18,7 @@ $ cd ~/src/orbit && dispatch
 
 - Press `s`, Enter, or double-click on an issue. A dialog opens with the branch (`fix/142-retry-queue-drops-jobs`), the mode, and the prompt. The dialog also shows the exact commands it will run. Press Ctrl-S to start.
 - dispatch makes `.claude/worktrees/142` with `git worktree add .claude/worktrees/142 -b fix/142-... origin/main`, and adds `.claude/worktrees/` to `.git/info/exclude` once. It then opens a tmux window `#142` that runs `claude [--permission-mode plan] "/pstack:tdd Implement GitHub issue #142: ..."`.
-- On the Sessions tab, the detail pane shows the last lines of the Claude pane, refreshed each second. `a` attaches. Inside tmux, `a` selects the window. Outside tmux, dispatch suspends and runs `tmux attach`, and the TUI comes back when you detach. `x` kills the window, and the worktree stays. `a` on an exited session runs `claude --continue` in the same worktree.
+- On the Sessions tab, `a` attaches. Inside tmux, `a` selects the window. Outside tmux, dispatch suspends and runs `tmux attach`, and the TUI comes back when you detach. `x` kills the window, and the worktree stays. `a` on an exited session runs `claude --continue` in the same worktree.
 - Quit dispatch, kill it, or reboot. Run `dispatch` again and the same sessions are there. Nothing to clean up, because dispatch writes no state file.
 
 The internal call sites the sketch is derived from:
@@ -52,7 +52,7 @@ Module map (about 2.3k lines with tests):
 | `rules` | pure product rules: branch slug, prompt, `claude` argv, worktree dir, filter | pure functions |
 | `config` | optional TOML, validated into `Config` | `load()` |
 | `github` | `gh` calls and private wire structs | `fetch_issues`, `fetch_prs` |
-| `session` (+ private `git`, `tmux`) | everything about worktrees, branches, windows | `Workspace::{discover, observe, start, resume, stop, tail, attach_plan}`, `Session`, `SessionState` |
+| `session` (+ private `git`, `tmux`) | everything about worktrees, branches, windows | `Workspace::{discover, observe, start, resume, stop, attach_plan}`, `Session`, `SessionState` |
 | `app` | `State`, `Msg`, `Cmd`, `update` reducer, view helpers | `init`, `update`, `visible_rows`, `current_session` |
 | `ui` | drawing, the 16-color palette, hit regions | `draw`, `palette` |
 | `main` | terminal, loop, job threads, attach suspend | none |
@@ -109,7 +109,7 @@ Rejected: the fixed-path and `pane_start_path` link of candidate 2 (a shell the 
 - We accept that session identity follows the branch, not the directory. If Claude or the user checks out a different branch inside the worktree, the session disappears from the list until the branch is switched back. In exchange, `git branch -D` cleans up for free and the skill is recoverable after a crash.
 - We accept splitting the start into `Fetch` + `git worktree add -b` + `git config` + tmux, instead of one shell line, in exchange for a planner that can resume from any partial state.
 - We accept that a tagged window can be orphaned if its worktree is deleted by hand. The join ignores it, and the user sees it only in tmux.
-- We accept `remain-on-exit on` for session windows. A dead pane stays until `x` or a resume, in exchange for the final screen of Claude staying readable in the detail pane.
+- We accept `remain-on-exit on` for session windows. A dead pane stays until `x` or a resume, in exchange for the final screen of Claude staying readable when you attach.
 - We accept a thread per job instead of a pool or an async runtime. At most about six threads exist, and the dependency list stays short.
 - We accept `tui-textarea` as a dependency, in exchange for multi-line prompt editing with a cursor without writing an editor.
 
@@ -141,7 +141,7 @@ Each item lists a change from the sketch and the reason.
 
 **App**
 - `app::init(now, &Config, Context)`. `Context { repo_name, base }` lives in `State` for the dialog's "Runs" preview, which needs the repo dir name and the base ref.
-- `toast` is `Toast { text, shown_at: Option<Instant> }`. Reason: key messages carry no clock, so the next tick stamps the time. `Due.tail` is `Option<Instant>`, where `None` means "now", so a changed selection loads its tail on the next tick.
+- `toast` is `Toast { text, shown_at: Option<Instant> }`. Reason: key messages carry no clock, so the next tick stamps the time.
 - The Sessions tab lists issues in `starting` as rows, so the row shows while the worktree is made. A finished start inserts its session into `State.sessions` at once, so the row does not blink until the next observation. Every observation still replaces the map whole.
 - The key bar entries live in `Binding.bar` (a slice, each with a `When`), so one binding can show "a attach" or "a resume" by session state. Enter on the Sessions tab attaches.
 

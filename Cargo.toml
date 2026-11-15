@@ -10,7 +10,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }  # the settings menu keeps the user's key order
 tui-textarea = "0.7"      # branch + prompt editing in the start dialog
 jiff = "0.2"              # parse gh createdAt, render "3h" ages
-pulldown-cmark = { version = "0.13", default-features = false }  # Markdown in issue bodies
 
 [lints.rust]
 unsafe_code = "forbid"

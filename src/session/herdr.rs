@@ -379,12 +379,6 @@ pub(super) fn send_line(pane: &PaneRef, text: &str) -> Result<(), String> {
     herdr(["pane", "send-keys", pane.pane.as_str(), "enter"]).map(|_| ())
 }
 
-pub(super) fn read_tail(pane: &PaneRef, lines: u16) -> Result<Vec<String>, String> {
-    let n = lines.to_string();
-    let args = ["pane", "read", pane.pane.as_str(), "--source", "recent-unwrapped", "--lines", n.as_str()];
-    herdr(args).map(|text| super::text_lines(&text))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -660,12 +654,5 @@ mod tests {
         fake::install(|_| Ok(String::new()));
         send_line(&pane(), "merge it").expect("ok");
         assert_eq!(fake::calls(), ["herdr pane send-text w3:p1 merge it", "herdr pane send-keys w3:p1 enter"]);
-    }
-
-    #[test]
-    fn tail_reads_unwrapped_text_and_drops_trailing_blank_lines() {
-        fake::install(|_| Ok("one\n\ntwo\n\n  \n".to_string()));
-        assert_eq!(read_tail(&pane(), 10).expect("ok"), ["one", "", "two"]);
-        assert_eq!(fake::calls(), ["herdr pane read w3:p1 --source recent-unwrapped --lines 10"]);
     }
 }

@@ -22,7 +22,7 @@ Then run `dispatch` in the checkout.
 
 ## Use
 
-There are three tabs: Issues, Pull requests, and Sessions. Each tab shows its rows in groups, for example `Needs you`, `Working`, and `Open` on the Issues tab. Press `v` to show the details of the selected row under the list. Press `v` again to hide them.
+There are three tabs: Issues, Pull requests, and Sessions. Each tab shows its rows in groups, for example `Needs you`, `Working`, and `Open` on the Issues tab.
 
 dispatch fetches the issues and the pull requests every 60 seconds. Press `r` to fetch them now. On the Issues and Pull requests tabs, the header shows how old the list is, after the repo name:
 
@@ -90,7 +90,6 @@ A burst of events makes one load, at most one each 5 seconds.
 | `r` | Fetch the issues and pull requests now |
 | `/` | Filter. Enter keeps it, Esc clears it |
 | `S` | Change the sort order of the tab. See [Order](#order) |
-| `v` | Show or hide the details of the selected row |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
 | `?` | Show all keys. `j` / `k` scroll the list. `?` or Esc closes it |
@@ -99,7 +98,7 @@ In the dialog: Tab and Shift-Tab change the field, Left and Right change the mod
 
 Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection.
 
-With the details shown, the Sessions tab shows the last lines of the Claude pane for the selected session. A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
 
 ## Order
 
