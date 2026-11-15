@@ -15,6 +15,7 @@
 //! section, so a deleted branch leaves no stale marker.
 
 mod git;
+mod hc;
 mod herdr;
 mod tmux;
 
@@ -29,6 +30,7 @@ use std::path::PathBuf;
 pub enum WindowId {
     Tmux(tmux::WindowId),
     Herdr(herdr::PaneRef),
+    Hc(hc::Address),
 }
 
 #[cfg(test)]
@@ -41,6 +43,7 @@ impl WindowId {
         match self {
             WindowId::Tmux(id) => id.as_str(),
             WindowId::Herdr(p) => p.pane.as_str(),
+            WindowId::Hc(a) => a.as_str(),
         }
     }
 }
@@ -57,12 +60,15 @@ pub enum Backend {
     #[default]
     Tmux,
     Herdr,
+    Hc,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mux {
     Tmux(tmux::Place),
     Herdr(herdr::Place),
+    /// The herdr app. It needs no startup facts: hc finds its core itself.
+    Hc,
 }
 
 impl Mux {
@@ -259,18 +265,29 @@ struct MuxEnv {
     herdr_env: Option<String>,
     herdr_workspace: Option<String>,
     tmux: Option<String>,
+    hc_socket: Option<String>,
 }
 
 impl MuxEnv {
     fn from_process() -> MuxEnv {
         let var = |name| std::env::var(name).ok();
-        MuxEnv { herdr_env: var("HERDR_ENV"), herdr_workspace: var("HERDR_WORKSPACE_ID"), tmux: var("TMUX") }
+        MuxEnv {
+            herdr_env: var("HERDR_ENV"),
+            herdr_workspace: var("HERDR_WORKSPACE_ID"),
+            tmux: var("TMUX"),
+            hc_socket: var("HC_TERMINAL_SOCKET"),
+        }
     }
 }
 
 fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) -> Result<Mux, SetupError> {
     let inside_herdr = env.herdr_env.as_deref() == Some("1");
     let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
+    let inside_app = env.hc_socket.as_deref().is_some_and(|s| !s.is_empty());
+    if choice == Multiplexer::HerdrApp || (choice == Multiplexer::Auto && !inside_herdr && inside_app) {
+        require("hc", "--version", repo_root)?;
+        return Ok(Mux::Hc);
+    }
     if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
         require("herdr", "--version", repo_root)?;
         let place = herdr::Place::detect(env.herdr_env.as_deref(), env.herdr_workspace.as_deref(), &dir_name)
@@ -300,6 +317,7 @@ impl Workspace {
         match self.mux {
             Mux::Tmux(_) => Backend::Tmux,
             Mux::Herdr(_) => Backend::Herdr,
+            Mux::Hc => Backend::Hc,
         }
     }
 
@@ -319,6 +337,7 @@ impl Workspace {
         let windows = match &self.mux {
             Mux::Tmux(_) => tmux::list_windows()?,
             Mux::Herdr(_) => herdr::list_windows()?,
+            Mux::Hc => hc::list_windows(&self.repo_root)?,
         };
         Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, windows))
     }
@@ -378,7 +397,7 @@ impl Workspace {
                         warnings.push(format!("{} still shows in git status: {e}", rules::WORKTREES_DIR));
                     }
                     match &self.mux {
-                        Mux::Tmux(_) => git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?,
+                        Mux::Tmux(_) | Mux::Hc => git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?,
                         Mux::Herdr(place) => {
                             herdr::create_worktree(place, &self.repo_root, &dir, &branch, from.as_deref(), issue)?;
                         }
@@ -402,6 +421,7 @@ impl Workspace {
                 argv,
                 &herdr::script_file(&self.git_common_dir, issue),
             ),
+            Mux::Hc => hc::open_window(&self.repo_root, dir, issue, argv).map(|_| ()),
         }
     }
 
@@ -421,6 +441,10 @@ impl Workspace {
                 WindowId::Herdr(pane) => {
                     Ok(herdr::launch(pane, &argv, &herdr::script_file(&self.git_common_dir, issue))?)
                 }
+                WindowId::Hc(address) => {
+                    hc::remove(address)?;
+                    Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?)
+                }
             },
             None => Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?),
         }
@@ -432,6 +456,7 @@ impl Workspace {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
             Some(Window { id: WindowId::Tmux(id), .. }) => Ok(tmux::kill_window(&id)?),
             Some(Window { id: WindowId::Herdr(pane), .. }) => Ok(herdr::close_workspace(&pane.workspace)?),
+            Some(Window { id: WindowId::Hc(address), .. }) => Ok(hc::stop(&address)?),
             None => Ok(()),
         }
     }
@@ -443,6 +468,7 @@ impl Workspace {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
             Some(Window { id: WindowId::Tmux(id), alive: true, .. }) => Ok(tmux::send_line(&id, text)?),
             Some(Window { id: WindowId::Herdr(pane), alive: true, .. }) => Ok(herdr::send_line(&pane, text)?),
+            Some(Window { id: WindowId::Hc(address), alive: true, .. }) => Ok(hc::send_line(&address, text)?),
             _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
         }
     }
@@ -454,6 +480,7 @@ impl Workspace {
         match window {
             WindowId::Tmux(id) => Ok(tmux::capture(id, lines)?),
             WindowId::Herdr(pane) => Ok(herdr::read_tail(pane, lines)?),
+            WindowId::Hc(address) => Ok(hc::read_tail(address, lines)?),
         }
     }
 
@@ -468,6 +495,7 @@ impl Workspace {
                     .map(String::from)
                     .to_vec(),
             )),
+            (Mux::Hc, WindowId::Hc(address)) => Ok(AttachPlan::Suspend(hc::attach_argv(address))),
             _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
         }
     }
@@ -1455,7 +1483,12 @@ mod tests {
             herdr_env: herdr.then(|| "1".to_string()),
             herdr_workspace: herdr.then(|| "w1".to_string()),
             tmux: tmux.then(|| "/tmp/tmux-1000/default,1,0".to_string()),
+            hc_socket: None,
         }
+    }
+
+    fn in_app(env: MuxEnv) -> MuxEnv {
+        MuxEnv { hc_socket: Some("/run/user/1000/herdr-core/default.sock".to_string()), ..env }
     }
 
     #[test]
@@ -1488,6 +1521,45 @@ mod tests {
         }
     }
 
+    /// The hc rows: `(choice, env)` to the backend, with the app's socket set
+    /// or not.
+    #[test]
+    fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
+        use Multiplexer::{Auto, Herdr, HerdrApp, Tmux};
+        let tmux_detached = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+        let herdr_inside = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+        let table = [
+            (Auto, in_app(env(false, false)), &Mux::Hc),
+            (Auto, in_app(env(false, true)), &Mux::Hc),
+            (Auto, in_app(env(true, false)), &herdr_inside),
+            (Auto, env(false, false), &tmux_detached),
+            (Tmux, in_app(env(false, false)), &tmux_detached),
+            (Herdr, in_app(env(true, false)), &herdr_inside),
+            (HerdrApp, env(false, false), &Mux::Hc),
+            (HerdrApp, env(true, true), &Mux::Hc),
+            (HerdrApp, in_app(env(false, false)), &Mux::Hc),
+        ];
+        for (choice, e, want) in table {
+            fake::install(|_| Ok(String::new()));
+            let got = detect_mux(choice, &e, std::path::Path::new("/w/orbit")).expect("detects");
+            assert_eq!(&got, want, "{choice:?} {e:?}");
+        }
+        fake::install(|call| {
+            if call.starts_with("hc") {
+                Err(crate::proc::ProcError::Spawn {
+                    program: "hc".to_string(),
+                    source: std::io::Error::from(std::io::ErrorKind::NotFound),
+                })
+            } else {
+                Ok(String::new())
+            }
+        });
+        assert!(matches!(
+            detect_mux(HerdrApp, &env(false, false), std::path::Path::new("/w/orbit")),
+            Err(SetupError::ProgramMissing("hc"))
+        ));
+    }
+
     #[test]
     fn the_chosen_multiplexer_must_be_installed() {
         fake::install(|_| Err(fake::fail("x", 1, "")));
@@ -1503,5 +1575,257 @@ mod tests {
             detect_mux(Multiplexer::Auto, &env(true, false), std::path::Path::new("/w/orbit")),
             Err(SetupError::ProgramMissing("herdr"))
         ));
+    }
+
+    // ---- herdr app (hc), through the proc fake ----
+
+    #[derive(Default)]
+    struct HcSim {
+        added: bool,
+        marked: bool,
+        /// `(address, state, status)` rows that `hc ls` prints, oldest first.
+        terminals: Vec<(&'static str, &'static str, Option<&'static str>)>,
+        /// An `hc rm` or `hc kill` for these addresses answers `not_found`.
+        gone: bool,
+    }
+
+    fn not_found() -> crate::proc::ProcError {
+        fake::fail("hc", 3, r#"{"error":{"hint":"see `hc ls --all`","kind":"not_found","message":"no terminal"}}"#)
+    }
+
+    fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
+        fake::install(move |call| {
+            let mut s = sim.borrow_mut();
+            let dir = base.join("orbit/.claude/worktrees/142");
+            if call.starts_with("git worktree list") {
+                let mut t = format!("worktree {}\nHEAD x\nbranch refs/heads/main\n\n", base.join("orbit").display());
+                if s.added {
+                    t = format!("{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display());
+                }
+                Ok(t)
+            } else if call.starts_with("git config --get-regexp") {
+                if s.marked {
+                    Ok("branch.fix/142-x.dispatch-issue 142\n".to_string())
+                } else {
+                    Err(fake::fail("git", 1, ""))
+                }
+            } else if call.starts_with("git show-ref") {
+                if s.added { Ok(String::new()) } else { Err(fake::fail("git", 1, "")) }
+            } else if call.starts_with("git worktree add") {
+                std::fs::create_dir_all(&dir).expect("mkdir");
+                s.added = true;
+                Ok(String::new())
+            } else if call.starts_with("hc ls") {
+                let rows: Vec<_> = s
+                    .terminals
+                    .iter()
+                    .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status}))
+                    .collect();
+                Ok(serde_json::json!({"hidden_finished": 0, "terminals": rows}).to_string())
+            } else if call.starts_with("hc run") {
+                s.terminals.push(("t9", "live", Some("idle")));
+                Ok(r#"{"address":"t9","state":"live"}"#.to_string())
+            } else if call.starts_with("hc kill") && s.terminals.iter().all(|(_, state, _)| *state == "finished") {
+                Err(fake::fail("hc", 11, r#"{"error":{"kind":"finished"}}"#))
+            } else if call.starts_with("hc rm") || call.starts_with("hc kill") {
+                if s.gone { Err(not_found()) } else { Ok("{}".to_string()) }
+            } else if call.starts_with("hc read") {
+                Ok("one\ntwo\n\n\n".to_string())
+            } else if call.contains("dispatch-issue 142") {
+                s.marked = true;
+                Ok(String::new())
+            } else {
+                Ok(String::new())
+            }
+        });
+    }
+
+    fn hc_workspace(base: &std::path::Path) -> Workspace {
+        let mut ws = workspace(base);
+        ws.mux = Mux::Hc;
+        ws
+    }
+
+    fn hc_calls() -> Vec<String> {
+        fake::calls()
+            .into_iter()
+            .filter(|c| {
+                [
+                    "git fetch",
+                    "git worktree add",
+                    "git config branch",
+                    "hc run",
+                    "hc rm",
+                    "hc kill",
+                    "hc send",
+                    "hc read",
+                ]
+                .iter()
+                .any(|p| c.starts_with(p))
+            })
+            .collect()
+    }
+
+    fn hc_run(base: &std::path::Path, argv: &str) -> String {
+        let dir = base.join("orbit/.claude/worktrees/142");
+        let space = hc::space_id(&dir);
+        format!(
+            "hc run --bg --json --no-parent --no-notify --cwd {} --label herdr.space={space} --label dispatch.repo={} --label dispatch.issue=142 -- {argv}",
+            dir.display(),
+            base.join("orbit").display()
+        )
+    }
+
+    #[test]
+    fn hc_start_adds_the_worktree_with_git_and_runs_claude_with_the_labels() {
+        let base = temp_dir("hc-start");
+        let ws = hc_workspace(&base);
+        install_hc_world(base.clone(), Rc::new(RefCell::new(HcSim::default())));
+        let mut r = req();
+        r.prompt = "line one\nit's \"line\" two;".to_string();
+        let out = ws.start(&r, &launch()).expect("start");
+        assert_eq!(out.session.state(), SessionState::NeedsYou, "an idle status is waiting");
+        let dir = base.join("orbit/.claude/worktrees/142");
+        assert_eq!(
+            hc_calls(),
+            [
+                "git fetch origin main".to_string(),
+                format!("git worktree add {} -b fix/142-x origin/main", dir.display()),
+                "git config branch.fix/142-x.dispatch-issue 142".to_string(),
+                hc_run(&base, "claude line one\nit's \"line\" two;"),
+            ]
+        );
+        let before = fake::calls().len();
+        ws.start(&r, &launch()).expect("second start");
+        assert!(
+            !fake::calls()[before..].iter().any(|c| c.starts_with("hc run")),
+            "a live session is not started twice"
+        );
+    }
+
+    #[test]
+    fn hc_start_passes_no_tmux_hooks_even_when_waiting_detection_is_on() {
+        let base = temp_dir("hc-hooks");
+        let ws = hc_workspace(&base);
+        install_hc_world(base.clone(), Rc::new(RefCell::new(HcSim::default())));
+        let mut l = launch();
+        l.detect_waiting = true;
+        ws.start(&req(), &l).expect("start");
+        let run = hc_calls().pop().expect("a call");
+        assert!(!run.contains("--settings"), "{run}");
+    }
+
+    #[test]
+    fn hc_resume_of_a_dead_terminal_removes_it_then_runs_continue_in_the_same_space() {
+        let base = temp_dir("hc-resume");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "finished", Some("done"))], gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.resume(IssueNumber(142), &launch()).expect("resume");
+        assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")]);
+    }
+
+    #[test]
+    fn hc_resume_without_a_terminal_runs_continue_and_removes_nothing() {
+        let base = temp_dir("hc-resume-missing");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, ..HcSim::default() };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.resume(IssueNumber(142), &launch()).expect("resume");
+        assert_eq!(hc_calls(), [hc_run(&base, "claude --continue")]);
+    }
+
+    #[test]
+    fn hc_resume_of_a_live_terminal_does_nothing() {
+        let base = temp_dir("hc-resume-live");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "live", Some("working"))], gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.resume(IssueNumber(142), &launch()).expect("resume");
+        assert_eq!(hc_calls(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn hc_stop_kills_then_removes_and_keeps_the_worktree() {
+        let base = temp_dir("hc-stop");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "live", Some("working"))], gone: false };
+        let sim = Rc::new(RefCell::new(sim));
+        install_hc_world(base.clone(), Rc::clone(&sim));
+        ws.stop(IssueNumber(142)).expect("stop");
+        assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4"]);
+        assert!(!fake::calls().iter().any(|c| c.contains("worktree remove")));
+        sim.borrow_mut().gone = true;
+        ws.stop(IssueNumber(142)).expect("a terminal that vanished is already stopped");
+        assert_eq!(hc_calls()[2..], ["hc kill t4"], "not found ends the stop");
+        assert!(ws.stop(IssueNumber(999)).is_ok(), "no session is already stopped");
+    }
+
+    #[test]
+    fn hc_stop_of_a_finished_terminal_still_removes_it() {
+        let base = temp_dir("hc-stop-finished");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "finished", None)], gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.stop(IssueNumber(142)).expect("stop");
+        assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4"]);
+    }
+
+    #[test]
+    fn hc_observe_prefers_a_live_terminal_over_a_newer_finished_one() {
+        let base = temp_dir("hc-observe");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let terminals = vec![("t2", "live", Some("working")), ("t3", "finished", Some("done"))];
+        let sim = HcSim { added: true, marked: true, terminals, gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+        assert_eq!(session.window.as_ref().expect("window").id, WindowId::Hc(hc::Address::new("t2")));
+        assert_eq!(session.state(), SessionState::Running);
+        assert_eq!(
+            fake::calls().iter().find(|c| c.starts_with("hc ls")).map(String::as_str),
+            Some(format!("hc ls --all --json --label dispatch.repo={}", base.join("orbit").display()).as_str())
+        );
+    }
+
+    #[test]
+    fn hc_send_and_tail_go_to_the_terminal() {
+        let base = temp_dir("hc-send");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "live", Some("idle"))], gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.send(IssueNumber(142), "merge it").expect("send");
+        assert_eq!(hc_calls(), ["hc send --force t4 merge it"]);
+        let tail = ws.tail(&WindowId::Hc(hc::Address::new("t4")), 20).expect("tail");
+        assert_eq!(tail, ["one", "two"], "trailing blank lines are gone");
+        assert_eq!(hc_calls()[1], "hc read t4 --lines 20");
+    }
+
+    #[test]
+    fn hc_send_refuses_a_finished_terminal() {
+        let base = temp_dir("hc-send-dead");
+        let ws = hc_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HcSim { added: true, marked: true, terminals: vec![("t4", "finished", None)], gone: false };
+        install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+        assert!(ws.send(IssueNumber(142), "hi").is_err());
+    }
+
+    #[test]
+    fn hc_attach_suspends_into_hc_attach_inside_and_outside_the_app() {
+        let base = temp_dir("hc-attach");
+        let ws = hc_workspace(&base);
+        let id = WindowId::Hc(hc::Address::new("t4"));
+        assert_eq!(
+            ws.attach_plan(&id).expect("plan"),
+            AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
+        );
+        assert!(ws.attach_plan(&WindowId::parse("@4").expect("id")).is_err(), "a tmux window is not ours");
     }
 }

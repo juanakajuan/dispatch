@@ -115,6 +115,8 @@ pub enum Multiplexer {
     Auto,
     Tmux,
     Herdr,
+    #[serde(rename = "herdr-app")]
+    HerdrApp,
 }
 
 impl Multiplexer {
@@ -122,7 +124,8 @@ impl Multiplexer {
         match self {
             Multiplexer::Auto => Multiplexer::Tmux,
             Multiplexer::Tmux => Multiplexer::Herdr,
-            Multiplexer::Herdr => Multiplexer::Auto,
+            Multiplexer::Herdr => Multiplexer::HerdrApp,
+            Multiplexer::HerdrApp => Multiplexer::Auto,
         }
     }
 
@@ -131,6 +134,7 @@ impl Multiplexer {
             Multiplexer::Auto => "auto",
             Multiplexer::Tmux => "tmux",
             Multiplexer::Herdr => "herdr",
+            Multiplexer::HerdrApp => "herdr-app",
         }
     }
 }
@@ -546,10 +550,10 @@ mod tests {
 
     #[test]
     fn multiplexer_labels_match_the_file_spelling() {
-        for choice in [Multiplexer::Auto, Multiplexer::Tmux, Multiplexer::Herdr] {
+        for choice in [Multiplexer::Auto, Multiplexer::Tmux, Multiplexer::Herdr, Multiplexer::HerdrApp] {
             let parsed: Multiplexer = serde_json::from_str(&format!("\"{}\"", choice.label())).expect("parses");
             assert_eq!(parsed, choice);
-            assert_eq!(choice.next().next().next(), choice);
+            assert_eq!(choice.next().next().next().next(), choice);
         }
         assert_eq!(parse_str("{}").expect("loads").multiplexer, Multiplexer::Auto);
         assert!(matches!(parse_str(r#"{"multiplexer":"screen"}"#), Err(ConfigError::Json { .. })));

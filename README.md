@@ -179,7 +179,9 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
-- `multiplexer` selects where sessions run. `"auto"` is the default: herdr when dispatch runs inside herdr (`HERDR_ENV=1`), else tmux. `"tmux"` always uses tmux. `"herdr"` always uses herdr. Outside herdr it keeps the sessions in a workspace named `dispatch-<repo>`, starts the herdr server when none runs, and attach opens herdr on that workspace. dispatch reads this setting at start, so a change applies the next time you start dispatch.
+- `multiplexer` selects where sessions run. `"auto"` is the default: herdr when dispatch runs inside herdr (`HERDR_ENV=1`), the herdr app when it runs inside the app (`HC_TERMINAL_SOCKET` is set), else tmux. `"tmux"` always uses tmux. `"herdr"` always uses herdr. `"herdr-app"` uses the herdr desktop app (herdr-core, the `hc` CLI). Outside herdr it keeps the sessions in a workspace named `dispatch-<repo>`, starts the herdr server when none runs, and attach opens herdr on that workspace. dispatch reads this setting at start, so a change applies the next time you start dispatch.
+
+  With `"herdr-app"`, each issue runs as a terminal in the app, labelled so the app shows the issue's worktree as its own space under the repo. dispatch makes the worktree with `git worktree add`. Attach runs `hc attach` and takes over the current terminal. ctrl+\ detaches. A resume removes the exited terminal and starts a new one in the same space.
 
 An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 
