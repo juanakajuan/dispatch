@@ -5,14 +5,15 @@
 //! between two rules, and the footer keys. The dialog is a centered overlay.
 
 use crate::app::{
-    self, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, KeyGroup, RowKey, SettingsMenu,
-    StartDialog, State, Tab,
+    self, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, Key, KeyGroup, RowKey,
+    SettingsMenu, StartDialog, State, Tab,
 };
 use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
 use crate::rules;
 use crate::session::{Backend, Session, SessionState};
+use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -841,7 +842,7 @@ mod tests {
             .iter()
             .filter_map(|(r, t)| match t {
                 HitTarget::Row(k) => Some((r.y, *k)),
-                HitTarget::Tab(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(tabs, 3);
@@ -1009,6 +1010,136 @@ mod tests {
         text(terminal.backend().buffer())
     }
 
+    /// The (x, y) of the first cell of `needle` on the drawn screen.
+    fn find(screen: &str, needle: &str) -> (u16, u16) {
+        let (y, line) = screen
+            .lines()
+            .enumerate()
+            .find(|(_, l)| l.contains(needle))
+            .unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+        let x = cells(&line[..line.find(needle).expect("found")]);
+        (u16::try_from(x).expect("x"), u16::try_from(y).expect("y"))
+    }
+
+    /// The target under the first cell of `needle`, and under its last cell.
+    fn targets_of(state: &State, screen: &str, needle: &str) -> (Option<HitTarget>, Option<HitTarget>) {
+        let (x, y) = find(screen, needle);
+        let last = x + u16::try_from(cells(needle)).expect("w") - 1;
+        let at = |x: u16| state.hits.at(x, y).map(|(_, t)| t);
+        (at(x), at(last))
+    }
+
+    fn assert_clickable(state: &State, screen: &str, needle: &str, want: HitTarget) {
+        assert_eq!(targets_of(state, screen, needle), (Some(want), Some(want)), "{needle:?} in\n{screen}");
+    }
+
+    #[test]
+    fn key_bar_entries_and_the_sort_footer_are_clickable() {
+        let mut state = full_state();
+        let screen = draw_into(&mut state, 200, 24);
+        for (needle, key) in [
+            ("? to keys", Key::Char('?')),
+            ("s to start session", Key::Char('s')),
+            ("q to quit", Key::Char('q')),
+            ("S sort: attention", Key::Char('S')),
+        ] {
+            assert_clickable(&state, &screen, needle, HitTarget::Key(key));
+        }
+        let (x, y) = find(&screen, "? to keys");
+        let gap = x + u16::try_from(cells("? to keys")).expect("w");
+        assert_eq!(state.hits.at(gap, y).map(|(_, t)| t), None, "the separator is not part of an entry");
+    }
+
+    #[test]
+    fn a_key_bar_entry_cut_by_a_narrow_terminal_is_not_clickable() {
+        let mut state = full_state();
+        let screen = draw_into(&mut state, 40, 24);
+        assert!(screen.contains("? to keys"), "{screen}");
+        assert!(!screen.contains("q to quit"), "{screen}");
+        let footer_y = 23;
+        let keys: Vec<Key> = state
+            .hits
+            .targets
+            .iter()
+            .filter(|(r, _)| r.y == footer_y)
+            .filter_map(|(_, t)| if let HitTarget::Key(k) = t { Some(*k) } else { None })
+            .collect();
+        assert!(keys.contains(&Key::Char('?')) && !keys.contains(&Key::Char('q')), "{keys:?}");
+    }
+
+    #[test]
+    fn the_prompt_opens_the_filter_and_the_clear_control_clears_it() {
+        let mut state = full_state();
+        let screen = draw_into(&mut state, 100, 24);
+        assert_clickable(&state, &screen, "/ to filter issues", HitTarget::Key(Key::Char('/')));
+        assert!(!screen.contains("esc to clear"), "nothing to clear yet\n{screen}");
+
+        state.filter = "retry".to_string();
+        let screen = draw_into(&mut state, 100, 24);
+        assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
+        let (x, y) = find(&screen, "/retry");
+        assert_eq!(state.hits.at(x, y).map(|(_, t)| t), Some(HitTarget::Key(Key::Char('/'))));
+
+        send(&mut state, KeyCode::Char('/'));
+        let screen = draw_into(&mut state, 100, 24);
+        assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
+        let (x, y) = find(&screen, "retry");
+        assert_eq!(state.hits.at(x, y), None, "typing in the filter is not a click target");
+    }
+
+    #[test]
+    fn overlay_footers_are_clickable_and_the_base_screen_is_not() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        let screen = draw_into(&mut state, 100, 60);
+        for (needle, key) in [("j/k to scroll", Key::Char('j')), ("esc to close", Key::Code(KeyCode::Esc))] {
+            assert_clickable(&state, &screen, needle, HitTarget::Key(key));
+        }
+        assert!(
+            state.hits.targets.iter().all(|(_, t)| matches!(t, HitTarget::Key(_))),
+            "tabs and rows are not live under an overlay"
+        );
+
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        let screen = draw_into(&mut state, 120, 40);
+        for (needle, key) in [
+            ("ctrl-s to start", Key::Ctrl('s')),
+            ("tab to next field", Key::Code(KeyCode::Tab)),
+            ("esc to cancel", Key::Code(KeyCode::Esc)),
+        ] {
+            assert_clickable(&state, &screen, needle, HitTarget::Key(key));
+        }
+
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char(','));
+        let screen = draw_into(&mut state, 100, 30);
+        for (needle, key) in [
+            ("j/k to move", Key::Char('j')),
+            ("enter to change", Key::Code(KeyCode::Enter)),
+            ("esc to close", Key::Code(KeyCode::Esc)),
+        ] {
+            assert_clickable(&state, &screen, needle, HitTarget::Key(key));
+        }
+        for _ in 0..3 {
+            send(&mut state, KeyCode::Char('j'));
+        }
+        send(&mut state, KeyCode::Enter);
+        let screen = draw_into(&mut state, 100, 30);
+        assert_clickable(&state, &screen, "enter to save", HitTarget::Key(Key::Code(KeyCode::Enter)));
+        assert_clickable(&state, &screen, "esc to cancel", HitTarget::Key(Key::Code(KeyCode::Esc)));
+    }
+
+    #[test]
+    fn the_filter_footer_is_clickable() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('/'));
+        let screen = draw_into(&mut state, 100, 24);
+        assert_clickable(&state, &screen, "enter to keep", HitTarget::Key(Key::Code(KeyCode::Enter)));
+        assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
+    }
+
     #[test]
     fn the_keybinds_menu_shows_every_key_in_bindings() {
         let mut state = full_state();
@@ -1052,10 +1183,10 @@ mod tests {
 
 mod agent {
     use super::{
-        Checks, Constraint, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber, Layout, Line, Paragraph,
-        PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, age, app, cells, centered,
-        checks_span, checks_word, draw_overlay, empty_text, fit, freshness, issue_of, message, one_line, palette,
-        pr_mark, pr_state_span, row_line, span, spans_width,
+        Checks, Constraint, Focus, Frame, HitMap, HitTarget, Icons, Instant, IssueNumber, Key, KeyCode, Layout, Line,
+        Paragraph, PrState, PullRequest, Rect, RowKey, Session, SessionState, Span, State, Tab, age, app, cells,
+        centered, checks_span, checks_word, draw_overlay, empty_text, fit, freshness, issue_of, message, one_line,
+        palette, pr_mark, pr_state_span, row_line, span, spans_width,
     };
 
     const LOGO: [&str; 3] = [" ▄██▄ ", "██▀▀██", "▀▘  ▝▀"];
@@ -1092,8 +1223,12 @@ mod agent {
         let rule = || Paragraph::new(span("─".repeat(usize::from(screen.width)), palette::DIM));
         frame.render_widget(rule(), rule1);
         frame.render_widget(rule(), rule2);
-        draw_prompt(frame, prompt, state);
-        draw_footer(frame, footer, state);
+        draw_prompt(frame, prompt, state, &mut hits);
+        if !matches!(state.focus, Focus::List | Focus::Filter) {
+            // An overlay owns the mouse: only its own targets and the footer stay live.
+            hits.targets.clear();
+        }
+        draw_footer(frame, footer, state, &mut hits);
         draw_overlay(frame, state, &mut hits);
         hits
     }
@@ -1334,7 +1469,9 @@ mod agent {
         }
     }
 
-    fn draw_prompt(frame: &mut Frame, area: Rect, state: &State) {
+    const CLEAR_FILTER: &str = "esc to clear";
+
+    fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
         let mut spans = vec![span("❯ ", palette::ACCENT)];
         match (&state.focus, state.filter.is_empty()) {
             (Focus::Filter, _) => {
@@ -1351,28 +1488,80 @@ mod agent {
                 palette::DIM,
             )),
         }
+        let used = spans_width(&spans);
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        if matches!(state.focus, Focus::List) {
+            hits.targets.push((area, HitTarget::Key(Key::Char('/'))));
+        }
+        let clear_w = u16::try_from(cells(CLEAR_FILTER)).unwrap_or(u16::MAX);
+        let room = usize::from(area.width).saturating_sub(used + 1);
+        if !state.filter.is_empty() && usize::from(clear_w) <= room {
+            let clear = Rect::new(area.x + area.width - clear_w, area.y, clear_w, 1);
+            frame.render_widget(Paragraph::new(span(CLEAR_FILTER, palette::DIM)), clear);
+            hits.targets.push((clear, HitTarget::Key(Key::Code(KeyCode::Esc))));
+        }
     }
 
-    fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
-        let pairs: Vec<(&str, &str)> = match &state.focus {
-            Focus::Filter => vec![("enter", "keep"), ("esc", "clear")],
-            Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
-            Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
-            Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
-            Focus::Keybinds { .. } => vec![("j/k", "scroll"), ("esc", "close")],
-            Focus::List => app::key_bar(state),
+    fn draw_footer(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
+        let pairs: Vec<(&str, &str, Key)> = match &state.focus {
+            Focus::Filter => {
+                vec![("enter", "keep", Key::Code(KeyCode::Enter)), ("esc", "clear", Key::Code(KeyCode::Esc))]
+            }
+            Focus::Dialog(_) => vec![
+                ("ctrl-s", "start", Key::Ctrl('s')),
+                ("tab", "next field", Key::Code(KeyCode::Tab)),
+                ("esc", "cancel", Key::Code(KeyCode::Esc)),
+            ],
+            Focus::Settings(menu) if menu.edit.is_some() => {
+                vec![("enter", "save", Key::Code(KeyCode::Enter)), ("esc", "cancel", Key::Code(KeyCode::Esc))]
+            }
+            Focus::Settings(_) => vec![
+                ("j/k", "move", Key::Char('j')),
+                ("enter", "change", Key::Code(KeyCode::Enter)),
+                ("esc", "close", Key::Code(KeyCode::Esc)),
+            ],
+            Focus::Keybinds { .. } => {
+                vec![("j/k", "scroll", Key::Char('j')), ("esc", "close", Key::Code(KeyCode::Esc))]
+            }
+            Focus::List => app::key_bar(state).into_iter().map(|b| (b.keys, b.desc, b.key)).collect(),
         };
         let mut spans = vec![Span::raw("")];
-        for (i, (k, d)) in pairs.into_iter().enumerate() {
+        // Span indexes of each entry, so its click area comes from the drawn line.
+        let mut entries: Vec<(std::ops::Range<usize>, Key)> = Vec::new();
+        for (i, (k, d, key)) in pairs.into_iter().enumerate() {
             if i > 0 {
                 spans.push(span(" · ", palette::DIM));
             }
+            let first = spans.len();
             spans.push(span(k.to_string(), palette::ACCENT));
             spans.push(span(format!(" to {d}"), palette::DIM));
+            entries.push((first..spans.len(), key));
         }
         let sort =
             vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.sort.label(state.tab)), palette::DIM)];
-        frame.render_widget(Paragraph::new(row_line(area.width, spans, sort)), area);
+        let sort_w = spans_width(&sort);
+        let line = row_line(area.width, spans.clone(), sort);
+        let mut starts = vec![0usize];
+        for s in &line.spans[..spans.len()] {
+            starts.push(starts.last().copied().unwrap_or(0) + s.width());
+        }
+        for (range, key) in entries {
+            // `row_line` cuts what does not fit: a cut entry is not clickable.
+            if range.clone().all(|i| line.spans[i].content == spans[i].content) {
+                let (from, to) = (starts[range.start], starts[range.end]);
+                hits.targets.push((cell_rect(area, from, to - from), HitTarget::Key(key)));
+            }
+        }
+        if sort_w <= usize::from(area.width) {
+            let sort_rect = cell_rect(area, usize::from(area.width) - sort_w, sort_w);
+            hits.targets.push((sort_rect, HitTarget::Key(Key::Char('S'))));
+        }
+        frame.render_widget(Paragraph::new(line), area);
+    }
+
+    /// `width` cells of `row`, starting `from` cells in.
+    fn cell_rect(row: Rect, from: usize, width: usize) -> Rect {
+        let at = |n: usize| u16::try_from(n).unwrap_or(u16::MAX);
+        Rect::new(row.x.saturating_add(at(from)), row.y, at(width), 1).intersection(row)
     }
 }
