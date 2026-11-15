@@ -4,6 +4,7 @@
 //! command parser still treats an argument that ends in `;` as a command
 //! separator, which `escape_argv` handles.
 
+use super::WindowObs;
 use crate::domain::WorktreePath;
 use crate::proc::{self, ProcError};
 use std::path::Path;
@@ -87,13 +88,6 @@ where
     proc::run("tmux", args, Path::new("."))
 }
 
-pub(super) struct WindowObs {
-    pub id: WindowId,
-    pub worktree: WorktreePath,
-    pub dead: bool,
-    pub waiting: bool,
-}
-
 /// tab-separated format; tags are set by dispatch only.
 const LIST_FORMAT: &str = "#{window_id}\t#{pane_dead}\t#{@dispatch-worktree}\t#{@dispatch-waiting}";
 
@@ -121,7 +115,7 @@ fn parse_windows(text: &str) -> Vec<WindowObs> {
                 return None;
             }
             Some(WindowObs {
-                id: WindowId::parse(id).ok()?,
+                id: super::WindowId::Tmux(WindowId::parse(id).ok()?),
                 worktree: WorktreePath::from_observed(worktree)?,
                 dead: *dead == "1",
                 waiting: *waiting == "1",
@@ -214,11 +208,7 @@ pub(super) fn send_line(id: &WindowId, text: &str) -> Result<(), String> {
 pub(super) fn capture(id: &WindowId, lines: u16) -> Result<Vec<String>, String> {
     let start = format!("-{lines}");
     let text = tmux(["capture-pane", "-p", "-J", "-t", id.as_str(), "-S", start.as_str()])?;
-    let mut out: Vec<String> = text.lines().map(str::to_string).collect();
-    while out.last().is_some_and(|l| l.trim().is_empty()) {
-        out.pop();
-    }
-    Ok(out)
+    Ok(super::text_lines(&text))
 }
 
 #[cfg(test)]

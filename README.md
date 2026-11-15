@@ -170,7 +170,8 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 {
   "detect_waiting": true,
   "claude_command": ["claude"],
-  "icons": "unicode"
+  "icons": "unicode",
+  "multiplexer": "auto"
 }
 ```
 
@@ -178,13 +179,15 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
+- `multiplexer` selects where sessions run. `"auto"` is the default: herdr when dispatch runs inside herdr (`HERDR_ENV=1`), else tmux. `"tmux"` always uses tmux. `"herdr"` always uses herdr. Outside herdr it keeps the sessions in a workspace named `dispatch-<repo>`, starts the herdr server when none runs, and attach opens herdr on that workspace. dispatch reads this setting at start, so a change applies the next time you start dispatch.
+
 An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 
 ### Settings menu
 
-Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
+Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons` and `multiplexer`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
 
-Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` applies at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change.
+Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` applies at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
 
 ## How sessions are tracked
 

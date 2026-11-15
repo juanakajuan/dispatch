@@ -1,6 +1,4 @@
-//! Sessions. The only module that knows git and tmux exist.
-//!
-//! Session truth lives in git and tmux, never in a dispatch file:
+//! Session truth lives in git and the multiplexer, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
 //! - `git config branch.<b>.dispatch-issue`: which
@@ -17,16 +15,69 @@
 //! section, so a deleted branch leaves no stale marker.
 
 mod git;
+mod herdr;
 mod tmux;
 
-use crate::config::{ClaudeCommand, Config};
+use crate::config::{ClaudeCommand, Config, Multiplexer};
 use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
 use crate::rules;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-pub use tmux::WindowId;
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WindowId {
+    Tmux(tmux::WindowId),
+    Herdr(herdr::PaneRef),
+}
+
+#[cfg(test)]
+impl WindowId {
+    pub fn parse(raw: &str) -> Result<WindowId, String> {
+        tmux::WindowId::parse(raw).map(WindowId::Tmux)
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            WindowId::Tmux(id) => id.as_str(),
+            WindowId::Herdr(p) => p.pane.as_str(),
+        }
+    }
+}
+
+struct WindowObs {
+    id: WindowId,
+    worktree: WorktreePath,
+    dead: bool,
+    waiting: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Backend {
+    #[default]
+    Tmux,
+    Herdr,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Mux {
+    Tmux(tmux::Place),
+    Herdr(herdr::Place),
+}
+
+impl Mux {
+    fn hooks(&self, launch: &Launch) -> Option<&'static str> {
+        (launch.detect_waiting && matches!(self, Mux::Tmux(_))).then_some(WAITING_HOOKS)
+    }
+}
+
+fn text_lines(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = text.lines().map(str::to_string).collect();
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out
+}
 
 /// One issue being worked in one worktree. Derived, never stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -147,10 +198,7 @@ impl fmt::Display for StartConflict {
 /// How the shell attaches. Pure data, so the choice is unit tested.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AttachPlan {
-    /// Inside tmux: select the window; dispatch keeps running in its own window.
     Switch(Vec<String>),
-    /// Outside tmux: the shell leaves the alternate screen, runs this argv in
-    /// the foreground, and restores the TUI when it returns.
     Suspend(Vec<String>),
 }
 
@@ -162,7 +210,7 @@ pub struct Workspace {
     git_common_dir: PathBuf,
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
-    place: tmux::Place,
+    mux: Mux,
 }
 
 /// The config that shapes a start or resume. It is a value the caller passes
@@ -184,7 +232,7 @@ impl Launch {
 pub enum SetupError {
     NotARepo(String),
     NoOriginHead(String),
-    TmuxMissing,
+    ProgramMissing(&'static str),
     Command(String),
 }
 
@@ -193,30 +241,66 @@ impl fmt::Display for SetupError {
         match self {
             SetupError::NotARepo(m) => write!(f, "dispatch must run inside a git repository: {m}"),
             SetupError::NoOriginHead(m) => write!(f, "cannot find the default branch of origin: {m}"),
-            SetupError::TmuxMissing => f.write_str("tmux is not installed or not on PATH"),
+            SetupError::ProgramMissing(program) => write!(f, "{program} is not installed or not on PATH"),
             SetupError::Command(m) => f.write_str(m),
         }
     }
 }
 
+fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> Result<(), SetupError> {
+    crate::proc::run(program, [version_flag], cwd).map(|_| ()).map_err(|e| match e {
+        crate::proc::ProcError::Spawn { .. } => SetupError::ProgramMissing(program),
+        other => SetupError::Command(other.to_string()),
+    })
+}
+
+#[derive(Clone, Debug, Default)]
+struct MuxEnv {
+    herdr_env: Option<String>,
+    herdr_workspace: Option<String>,
+    tmux: Option<String>,
+}
+
+impl MuxEnv {
+    fn from_process() -> MuxEnv {
+        let var = |name| std::env::var(name).ok();
+        MuxEnv { herdr_env: var("HERDR_ENV"), herdr_workspace: var("HERDR_WORKSPACE_ID"), tmux: var("TMUX") }
+    }
+}
+
+fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) -> Result<Mux, SetupError> {
+    let inside_herdr = env.herdr_env.as_deref() == Some("1");
+    let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
+    if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
+        require("herdr", "--version", repo_root)?;
+        let place = herdr::Place::detect(env.herdr_env.as_deref(), env.herdr_workspace.as_deref(), &dir_name)
+            .map_err(SetupError::Command)?;
+        return Ok(Mux::Herdr(place));
+    }
+    require("tmux", "-V", repo_root)?;
+    let place = tmux::Place::detect(env.tmux.as_deref(), &dir_name).map_err(SetupError::Command)?;
+    Ok(Mux::Tmux(place))
+}
+
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
-    pub fn discover(cwd: &std::path::Path) -> Result<Workspace, SetupError> {
+    pub fn discover(cwd: &std::path::Path, multiplexer: Multiplexer) -> Result<Workspace, SetupError> {
         let git::RepoDirs { root: repo_root, common: git_common_dir } =
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
         let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
-        crate::proc::run("tmux", ["-V"], &repo_root).map_err(|e| match e {
-            crate::proc::ProcError::Spawn { .. } => SetupError::TmuxMissing,
-            other => SetupError::Command(other.to_string()),
-        })?;
-        let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
-        let place =
-            tmux::Place::detect(std::env::var("TMUX").ok().as_deref(), &dir_name).map_err(SetupError::Command)?;
-        Ok(Workspace { repo_root, git_common_dir, base, place })
+        let mux = detect_mux(multiplexer, &MuxEnv::from_process(), &repo_root)?;
+        Ok(Workspace { repo_root, git_common_dir, base, mux })
     }
 
     pub fn repo_root(&self) -> &std::path::Path {
         &self.repo_root
+    }
+
+    pub fn backend(&self) -> Backend {
+        match self.mux {
+            Mux::Tmux(_) => Backend::Tmux,
+            Mux::Herdr(_) => Backend::Herdr,
+        }
     }
 
     /// `origin/main`, for the dialog preview.
@@ -231,8 +315,12 @@ impl Workspace {
         Ok(join(&worktrees, &markers, &windows))
     }
 
-    fn read_world(&self) -> Result<(Vec<git::Worktree>, git::Markers, Vec<tmux::WindowObs>), String> {
-        Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, tmux::list_windows()?))
+    fn read_world(&self) -> Result<(Vec<git::Worktree>, git::Markers, Vec<WindowObs>), String> {
+        let windows = match &self.mux {
+            Mux::Tmux(_) => tmux::list_windows()?,
+            Mux::Herdr(_) => herdr::list_windows()?,
+        };
+        Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, windows))
     }
 
     fn observe_for_start(&self, req: &StartRequest) -> Result<StartObservation, String> {
@@ -250,7 +338,7 @@ impl Workspace {
         Layout {
             repo_root: self.repo_root.clone(),
             base: self.base.clone(),
-            hooks: launch.detect_waiting.then_some(WAITING_HOOKS),
+            hooks: self.mux.hooks(launch),
             claude: launch.claude.clone(),
         }
     }
@@ -263,7 +351,7 @@ impl Workspace {
         match plan_start(&obs, req, &self.layout(launch)).map_err(SessionError::Conflict)? {
             StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
             StartPlan::Steps(steps) => {
-                let warnings = self.run_steps(steps)?;
+                let warnings = self.run_steps(steps, req.issue)?;
                 let session = self.observe()?.remove(&req.issue).ok_or_else(|| {
                     SessionError::Command(format!("session for #{} is not visible after start", req.issue.0))
                 })?;
@@ -276,7 +364,7 @@ impl Workspace {
     /// from the local base. A failed exclude before `AddWorktree` is a warning
     /// too: the worktree only shows in `git status`. Any other failure stops
     /// the run, and the next `start` plans from whatever state exists.
-    fn run_steps(&self, steps: Vec<Step>) -> Result<Vec<String>, String> {
+    fn run_steps(&self, steps: Vec<Step>, issue: IssueNumber) -> Result<Vec<String>, String> {
         let mut warnings = Vec::new();
         for step in steps {
             match step {
@@ -289,15 +377,32 @@ impl Workspace {
                     if let Err(e) = git::ensure_excluded(&self.git_common_dir, rules::WORKTREES_EXCLUDE) {
                         warnings.push(format!("{} still shows in git status: {e}", rules::WORKTREES_DIR));
                     }
-                    git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
+                    match &self.mux {
+                        Mux::Tmux(_) => git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?,
+                        Mux::Herdr(place) => {
+                            herdr::create_worktree(place, &self.repo_root, &dir, &branch, from.as_deref(), issue)?;
+                        }
+                    }
                 }
                 Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
-                Step::OpenWindow { dir, name, argv } => {
-                    tmux::open_window(&self.place, &dir, &name, &argv)?;
-                }
+                Step::OpenWindow { dir, name, argv } => self.open_window(&dir, &name, issue, &argv)?,
             }
         }
         Ok(warnings)
+    }
+
+    fn open_window(&self, dir: &WorktreePath, name: &str, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
+        match &self.mux {
+            Mux::Tmux(place) => tmux::open_window(place, dir, name, argv).map(|_| ()),
+            Mux::Herdr(place) => herdr::open_window(
+                place,
+                &self.repo_root,
+                dir,
+                issue,
+                argv,
+                &herdr::script_file(&self.git_common_dir, issue),
+            ),
+        }
     }
 
     /// Runs `claude --continue` for an exited session: `respawn-window -k` when
@@ -308,15 +413,16 @@ impl Workspace {
         let Some(session) = self.observe()?.remove(&issue) else {
             return Err(SessionError::Command(format!("no session for #{}", issue.0)));
         };
-        let hooks = launch.detect_waiting.then_some(WAITING_HOOKS);
-        let argv = launch.claude.argv(&rules::continue_args(hooks));
+        let argv = launch.claude.argv(&rules::continue_args(self.mux.hooks(launch)));
         match &session.window {
             Some(w) if w.alive => Ok(()),
-            Some(w) => Ok(tmux::respawn(&w.id, &session.worktree, &argv)?),
-            None => {
-                tmux::open_window(&self.place, &session.worktree, &format!("#{}", issue.0), &argv)?;
-                Ok(())
-            }
+            Some(w) => match &w.id {
+                WindowId::Tmux(id) => Ok(tmux::respawn(id, &session.worktree, &argv)?),
+                WindowId::Herdr(pane) => {
+                    Ok(herdr::launch(pane, &argv, &herdr::script_file(&self.git_common_dir, issue))?)
+                }
+            },
+            None => Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?),
         }
     }
 
@@ -324,7 +430,8 @@ impl Workspace {
     /// already gone counts as success.
     pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(w) => Ok(tmux::kill_window(&w.id)?),
+            Some(Window { id: WindowId::Tmux(id), .. }) => Ok(tmux::kill_window(&id)?),
+            Some(Window { id: WindowId::Herdr(pane), .. }) => Ok(herdr::close_workspace(&pane.workspace)?),
             None => Ok(()),
         }
     }
@@ -334,7 +441,8 @@ impl Workspace {
     /// go nowhere.
     pub fn send(&self, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
         match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(w) if w.alive => Ok(tmux::send_line(&w.id, text)?),
+            Some(Window { id: WindowId::Tmux(id), alive: true, .. }) => Ok(tmux::send_line(&id, text)?),
+            Some(Window { id: WindowId::Herdr(pane), alive: true, .. }) => Ok(herdr::send_line(&pane, text)?),
             _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
         }
     }
@@ -343,22 +451,36 @@ impl Workspace {
     /// `-e`, so no escape codes reach the UI). Works on dead panes too.
     #[expect(clippy::unused_self, reason = "keeps every session operation a `Workspace` method")]
     pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {
-        Ok(tmux::capture(window, lines)?)
-    }
-
-    pub fn attach_plan(&self, window: &WindowId) -> AttachPlan {
-        let id = window.as_str().to_string();
-        let session = self.place.session_target();
-        let select = ["tmux", "select-window", "-t", id.as_str()].map(String::from);
-        match &self.place {
-            tmux::Place::Inside { .. } => AttachPlan::Switch(
-                select.into_iter().chain([";", "switch-client", "-t", session.as_str()].map(String::from)).collect(),
-            ),
-            tmux::Place::Detached { .. } => AttachPlan::Suspend(
-                select.into_iter().chain([";", "attach-session", "-t", session.as_str()].map(String::from)).collect(),
-            ),
+        match window {
+            WindowId::Tmux(id) => Ok(tmux::capture(id, lines)?),
+            WindowId::Herdr(pane) => Ok(herdr::read_tail(pane, lines)?),
         }
     }
+
+    pub fn attach_plan(&self, window: &WindowId) -> Result<AttachPlan, SessionError> {
+        match (&self.mux, window) {
+            (Mux::Tmux(place), WindowId::Tmux(id)) => Ok(tmux_attach_plan(place, id)),
+            (Mux::Herdr(herdr::Place::Inside { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Switch(
+                ["herdr", "workspace", "focus", pane.workspace.as_str()].map(String::from).to_vec(),
+            )),
+            (Mux::Herdr(herdr::Place::Detached { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Suspend(
+                ["sh", "-c", "herdr workspace focus \"$1\" >/dev/null && exec herdr", "sh", pane.workspace.as_str()]
+                    .map(String::from)
+                    .to_vec(),
+            )),
+            _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
+        }
+    }
+}
+
+fn tmux_attach_plan(place: &tmux::Place, window: &tmux::WindowId) -> AttachPlan {
+    let session = place.session_target();
+    let select = ["tmux", "select-window", "-t", window.as_str()].map(String::from);
+    let (verb, plan): (&str, fn(Vec<String>) -> AttachPlan) = match place {
+        tmux::Place::Inside { .. } => ("switch-client", AttachPlan::Switch),
+        tmux::Place::Detached { .. } => ("attach-session", AttachPlan::Suspend),
+    };
+    plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
 }
 
 // ---- pure core -------------------------------------------------------------
@@ -370,7 +492,7 @@ impl Workspace {
 ///   invariant holds even after manual meddling.
 /// - A tagged window whose worktree is gone is ignored; it is not a session.
 /// - Two windows tagged for one worktree: a live one wins.
-fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[tmux::WindowObs]) -> Sessions {
+fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[WindowObs]) -> Sessions {
     let mut by_path: Vec<&git::Worktree> = worktrees.iter().collect();
     by_path.sort_by(|a, b| a.path.cmp(&b.path));
     let mut sessions = Sessions::new();
@@ -541,8 +663,8 @@ mod tests {
         rows.iter().map(|(b, n)| (br(b), IssueNumber(*n))).collect()
     }
 
-    fn win(id: &str, path: &str, dead: bool, waiting: bool) -> tmux::WindowObs {
-        tmux::WindowObs { id: WindowId::parse(id).expect("window id"), worktree: wp(path), dead, waiting }
+    fn win(id: &str, path: &str, dead: bool, waiting: bool) -> WindowObs {
+        WindowObs { id: WindowId::parse(id).expect("window id"), worktree: wp(path), dead, waiting }
     }
 
     // ---- join ----
@@ -614,7 +736,7 @@ mod tests {
     struct World {
         worktrees: Vec<git::Worktree>,
         markers: git::Markers,
-        windows: Vec<tmux::WindowObs>,
+        windows: Vec<WindowObs>,
         target_dir_exists: bool,
         branch_exists: bool,
     }
@@ -659,7 +781,7 @@ mod tests {
                     self.markers.insert(branch.clone(), *issue);
                 }
                 Step::OpenWindow { dir, .. } => {
-                    self.windows.push(tmux::WindowObs {
+                    self.windows.push(WindowObs {
                         id: WindowId::parse("@9").expect("id"),
                         worktree: dir.clone(),
                         dead: false,
@@ -910,7 +1032,7 @@ mod tests {
             repo_root: base.join("orbit"),
             git_common_dir: base.join("orbit").join(".git"),
             base: "origin/main".to_string(),
-            place: tmux::Place::Inside { session_id: "$1".to_string() },
+            mux: Mux::Tmux(tmux::Place::Inside { session_id: "$1".to_string() }),
         }
     }
 
@@ -1052,19 +1174,334 @@ mod tests {
         let mut ws = workspace(&base);
         let id = WindowId::parse("@4").expect("id");
         assert_eq!(
-            ws.attach_plan(&id),
+            ws.attach_plan(&id).expect("plan"),
             AttachPlan::Switch(
                 ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
             )
         );
-        ws.place = tmux::Place::Detached { session_name: "dispatch-orbit".to_string() };
+        ws.mux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
         assert_eq!(
-            ws.attach_plan(&id),
+            ws.attach_plan(&id).expect("plan"),
             AttachPlan::Suspend(
                 ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"]
                     .map(String::from)
                     .to_vec()
             )
         );
+    }
+
+    #[derive(Default)]
+    #[expect(clippy::struct_excessive_bools, reason = "one independent flag per fake world fact")]
+    struct HerdrSim {
+        added: bool,
+        marked: bool,
+        branch_exists: bool,
+        workspace_open: bool,
+        agent: bool,
+    }
+
+    fn install_herdr_world(base: PathBuf, sim: Rc<RefCell<HerdrSim>>) {
+        fake::install(move |call| {
+            let mut s = sim.borrow_mut();
+            let dir = base.join("orbit/.claude/worktrees/142");
+            if call.starts_with("git worktree list") {
+                let mut t = format!("worktree {}\nHEAD x\nbranch refs/heads/main\n\n", base.join("orbit").display());
+                if s.added {
+                    t = format!("{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display());
+                }
+                Ok(t)
+            } else if call.starts_with("git config --get-regexp") {
+                if s.marked {
+                    Ok("branch.fix/142-x.dispatch-issue 142\n".to_string())
+                } else {
+                    Err(fake::fail("git", 1, ""))
+                }
+            } else if call.starts_with("git show-ref") {
+                if s.added || s.branch_exists { Ok(String::new()) } else { Err(fake::fail("git", 1, "")) }
+            } else if call.starts_with("herdr workspace list") {
+                let rows = if s.workspace_open {
+                    serde_json::json!([{"workspace_id": "w5", "worktree": {"checkout_path": dir}}])
+                } else {
+                    serde_json::json!([])
+                };
+                Ok(serde_json::json!({"result": {"workspaces": rows}}).to_string())
+            } else if call.starts_with("herdr pane list") {
+                let agent = s.agent.then_some("claude");
+                let rows = if s.workspace_open {
+                    serde_json::json!([{"pane_id": "w5:p1", "workspace_id": "w5", "agent": agent, "agent_status": "idle"}])
+                } else {
+                    serde_json::json!([])
+                };
+                Ok(serde_json::json!({"result": {"panes": rows}}).to_string())
+            } else if call.starts_with("herdr worktree create") {
+                std::fs::create_dir_all(&dir).expect("mkdir");
+                s.added = true;
+                s.workspace_open = true;
+                Ok("{}".to_string())
+            } else if call.starts_with("herdr worktree open") {
+                s.workspace_open = true;
+                let opened =
+                    serde_json::json!({"workspace": {"workspace_id": "w5"}, "root_pane": {"pane_id": "w5:p1"}});
+                Ok(serde_json::json!({"result": opened}).to_string())
+            } else if call.starts_with("herdr pane run") {
+                s.agent = true;
+                Ok(String::new())
+            } else if call.starts_with("herdr pane get") {
+                Ok(serde_json::json!({"result": {"pane": {"agent": s.agent.then_some("claude")}}}).to_string())
+            } else if call.contains("dispatch-issue 142") {
+                s.marked = true;
+                Ok(String::new())
+            } else {
+                Ok(String::new())
+            }
+        });
+    }
+
+    fn herdr_workspace(base: &std::path::Path) -> Workspace {
+        let mut ws = workspace(base);
+        let place = herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside herdr");
+        ws.mux = Mux::Herdr(place);
+        ws
+    }
+
+    fn herdr_calls() -> Vec<String> {
+        fake::calls()
+            .into_iter()
+            .filter(|c| {
+                ["git fetch", "git worktree add", "git config branch", "herdr worktree", "herdr pane run"]
+                    .iter()
+                    .any(|p| c.starts_with(p))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn herdr_start_of_a_new_branch_creates_the_worktree_through_herdr_and_types_claude_into_its_pane() {
+        let base = temp_dir("herdr-start");
+        let ws = herdr_workspace(&base);
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(HerdrSim::default())));
+        let out = ws.start(&req(), &launch()).expect("start");
+        assert_eq!(out.session.state(), SessionState::NeedsYou, "herdr reports an idle agent as waiting");
+        let dir = base.join("orbit/.claude/worktrees/142");
+        assert_eq!(
+            herdr_calls(),
+            [
+                "git fetch origin main".to_string(),
+                format!(
+                    "herdr worktree create --workspace w1 --branch fix/142-x --base origin/main --path {} --label #142 --no-focus",
+                    dir.display()
+                ),
+                "git config branch.fix/142-x.dispatch-issue 142".to_string(),
+                format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display()),
+            ],
+            "the workspace that create opened is reused, and git does not add the worktree"
+        );
+        let exclude = base.join("orbit/.git/info/exclude");
+        assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
+        let before = fake::calls().len();
+        ws.start(&req(), &launch()).expect("second start");
+        assert!(
+            !fake::calls()[before..].iter().any(|c| c.starts_with("herdr pane run")),
+            "a second start must not type again"
+        );
+    }
+
+    #[test]
+    fn herdr_start_of_an_existing_branch_leaves_out_the_base() {
+        let base = temp_dir("herdr-existing");
+        let ws = herdr_workspace(&base);
+        let sim = HerdrSim { branch_exists: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.start(&req(), &launch()).expect("start");
+        let dir = base.join("orbit/.claude/worktrees/142");
+        assert_eq!(
+            herdr_calls()[0],
+            format!(
+                "herdr worktree create --workspace w1 --branch fix/142-x --path {} --label #142 --no-focus",
+                dir.display()
+            )
+        );
+    }
+
+    #[test]
+    fn herdr_start_writes_a_multi_line_prompt_into_the_launch_script() {
+        let base = temp_dir("herdr-prompt");
+        let ws = herdr_workspace(&base);
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(HerdrSim::default())));
+        let mut r = req();
+        r.prompt = "line one\nit's line two".to_string();
+        ws.start(&r, &launch()).expect("start");
+        let file = base.join("orbit/.git/dispatch/launch/142.sh");
+        let script = std::fs::read_to_string(&file).expect("script");
+        assert!(script.ends_with("'line one\nit'\\''s line two'\n"), "{script}");
+        let run = herdr_calls().pop().expect("a call");
+        assert_eq!(run, format!("herdr pane run w5:p1 '{}'", file.display()));
+    }
+
+    #[test]
+    fn herdr_start_reopens_a_closed_workspace_for_an_existing_worktree() {
+        let base = temp_dir("herdr-reopen");
+        let ws = herdr_workspace(&base);
+        let dir = base.join("orbit/.claude/worktrees/142");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let sim = HerdrSim { added: true, marked: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.start(&req(), &launch()).expect("start");
+        assert_eq!(
+            herdr_calls(),
+            [
+                format!("herdr worktree open --workspace w1 --path {} --label #142 --no-focus", dir.display()),
+                format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display()),
+            ]
+        );
+    }
+
+    #[test]
+    fn herdr_resume_runs_claude_continue_in_the_dead_pane_without_the_tmux_hooks() {
+        let base = temp_dir("herdr-resume");
+        let ws = herdr_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HerdrSim { added: true, marked: true, workspace_open: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        let mut l = launch();
+        l.detect_waiting = true;
+        ws.resume(IssueNumber(142), &l).expect("resume");
+        assert_eq!(
+            herdr_calls(),
+            [format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display())]
+        );
+        let script = std::fs::read_to_string(base.join("orbit/.git/dispatch/launch/142.sh")).expect("script");
+        assert_eq!(script, "#!/bin/sh\nexec 'claude' '--continue'\n");
+    }
+
+    #[test]
+    fn herdr_stop_closes_the_workspace_and_keeps_the_checkout() {
+        let base = temp_dir("herdr-stop");
+        let ws = herdr_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HerdrSim { added: true, marked: true, workspace_open: true, agent: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.stop(IssueNumber(142)).expect("stop");
+        let calls = fake::calls();
+        assert!(calls.iter().any(|c| c == "herdr workspace close w5"));
+        assert!(!calls.iter().any(|c| c.contains("worktree remove") || c.contains("--group")));
+        assert!(ws.stop(IssueNumber(999)).is_ok(), "no session is already stopped");
+    }
+
+    #[test]
+    fn herdr_send_and_tail_go_to_the_agent_pane() {
+        let base = temp_dir("herdr-send");
+        let ws = herdr_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HerdrSim { added: true, marked: true, workspace_open: true, agent: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        ws.send(IssueNumber(142), "merge it").expect("send");
+        let calls = fake::calls();
+        assert_eq!(
+            calls[calls.len() - 2..],
+            ["herdr pane send-text w5:p1 merge it", "herdr pane send-keys w5:p1 enter"]
+        );
+        let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+        let window = session.window.expect("window");
+        ws.tail(&window.id, 20).expect("tail");
+        assert_eq!(fake::calls().pop().expect("a call"), "herdr pane read w5:p1 --source recent-unwrapped --lines 20");
+    }
+
+    #[test]
+    fn herdr_send_refuses_a_pane_without_an_agent() {
+        let base = temp_dir("herdr-send-dead");
+        let ws = herdr_workspace(&base);
+        std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+        let sim = HerdrSim { added: true, marked: true, workspace_open: true, ..HerdrSim::default() };
+        install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
+        assert!(ws.send(IssueNumber(142), "hi").is_err());
+    }
+
+    #[test]
+    fn herdr_attach_focuses_the_workspace() {
+        let base = temp_dir("herdr-attach");
+        let ws = herdr_workspace(&base);
+        let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
+        assert_eq!(
+            ws.attach_plan(&id).expect("plan"),
+            AttachPlan::Switch(["herdr", "workspace", "focus", "w5"].map(String::from).to_vec())
+        );
+        assert!(ws.attach_plan(&WindowId::parse("@4").expect("id")).is_err(), "a tmux window is not ours");
+    }
+
+    #[test]
+    fn a_missing_multiplexer_is_named_in_the_setup_error() {
+        assert_eq!(SetupError::ProgramMissing("herdr").to_string(), "herdr is not installed or not on PATH");
+        assert!(herdr::Place::detect(Some("1"), None, "orbit").is_err());
+    }
+
+    #[test]
+    fn a_detached_herdr_attaches_by_focusing_the_workspace_then_opening_herdr() {
+        let base = temp_dir("herdr-attach-detached");
+        let mut ws = herdr_workspace(&base);
+        ws.mux = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+        fake::install(|_| Ok(String::new()));
+        let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
+        let script = r#"herdr workspace focus "$1" >/dev/null && exec herdr"#;
+        assert_eq!(
+            ws.attach_plan(&id).expect("plan"),
+            AttachPlan::Suspend(["sh", "-c", script, "sh", "w5"].map(String::from).to_vec())
+        );
+        assert!(fake::calls().is_empty(), "planning runs nothing");
+    }
+
+    fn env(herdr: bool, tmux: bool) -> MuxEnv {
+        MuxEnv {
+            herdr_env: herdr.then(|| "1".to_string()),
+            herdr_workspace: herdr.then(|| "w1".to_string()),
+            tmux: tmux.then(|| "/tmp/tmux-1000/default,1,0".to_string()),
+        }
+    }
+
+    #[test]
+    fn the_multiplexer_choice_picks_the_backend_from_the_environment() {
+        use Multiplexer::{Auto, Herdr, Tmux};
+        let inside_herdr = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+        let detached_herdr = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+        let inside_tmux = Mux::Tmux(tmux::Place::Inside { session_id: "$1".to_string() });
+        let detached_tmux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+        let table = [
+            (Auto, false, false, &detached_tmux),
+            (Auto, false, true, &inside_tmux),
+            (Auto, true, false, &inside_herdr),
+            (Auto, true, true, &inside_herdr),
+            (Tmux, false, false, &detached_tmux),
+            (Tmux, false, true, &inside_tmux),
+            (Tmux, true, false, &detached_tmux),
+            (Tmux, true, true, &inside_tmux),
+            (Herdr, false, false, &detached_herdr),
+            (Herdr, false, true, &detached_herdr),
+            (Herdr, true, false, &inside_herdr),
+            (Herdr, true, true, &inside_herdr),
+        ];
+        for (choice, in_herdr, in_tmux, want) in table {
+            fake::install(|call| {
+                Ok(if call.starts_with("tmux display-message") { "$1\n".to_string() } else { String::new() })
+            });
+            let got = detect_mux(choice, &env(in_herdr, in_tmux), std::path::Path::new("/w/orbit")).expect("detects");
+            assert_eq!(&got, want, "{choice:?} herdr={in_herdr} tmux={in_tmux}");
+        }
+    }
+
+    #[test]
+    fn the_chosen_multiplexer_must_be_installed() {
+        fake::install(|_| Err(fake::fail("x", 1, "")));
+        let spawn = || crate::proc::ProcError::Spawn {
+            program: "x".to_string(),
+            source: std::io::Error::from(std::io::ErrorKind::NotFound),
+        };
+        fake::install(move |call| if call.starts_with("herdr") { Err(spawn()) } else { Ok(String::new()) });
+        let err = detect_mux(Multiplexer::Herdr, &env(false, true), std::path::Path::new("/w/orbit"));
+        assert!(matches!(err, Err(SetupError::ProgramMissing("herdr"))));
+        assert!(detect_mux(Multiplexer::Tmux, &env(false, false), std::path::Path::new("/w/orbit")).is_ok());
+        assert!(matches!(
+            detect_mux(Multiplexer::Auto, &env(true, false), std::path::Path::new("/w/orbit")),
+            Err(SetupError::ProgramMissing("herdr"))
+        ));
     }
 }

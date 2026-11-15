@@ -14,7 +14,7 @@ use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
 use crate::markdown;
 use crate::rules;
-use crate::session::{Session, SessionState};
+use crate::session::{Backend, Session, SessionState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -491,10 +491,14 @@ fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
         .map(|a| if a.contains([' ', '\n', '"']) { format!("{:?}", one_line(&a)) } else { a })
         .collect();
     let base = if state.context.base.is_empty() { "origin/main" } else { state.context.base.as_str() };
-    vec![
-        format!("git worktree add {}/{} -b {} {base}", rules::WORKTREES_DIR, dialog.issue.0, branch.trim()),
-        shown.join(" "),
-    ]
+    let (dir, n, branch) = (rules::WORKTREES_DIR, dialog.issue.0, branch.trim());
+    let create = match state.context.backend {
+        Backend::Tmux => format!("git worktree add {dir}/{n} -b {branch} {base}"),
+        Backend::Herdr => {
+            format!("herdr worktree create --branch {branch} --base {base} --path {dir}/{n} --label #{n}")
+        }
+    };
+    vec![create, shown.join(" ")]
 }
 
 fn styled_input(source: &tui_textarea::TextArea<'static>, focused: bool) -> tui_textarea::TextArea<'static> {
@@ -666,10 +670,7 @@ fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &Settings
     let error = menu.edit.as_ref().and_then(|e| e.error.as_ref());
     lines.push(match error {
         Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
-        None if menu.at.new_sessions_only() => {
-            Line::from(span("Applies to sessions you start or resume after this change.", palette::DIM))
-        }
-        None => Line::raw(""),
+        None => menu.at.applies_note().map_or_else(|| Line::raw(""), |note| Line::from(span(note, palette::DIM))),
     });
     lines.push(Line::from(span(
         if menu.edit.is_some() { "enter save · esc cancel" } else { "j/k move · enter change · esc close" },
@@ -987,6 +988,18 @@ mod tests {
     }
 
     #[test]
+    fn dialog_previews_the_herdr_command_on_herdr() {
+        let mut state = full_state();
+        state.context.backend = Backend::Herdr;
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        let screen = text(&render(&state, 140, 30));
+        let want = "$ herdr worktree create --branch docs/2-docs --base origin/main --path .claude/worktree";
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+        assert!(!screen.contains("git worktree add"), "{screen}");
+    }
+
+    #[test]
     fn draw_returns_hits_for_tabs_and_visible_rows() {
         let state = full_state();
         let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
@@ -1148,8 +1161,9 @@ mod tests {
     fn the_settings_menu_shows_the_editor_and_its_error() {
         let mut state = full_state();
         send(&mut state, KeyCode::Char(','));
-        send(&mut state, KeyCode::Char('j'));
-        send(&mut state, KeyCode::Char('j'));
+        for _ in 0..3 {
+            send(&mut state, KeyCode::Char('j'));
+        }
         send(&mut state, KeyCode::Enter);
         for c in " 'oops".chars() {
             send(&mut state, KeyCode::Char(c));

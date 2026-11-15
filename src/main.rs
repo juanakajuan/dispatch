@@ -55,7 +55,7 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let config = config::load().map_err(|e| e.to_string())?;
     let cwd = std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
-    let ws = Workspace::discover(&cwd).map_err(|e| e.to_string())?;
+    let ws = Workspace::discover(&cwd, config.multiplexer).map_err(|e| e.to_string())?;
 
     let mut terminal = ratatui::init();
     // A crashed earlier run can leave the alternate screen dirty, and the
@@ -80,7 +80,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
     let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
     let over_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
     let open_with = if over_ssh { OpenWith::Clipboard } else { OpenWith::Browser };
-    let context = Context { repo_name, base: ws.base().to_string(), open_with };
+    let context = Context { repo_name, base: ws.base().to_string(), open_with, backend: ws.backend() };
     let (mut state, mut cmds) = app::init(Instant::now(), config, context);
     let mut pending: Vec<Msg> = Vec::new();
     loop {
@@ -219,7 +219,7 @@ fn spawn_read(ws: &Workspace, tx: &Sender<Msg>, job: impl FnOnce(&Workspace) -> 
 /// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
 /// inherited stdio and wait, then restore the TUI.
 fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, window: &session::WindowId) -> Result<(), String> {
-    match ws.attach_plan(window) {
+    match ws.attach_plan(window).map_err(|e| e.to_string())? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or("empty attach command")?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(|e| e.to_string())

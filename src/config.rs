@@ -12,7 +12,8 @@
 //! {
 //!   "detect_waiting": true,
 //!   "claude_command": ["claude"],
-//!   "icons": "unicode"
+//!   "icons": "unicode",
+//!   "multiplexer": "auto"
 //! }
 //! ```
 
@@ -107,6 +108,33 @@ impl ClaudeCommand {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Multiplexer {
+    #[default]
+    Auto,
+    Tmux,
+    Herdr,
+}
+
+impl Multiplexer {
+    pub fn next(self) -> Multiplexer {
+        match self {
+            Multiplexer::Auto => Multiplexer::Tmux,
+            Multiplexer::Tmux => Multiplexer::Herdr,
+            Multiplexer::Herdr => Multiplexer::Auto,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Multiplexer::Auto => "auto",
+            Multiplexer::Tmux => "tmux",
+            Multiplexer::Herdr => "herdr",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub github_refresh: Duration,
@@ -117,6 +145,7 @@ pub struct Config {
     pub claude_command: ClaudeCommand,
     /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
     pub icons: IconSet,
+    pub multiplexer: Multiplexer,
 }
 
 impl Default for Config {
@@ -126,6 +155,7 @@ impl Default for Config {
             detect_waiting: true,
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
             icons: IconSet::default(),
+            multiplexer: Multiplexer::default(),
         }
     }
 }
@@ -161,6 +191,7 @@ struct ConfigFile {
     #[serde(rename = "split")]
     _split: Option<serde::de::IgnoredAny>,
     icons: Option<IconSet>,
+    multiplexer: Option<Multiplexer>,
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -176,6 +207,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     }
     if let Some(icons) = file.icons {
         config.icons = icons;
+    }
+    if let Some(multiplexer) = file.multiplexer {
+        config.multiplexer = multiplexer;
     }
     Ok(config)
 }
@@ -219,10 +253,12 @@ pub fn load() -> Result<Config, ConfigError> {
 pub enum Setting {
     DetectWaiting,
     Icons,
+    Multiplexer,
     ClaudeCommand,
 }
 
-pub const SETTINGS: [Setting; 3] = [Setting::DetectWaiting, Setting::Icons, Setting::ClaudeCommand];
+pub const SETTINGS: [Setting; 4] =
+    [Setting::DetectWaiting, Setting::Icons, Setting::Multiplexer, Setting::ClaudeCommand];
 
 /// What `enter` does to a setting.
 #[derive(Debug, PartialEq, Eq)]
@@ -239,15 +275,18 @@ impl Setting {
         match self {
             Setting::DetectWaiting => "detect_waiting",
             Setting::Icons => "icons",
+            Setting::Multiplexer => "multiplexer",
             Setting::ClaudeCommand => "claude_command",
         }
     }
 
-    /// True when a running session keeps the value it started with.
-    pub fn new_sessions_only(self) -> bool {
+    pub fn applies_note(self) -> Option<&'static str> {
         match self {
-            Setting::DetectWaiting | Setting::ClaudeCommand => true,
-            Setting::Icons => false,
+            Setting::DetectWaiting | Setting::ClaudeCommand => {
+                Some("Applies to sessions you start or resume after this change.")
+            }
+            Setting::Multiplexer => Some("Applies the next time you start dispatch."),
+            Setting::Icons => None,
         }
     }
 
@@ -255,6 +294,7 @@ impl Setting {
         match self {
             Setting::DetectWaiting => (if config.detect_waiting { "on" } else { "off" }).to_string(),
             Setting::Icons => config.icons.label().to_string(),
+            Setting::Multiplexer => config.multiplexer.label().to_string(),
             Setting::ClaudeCommand => config.claude_command.words(),
         }
     }
@@ -264,6 +304,7 @@ impl Setting {
         match self {
             Setting::DetectWaiting => config.detect_waiting = !config.detect_waiting,
             Setting::Icons => config.icons = config.icons.next(),
+            Setting::Multiplexer => config.multiplexer = config.multiplexer.next(),
             Setting::ClaudeCommand => return Change::Edit(config.claude_command.words()),
         }
         Change::Applied
@@ -274,7 +315,7 @@ impl Setting {
     pub fn set_text(self, config: &mut Config, text: &str) -> Result<(), ConfigError> {
         match self {
             Setting::ClaudeCommand => config.claude_command = ClaudeCommand::from_words(text)?,
-            Setting::DetectWaiting | Setting::Icons => {}
+            Setting::DetectWaiting | Setting::Icons | Setting::Multiplexer => {}
         }
         Ok(())
     }
@@ -283,6 +324,7 @@ impl Setting {
         match self {
             Setting::DetectWaiting => json!(config.detect_waiting),
             Setting::Icons => json!(config.icons.label()),
+            Setting::Multiplexer => json!(config.multiplexer.label()),
             Setting::ClaudeCommand => json!(config.claude_command.argv(&[])),
         }
     }
@@ -456,6 +498,7 @@ mod tests {
         let config = Config {
             detect_waiting: false,
             icons: IconSet::NerdFont,
+            multiplexer: Multiplexer::Herdr,
             claude_command: ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid"),
             ..Config::default()
         };
@@ -499,6 +542,17 @@ mod tests {
         assert_eq!(config, Config::default(), "an error changes nothing");
         Setting::ClaudeCommand.set_text(&mut config, "my-claude --x").expect("valid");
         assert_eq!(Setting::ClaudeCommand.show(&config), "my-claude --x");
+    }
+
+    #[test]
+    fn multiplexer_labels_match_the_file_spelling() {
+        for choice in [Multiplexer::Auto, Multiplexer::Tmux, Multiplexer::Herdr] {
+            let parsed: Multiplexer = serde_json::from_str(&format!("\"{}\"", choice.label())).expect("parses");
+            assert_eq!(parsed, choice);
+            assert_eq!(choice.next().next().next(), choice);
+        }
+        assert_eq!(parse_str("{}").expect("loads").multiplexer, Multiplexer::Auto);
+        assert!(matches!(parse_str(r#"{"multiplexer":"screen"}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]

@@ -213,6 +213,7 @@ pub struct Context {
     /// `origin/main`
     pub base: String,
     pub open_with: OpenWith,
+    pub backend: crate::session::Backend,
 }
 
 /// What `o` does with a page. Over SSH, `gh --web` opens a browser on the
