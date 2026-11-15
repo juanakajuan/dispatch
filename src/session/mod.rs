@@ -463,10 +463,11 @@ impl Workspace {
             (Mux::Herdr(herdr::Place::Inside { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Switch(
                 ["herdr", "workspace", "focus", pane.workspace.as_str()].map(String::from).to_vec(),
             )),
-            (Mux::Herdr(herdr::Place::Detached { .. }), WindowId::Herdr(pane)) => {
-                herdr::focus(&pane.workspace)?;
-                Ok(AttachPlan::Suspend(vec!["herdr".to_string()]))
-            }
+            (Mux::Herdr(herdr::Place::Detached { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Suspend(
+                ["sh", "-c", "herdr workspace focus \"$1\" >/dev/null && exec herdr", "sh", pane.workspace.as_str()]
+                    .map(String::from)
+                    .to_vec(),
+            )),
             _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
         }
     }
@@ -1435,16 +1436,18 @@ mod tests {
     }
 
     #[test]
-    fn a_detached_herdr_focuses_the_workspace_then_opens_herdr_itself() {
+    fn a_detached_herdr_attaches_by_focusing_the_workspace_then_opening_herdr() {
         let base = temp_dir("herdr-attach-detached");
         let mut ws = herdr_workspace(&base);
         ws.mux = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
         fake::install(|_| Ok(String::new()));
         let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
-        assert_eq!(ws.attach_plan(&id).expect("plan"), AttachPlan::Suspend(vec!["herdr".to_string()]));
-        assert_eq!(fake::calls(), ["herdr workspace focus w5"]);
-        fake::install(|_| Err(fake::fail("herdr", 1, r#"{"error":{"code":"server_not_running"}}"#)));
-        assert!(ws.attach_plan(&id).is_err(), "no server, no attach");
+        let script = r#"herdr workspace focus "$1" >/dev/null && exec herdr"#;
+        assert_eq!(
+            ws.attach_plan(&id).expect("plan"),
+            AttachPlan::Suspend(["sh", "-c", script, "sh", "w5"].map(String::from).to_vec())
+        );
+        assert!(fake::calls().is_empty(), "planning runs nothing");
     }
 
     fn env(herdr: bool, tmux: bool) -> MuxEnv {

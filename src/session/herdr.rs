@@ -363,10 +363,6 @@ fn typed_path(path: &Path) -> Result<String, String> {
     Ok(format!("'{text}'"))
 }
 
-pub(super) fn focus(workspace: &WorkspaceId) -> Result<(), String> {
-    herdr(["workspace", "focus", workspace.as_str()]).map(|_| ())
-}
-
 /// The checkout and the branch stay.
 pub(super) fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
     match herdr_raw(["workspace", "close", workspace.as_str()]) {
