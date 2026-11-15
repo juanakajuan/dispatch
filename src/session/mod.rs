@@ -78,14 +78,6 @@ impl Mux {
     }
 }
 
-fn text_lines(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = text.lines().map(str::to_string).collect();
-    while out.last().is_some_and(|l| l.trim().is_empty()) {
-        out.pop();
-    }
-    out
-}
-
 /// One issue being worked in one worktree. Derived, never stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
@@ -473,17 +465,6 @@ impl Workspace {
             Some(Window { id: WindowId::Herdr(pane), alive: true, .. }) => Ok(herdr::send_line(&pane, text)?),
             Some(Window { id: WindowId::Hc(pane), alive: true, .. }) => Ok(hc::send_line(&pane.address, text)?),
             _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
-        }
-    }
-
-    /// Last `lines` lines of the pane as plain text (`capture-pane -p -J`, no
-    /// `-e`, so no escape codes reach the UI). Works on dead panes too.
-    #[expect(clippy::unused_self, reason = "keeps every session operation a `Workspace` method")]
-    pub fn tail(&self, window: &WindowId, lines: u16) -> Result<Vec<String>, SessionError> {
-        match window {
-            WindowId::Tmux(id) => Ok(tmux::capture(id, lines)?),
-            WindowId::Herdr(pane) => Ok(herdr::read_tail(pane, lines)?),
-            WindowId::Hc(pane) => Ok(hc::read_tail(&pane.address, lines)?),
         }
     }
 
@@ -1420,7 +1401,7 @@ mod tests {
     }
 
     #[test]
-    fn herdr_send_and_tail_go_to_the_agent_pane() {
+    fn herdr_send_goes_to_the_agent_pane() {
         let base = temp_dir("herdr-send");
         let ws = herdr_workspace(&base);
         std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
@@ -1432,10 +1413,6 @@ mod tests {
             calls[calls.len() - 2..],
             ["herdr pane send-text w5:p1 merge it", "herdr pane send-keys w5:p1 enter"]
         );
-        let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
-        let window = session.window.expect("window");
-        ws.tail(&window.id, 20).expect("tail");
-        assert_eq!(fake::calls().pop().expect("a call"), "herdr pane read w5:p1 --source recent-unwrapped --lines 20");
     }
 
     #[test]
@@ -1798,7 +1775,7 @@ mod tests {
     }
 
     #[test]
-    fn hc_send_and_tail_go_to_the_terminal() {
+    fn hc_send_goes_to_the_terminal() {
         let base = temp_dir("hc-send");
         let ws = hc_workspace(&base);
         std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
@@ -1806,9 +1783,6 @@ mod tests {
         install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
         ws.send(IssueNumber(142), "merge it").expect("send");
         assert_eq!(hc_calls(), ["hc send --force t4 merge it"]);
-        let tail = ws.tail(&WindowId::Hc(hc::Pane::new("t4", "sp4")), 20).expect("tail");
-        assert_eq!(tail, ["one", "two"], "trailing blank lines are gone");
-        assert_eq!(hc_calls()[1], "hc read t4 --lines 20");
     }
 
     #[test]
