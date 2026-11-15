@@ -1,5 +1,5 @@
-//! dispatch runs Claude by typing a command line into the workspace's pane,
-//! because `herdr agent start` refuses a multi-line prompt.
+//! dispatch runs Claude by typing a launcher script's path into the
+//! workspace's pane, because `herdr agent start` refuses a multi-line prompt.
 
 use super::{WindowId, WindowObs};
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
@@ -279,14 +279,14 @@ pub(super) fn open_window(
     dir: &WorktreePath,
     issue: IssueNumber,
     argv: &[String],
-    prompt_file: &Path,
+    script: &Path,
 ) -> Result<(), String> {
     let open = list_windows()?.into_iter().find(|o| o.worktree == *dir);
     let pane = match open {
         Some(WindowObs { id: WindowId::Herdr(pane), .. }) => pane,
         _ => open_worktree(&source(place, repo_root)?, dir, issue)?,
     };
-    launch(&pane, argv, prompt_file)
+    launch(&pane, argv, script)
 }
 
 fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, String> {
@@ -309,9 +309,9 @@ fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -
 const AGENT_WAIT: Duration = Duration::from_secs(10);
 const AGENT_POLL: Duration = Duration::from_millis(250);
 
-pub(super) fn launch(pane: &PaneRef, argv: &[String], prompt_file: &Path) -> Result<(), String> {
-    write_prompt(argv, prompt_file)?;
-    herdr(["pane", "run", pane.pane.as_str(), command_line(argv, prompt_file).as_str()])?;
+pub(super) fn launch(pane: &PaneRef, argv: &[String], script: &Path) -> Result<(), String> {
+    write_script(argv, script)?;
+    herdr(["pane", "run", pane.pane.as_str(), typed_path(script)?.as_str()])?;
     wait_for_agent(pane, AGENT_WAIT);
     Ok(())
 }
@@ -327,38 +327,40 @@ fn wait_for_agent(pane: &PaneRef, budget: Duration) {
     }
 }
 
-pub(super) fn prompt_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
-    git_common_dir.join("dispatch").join("prompts").join(format!("{}.txt", issue.0))
+pub(super) fn script_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
+    git_common_dir.join("dispatch").join("launch").join(format!("{}.sh", issue.0))
 }
 
-/// The shell would break a multi-line prompt that is typed as one line.
-fn write_prompt(argv: &[String], file: &Path) -> Result<(), String> {
-    let mut multi_line = argv.iter().filter(|a| a.contains('\n'));
-    let Some(text) = multi_line.next() else { return Ok(()) };
-    if multi_line.next().is_some() {
-        return Err("herdr can launch only one multi-line argument; fold the others into the prompt".to_string());
-    }
+fn quote(arg: &str) -> String {
+    format!("'{}'", arg.replace('\'', r"'\''"))
+}
+
+/// /bin/sh parses the script, so POSIX quoting is exact. Typing the same
+/// quotes into the pane's shell is not: fish reads `\` inside single quotes
+/// as an escape.
+fn script_text(argv: &[String]) -> String {
+    let words: Vec<String> = argv.iter().map(|a| quote(a)).collect();
+    format!("#!/bin/sh\nexec {}\n", words.join(" "))
+}
+
+fn write_script(argv: &[String], file: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
     let err = |e: std::io::Error| format!("cannot write {}: {e}", file.display());
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(err)?;
     }
-    std::fs::write(file, text).map_err(err)
+    std::fs::write(file, script_text(argv)).map_err(err)?;
+    std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).map_err(err)
 }
 
-fn command_line(argv: &[String], prompt_file: &Path) -> String {
-    let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
-    argv.iter()
-        .map(
-            |a| {
-                if a.contains('\n') {
-                    format!("\"$(cat {})\"", quote(&prompt_file.to_string_lossy()))
-                } else {
-                    quote(a)
-                }
-            },
-        )
-        .collect::<Vec<_>>()
-        .join(" ")
+/// Every shell reads a single-quoted word the same way unless it holds `'`,
+/// `\`, or a newline.
+fn typed_path(path: &Path) -> Result<String, String> {
+    let text = path.to_string_lossy();
+    if text.contains(['\'', '\\', '\n']) {
+        return Err(format!("cannot launch from {text}: the path has a quote, a backslash, or a newline"));
+    }
+    Ok(format!("'{text}'"))
 }
 
 pub(super) fn focus(workspace: &WorkspaceId) -> Result<(), String> {
@@ -581,29 +583,40 @@ mod tests {
         );
     }
 
+    fn strings<const N: usize>(items: [&str; N]) -> Vec<String> {
+        items.map(String::from).to_vec()
+    }
+
     #[test]
-    fn command_line_quotes_each_argument_and_reads_multi_line_ones_from_the_file() {
-        let file = Path::new("/g/dispatch/prompts/7.txt");
-        let argv = ["claude", "--permission-mode", "plan", "it's $HOME `x`;", "", "a\nb"].map(String::from);
+    fn the_script_quotes_each_argument_for_sh() {
         assert_eq!(
-            command_line(&argv, file),
-            r#"'claude' '--permission-mode' 'plan' 'it'\''s $HOME `x`;' '' "$(cat '/g/dispatch/prompts/7.txt')""#
+            script_text(&strings(["claude", "it's $HOME `x`;", "", "a\\b", "end\\", "l1\nl2"])),
+            "#!/bin/sh\nexec 'claude' 'it'\\''s $HOME `x`;' '' 'a\\b' 'end\\' 'l1\nl2'\n"
         );
     }
 
     #[test]
-    fn a_multi_line_argument_goes_to_the_prompt_file_and_a_second_one_is_refused() {
-        let file = prompt_file(&temp_dir("herdr-prompt"), IssueNumber(7));
-        write_prompt(&["claude".to_string(), "one\ntwo".to_string()], &file).expect("written");
-        assert_eq!(std::fs::read_to_string(&file).expect("read"), "one\ntwo");
-        write_prompt(&["claude".to_string(), "new\ntext".to_string()], &file).expect("overwritten");
-        assert_eq!(std::fs::read_to_string(&file).expect("read"), "new\ntext");
-        assert!(write_prompt(&["a\nb".to_string(), "c\nd".to_string()], &file).is_err());
+    fn a_typed_path_is_single_quoted_and_a_risky_one_is_refused() {
+        assert_eq!(typed_path(Path::new("/g/dispatch/launch/7.sh")).as_deref(), Ok("'/g/dispatch/launch/7.sh'"));
+        assert_eq!(typed_path(Path::new("/a b/$x;y/7.sh")).as_deref(), Ok("'/a b/$x;y/7.sh'"));
+        for bad in ["/it's/7.sh", "/a\\b/7.sh", "/a\nb/7.sh", "/end\\"] {
+            assert!(typed_path(Path::new(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
-    fn launch_types_the_line_then_waits_for_the_agent() {
-        let file = prompt_file(&temp_dir("herdr-launch"), IssueNumber(7));
+    fn a_script_is_written_executable_and_replaced_on_the_next_launch() {
+        use std::os::unix::fs::PermissionsExt;
+        let file = script_file(&temp_dir("herdr-script"), IssueNumber(7));
+        write_script(&strings(["claude", "one\ntwo"]), &file).expect("written");
+        write_script(&strings(["claude", "new"]), &file).expect("overwritten");
+        assert_eq!(std::fs::read_to_string(&file).expect("read"), "#!/bin/sh\nexec 'claude' 'new'\n");
+        assert_eq!(std::fs::metadata(&file).expect("meta").permissions().mode() & 0o777, 0o755);
+    }
+
+    #[test]
+    fn launch_types_the_script_path_then_waits_for_the_agent() {
+        let file = script_file(&temp_dir("herdr-launch"), IssueNumber(7));
         let polls = std::cell::Cell::new(0);
         fake::install(move |call| {
             Ok(if call.starts_with("herdr pane get") {
@@ -617,7 +630,11 @@ mod tests {
         launch(&pane(), &["claude".to_string(), "p q".to_string()], &file).expect("ok");
         assert_eq!(
             fake::calls(),
-            ["herdr pane run w3:p1 'claude' 'p q'", "herdr pane get w3:p1", "herdr pane get w3:p1"]
+            [
+                format!("herdr pane run w3:p1 '{}'", file.display()),
+                "herdr pane get w3:p1".into(),
+                "herdr pane get w3:p1".into()
+            ]
         );
     }
 

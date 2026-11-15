@@ -400,7 +400,7 @@ impl Workspace {
                 dir,
                 issue,
                 argv,
-                &herdr::prompt_file(&self.git_common_dir, issue),
+                &herdr::script_file(&self.git_common_dir, issue),
             ),
         }
     }
@@ -419,7 +419,7 @@ impl Workspace {
             Some(w) => match &w.id {
                 WindowId::Tmux(id) => Ok(tmux::respawn(id, &session.worktree, &argv)?),
                 WindowId::Herdr(pane) => {
-                    Ok(herdr::launch(pane, &argv, &herdr::prompt_file(&self.git_common_dir, issue))?)
+                    Ok(herdr::launch(pane, &argv, &herdr::script_file(&self.git_common_dir, issue))?)
                 }
             },
             None => Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?),
@@ -1291,7 +1291,7 @@ mod tests {
                     dir.display()
                 ),
                 "git config branch.fix/142-x.dispatch-issue 142".to_string(),
-                "herdr pane run w5:p1 'claude' 'p'".to_string(),
+                format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display()),
             ],
             "the workspace that create opened is reused, and git does not add the worktree"
         );
@@ -1323,17 +1323,18 @@ mod tests {
     }
 
     #[test]
-    fn herdr_start_passes_a_multi_line_prompt_through_a_file() {
+    fn herdr_start_writes_a_multi_line_prompt_into_the_launch_script() {
         let base = temp_dir("herdr-prompt");
         let ws = herdr_workspace(&base);
         install_herdr_world(base.clone(), Rc::new(RefCell::new(HerdrSim::default())));
         let mut r = req();
         r.prompt = "line one\nit's line two".to_string();
         ws.start(&r, &launch()).expect("start");
-        let file = base.join("orbit/.git/dispatch/prompts/142.txt");
-        assert_eq!(std::fs::read_to_string(&file).expect("prompt file"), "line one\nit's line two");
+        let file = base.join("orbit/.git/dispatch/launch/142.sh");
+        let script = std::fs::read_to_string(&file).expect("script");
+        assert!(script.ends_with("'line one\nit'\\''s line two'\n"), "{script}");
         let run = herdr_calls().pop().expect("a call");
-        assert_eq!(run, format!("herdr pane run w5:p1 'claude' \"$(cat '{}')\"", file.display()));
+        assert_eq!(run, format!("herdr pane run w5:p1 '{}'", file.display()));
     }
 
     #[test]
@@ -1349,7 +1350,7 @@ mod tests {
             herdr_calls(),
             [
                 format!("herdr worktree open --workspace w1 --path {} --label #142 --no-focus", dir.display()),
-                "herdr pane run w5:p1 'claude' 'p'".to_string(),
+                format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display()),
             ]
         );
     }
@@ -1364,7 +1365,12 @@ mod tests {
         let mut l = launch();
         l.detect_waiting = true;
         ws.resume(IssueNumber(142), &l).expect("resume");
-        assert_eq!(herdr_calls(), ["herdr pane run w5:p1 'claude' '--continue'"]);
+        assert_eq!(
+            herdr_calls(),
+            [format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display())]
+        );
+        let script = std::fs::read_to_string(base.join("orbit/.git/dispatch/launch/142.sh")).expect("script");
+        assert_eq!(script, "#!/bin/sh\nexec 'claude' '--continue'\n");
     }
 
     #[test]
