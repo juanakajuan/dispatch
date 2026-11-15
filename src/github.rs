@@ -26,7 +26,7 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
             "--limit",
             "200",
             "--json",
-            "number,title,labels,author,createdAt,updatedAt,comments,body,url",
+            "number,title,labels,author,createdAt,updatedAt,comments,url",
         ],
         repo_root,
     )
@@ -136,7 +136,6 @@ fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
                 labels: w.labels.into_iter().map(|l| l.name).collect(),
                 author: login(w.author),
                 comment_count: w.comments.len(),
-                body: w.body,
                 url: w.url,
             })
         })
@@ -240,7 +239,6 @@ struct WireIssue {
     created_at: String,
     updated_at: String,
     comments: Vec<serde::de::IgnoredAny>,
-    body: String,
     url: String,
 }
 

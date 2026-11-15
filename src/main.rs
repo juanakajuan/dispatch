@@ -6,7 +6,7 @@
 //!   reader of crossterm events. There is no input thread, because a thread
 //!   blocked in `event::read` would steal keys from `tmux attach` while the
 //!   TUI is suspended.
-//! - Each read job (`gh`, observe, tail) runs on its own short-lived
+//! - Each read job (`gh`, observe) runs on its own short-lived
 //!   `std::thread`, with an owned clone of the immutable `Workspace`, and sends
 //!   exactly one `Msg` back on an mpsc channel. `Inflight` caps it at one job
 //!   per kind. Start, stop, resume, send, merge, and config saves go through one serial
@@ -22,7 +22,6 @@ mod config;
 mod domain;
 mod github;
 mod glyphs;
-mod markdown;
 mod merge;
 mod proc;
 mod rules;
@@ -199,10 +198,6 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         Job::FetchPageUrl(target) => spawn_read(ws, tx, move |ws| Msg::PageUrl {
             target,
             result: github::page_url(ws.repo_root(), target).map_err(|e| e.to_string()),
-        }),
-        Job::Tail(id) => spawn_read(ws, tx, move |ws| {
-            let result = ws.tail(&id, app::TAIL_LINES).map_err(|e| e.to_string());
-            Msg::Tail { window: id, result }
         }),
     }
 }

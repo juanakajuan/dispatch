@@ -215,12 +215,6 @@ pub(super) fn send_line(address: &Address, text: &str) -> Result<(), String> {
     hc(["send", "--force", address.as_str(), text]).map(|_| ())
 }
 
-pub(super) fn read_tail(address: &Address, lines: u16) -> Result<Vec<String>, String> {
-    let n = lines.to_string();
-    let text = hc(["read", address.as_str(), "--lines", n.as_str()])?;
-    Ok(super::text_lines(&text))
-}
-
 pub(super) fn attach_plan(place: Place, pane: &Pane) -> AttachPlan {
     match place {
         Place::App => AttachPlan::Switch(

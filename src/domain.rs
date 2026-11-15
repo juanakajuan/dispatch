@@ -123,7 +123,6 @@ pub struct Issue {
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
     pub comment_count: usize,
-    pub body: String,
     pub url: String,
 }
 

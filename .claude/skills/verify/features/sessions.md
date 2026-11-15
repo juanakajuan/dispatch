@@ -1,11 +1,10 @@
 # Sessions
 
-The Sessions tab lists each session that dispatch started, with its state, branch, worktree, linked PR, and the last lines of the Claude pane. From any tab a user can attach to a session, stop it, or resume an exited one. dispatch keeps no state file: it reads sessions from git and tmux each time.
+The Sessions tab lists each session that dispatch started, with its state. From any tab a user can attach to a session, stop it, or resume an exited one. dispatch keeps no state file: it reads sessions from git and tmux each time.
 
 ## Sub-features
 
-- `sessions-state` shows `● running`, `▲ needs you`, or `○ exited` as the row glyph and in the details, and the counts on header line 6: `▲ N needs you   ● N working   ○ N exited`.
-- `sessions-tail` shows the last lines of the Claude pane under `output ─` in the details (`v`).
+- `sessions-state` shows `● running`, `▲ needs you`, or `○ exited` as the row glyph, and the counts on header line 6: `▲ N needs you   ● N working   ○ N exited`.
 - `sessions-attach` moves the tmux client to the session window with `a` on any tab, or Enter on the Sessions tab.
 - `sessions-stop` kills the window with `x` on a live session. The worktree and the branch stay. On an exited session, `x` shows `No running session here.`
 - `sessions-resume` runs `claude --continue` in the worktree with `a` (or Enter on the Sessions tab) on an exited session. The key bar shows `a to resume`. A missing window (after `x`) gets a new `#N` window. A dead pane (after the agent exits) is respawned in the same window.
@@ -24,8 +23,8 @@ Preconditions:
 - A run is up and doctor shows no `FAIL`.
 - A session for issue `#N` exists. Make it with [Start a session](./start-session.md).
 
-- **State and tail.** Press `3`, then `v` for the details. Run `$V keys "$RUN" 3 v`, `$V wait "$RUN" '── #N ─'`, and `$V wait "$RUN" 'FAKE-CLAUDE waiting'`. The details show `state    ▲ needs you`, `branch`, `worktree …/.claude/worktrees/N`, and under `output ─` the fake claude lines. The worktree path is cut from the left with `…` when it is too wide, so match `worktree .*\.claude/worktrees/N`. The key bar shows `enter to attach · a to attach · x to stop`. Without `v`, there is no `output ─` and the waits time out. Run `$V shot "$RUN" sessions-tab`.
-- **Input.** Type a line into the session window, as a user does after attach. Run `$V tmux "$RUN" send-keys -t '#N' 'hello' Enter`, `$V wait "$RUN" 'FAKE-CLAUDE got: hello'`, and `$V wait "$RUN" 'state +▲ needs you'`. `claude-calls.log` gets `hook UserPromptSubmit`, `got: hello`, and `hook Stop`. Do not wait for `● running` here: the fake claude is busy for 1 s, and dispatch reads the state every 2 s, so it often never shows. See **Resume** for a reliable `● running`.
+- **State.** Press `3`. Run `$V keys "$RUN" 3` and `$V wait "$RUN" '▲ 1 needs you'`. The row shows `▲ #N`. The key bar shows `enter to attach · a to attach · x to stop`. Run `$V shot "$RUN" sessions-tab`.
+- **Input.** Type a line into the session window, as a user does after attach. Run `$V tmux "$RUN" send-keys -t '#N' 'hello' Enter`. `claude-calls.log` gets `hook UserPromptSubmit`, `got: hello`, and `hook Stop`. Do not wait for `● running` here: the fake claude is busy for 1 s, and dispatch reads the state every 2 s, so it often never shows. See **Resume** for a reliable `● running`.
 - **Attach.** Attach a client, then press `a`. Run `$V client "$RUN"`, `$V tmux "$RUN" select-window -t drive:dispatch`, `$V keys "$RUN" a`, and `$V tmux "$RUN" display -p -t drive '#{window_name}'`. It prints `#N`. Go back with `$V tmux "$RUN" select-window -t drive:dispatch`.
 - **Stop.** Press `x`. Run `$V keys "$RUN" x` and `$V wait "$RUN" 'Stopped #N'` (`Stopping #N` comes first). The row shows `○ exited` and the key bar shows `a to resume`. `x` again shows `No running session here.` `$V state "$RUN" after-stop` shows the worktree and the marker, and no `#N` window.
 - **Resume.** Press `a` on the exited session. Run `$V keys "$RUN" a` and `$V wait "$RUN" 'Resumed #N\. Press a to attach\.'` (`Resuming #N with claude --continue` comes first). Then `$V wait "$RUN" '● running' 3`: dispatch reads the state at once after a resume, and the fake claude is busy for 2 s at start. Then the row shows `▲ needs you`. `claude-calls.log` has a new line whose argv starts with `--continue --settings`. `$V state` shows a new `#N` window id with the worktree tag.
