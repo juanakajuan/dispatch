@@ -78,11 +78,10 @@ where
         .output()
         .map_err(|source| ProcError::Spawn { program: program.to_string(), source })?;
     if !output.status.success() {
-        return Err(ProcError::Exit {
-            program: program.to_string(),
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-        });
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let detail =
+            if stderr.is_empty() { String::from_utf8_lossy(&output.stdout).trim().to_string() } else { stderr };
+        return Err(ProcError::Exit { program: program.to_string(), code: output.status.code(), stderr: detail });
     }
     String::from_utf8(output.stdout).map_err(|_| ProcError::NotUtf8 { program: program.to_string() })
 }
@@ -179,6 +178,12 @@ mod tests {
         assert_eq!(err.exit_code(), Some(3));
         assert_eq!(err.stderr(), "bad");
         assert!(err.to_string().contains("code 3: bad"));
+    }
+
+    #[test]
+    fn a_failure_with_only_stdout_reports_the_stdout() {
+        let err = run("sh", ["-c", "echo '{\"error\":\"no such space\"}'; exit 1"], Path::new("/")).expect_err("fails");
+        assert!(err.to_string().contains("no such space"), "{err}");
     }
 
     #[test]

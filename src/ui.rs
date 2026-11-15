@@ -493,7 +493,7 @@ fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
     let base = if state.context.base.is_empty() { "origin/main" } else { state.context.base.as_str() };
     let (dir, n, branch) = (rules::WORKTREES_DIR, dialog.issue.0, branch.trim());
     let create = match state.context.backend {
-        Backend::Tmux => format!("git worktree add {dir}/{n} -b {branch} {base}"),
+        Backend::Tmux | Backend::Hc => format!("git worktree add {dir}/{n} -b {branch} {base}"),
         Backend::Herdr => {
             format!("herdr worktree create --branch {branch} --base {base} --path {dir}/{n} --label #{n}")
         }
