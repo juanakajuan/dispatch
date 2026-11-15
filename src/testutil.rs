@@ -12,7 +12,6 @@ pub fn issue(number: u32, title: &str, labels: &[&str]) -> Issue {
         created_at: jiff::Timestamp::UNIX_EPOCH,
         updated_at: jiff::Timestamp::UNIX_EPOCH,
         comment_count: 0,
-        body: String::new(),
         url: String::new(),
     }
 }

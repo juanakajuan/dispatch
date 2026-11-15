@@ -527,7 +527,6 @@ mod tests {
             ),
             issue(2, "Docs", &["docs"]),
         ];
-        state.issues.items[0].body = "First line of the body.\n\n```\ncode block\n```".to_string();
         state.issues.status = FeedStatus::Fresh { at: Instant::now() };
         state.prs.items = vec![pr(10, "fix/3-x", &[3])];
         state.prs.status = FeedStatus::Fresh { at: Instant::now() };
