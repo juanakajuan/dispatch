@@ -417,7 +417,7 @@ fn push_text(line: &mut Vec<Span<'static>>, text: &str, style: Style) {
 
 /// Word-wraps styled spans to `width` cells. Each word keeps the style of the
 /// span it came from, and a word wider than a whole line is split by cell.
-fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
+pub(crate) fn wrap(spans: &[Span<'static>], width: usize) -> Vec<Vec<Span<'static>>> {
     let mut lines = Vec::new();
     let mut cur: Vec<Span<'static>> = Vec::new();
     let mut used = 0;

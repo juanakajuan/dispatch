@@ -501,6 +501,21 @@ fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
     vec![create, shown.join(" ")]
 }
 
+/// The "Runs" label and each preview command, word-wrapped to `width` cells.
+/// A wrapped row hangs under the start of its command.
+fn run_lines(state: &State, dialog: &StartDialog, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(span("  Runs", palette::DIM))];
+    for command in preview(state, dialog) {
+        let rows = markdown::wrap(&[span(command, palette::DIM)], width.saturating_sub(4).max(1));
+        for (i, row) in rows.into_iter().enumerate() {
+            let mut line = vec![span(if i == 0 { "  $ " } else { "    " }, palette::DIM)];
+            line.extend(row);
+            lines.push(Line::from(line));
+        }
+    }
+    lines
+}
+
 fn styled_input(source: &tui_textarea::TextArea<'static>, focused: bool) -> tui_textarea::TextArea<'static> {
     let mut input = source.clone();
     input.set_style(palette::PLAIN);
@@ -516,6 +531,11 @@ fn field_label(text: &str, focused: bool) -> Line<'static> {
         Line::from(span(format!("  {text}"), palette::DIM))
     }
 }
+
+/// Rows of the start dialog that are not the prompt or the "Runs" preview.
+const DIALOG_FIXED_ROWS: u16 = 9;
+/// The prompt input keeps at least this many rows when the preview is tall.
+const PROMPT_MIN_ROWS: u16 = 3;
 
 fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) {
     let width = screen.width.min(96);
@@ -535,6 +555,9 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    let run_lines = run_lines(state, d, usize::from(inner.width));
+    let room = inner.height.saturating_sub(DIALOG_FIXED_ROWS + PROMPT_MIN_ROWS);
+    let runs_h = u16::try_from(run_lines.len()).unwrap_or(u16::MAX).min(room);
     let [branch_l, branch, _, mode, _, prompt_l, prompt, _, runs, error] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -542,9 +565,9 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
         Constraint::Length(2),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Min(3),
+        Constraint::Min(PROMPT_MIN_ROWS),
         Constraint::Length(1),
-        Constraint::Length(3),
+        Constraint::Length(runs_h),
         Constraint::Length(1),
     ])
     .areas(inner);
@@ -569,10 +592,6 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
     frame.render_widget(Paragraph::new(field_label("Prompt", focus(DialogField::Prompt))), prompt_l);
     frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), indent(prompt));
 
-    let mut run_lines = vec![Line::from(span("  Runs", palette::DIM))];
-    let width = usize::from(runs.width).saturating_sub(4);
-    run_lines
-        .extend(preview(state, d).iter().map(|c| Line::from(span(format!("  $ {}", fit(c, width)), palette::DIM))));
     frame.render_widget(Paragraph::new(run_lines), runs);
     if let Some(e) = &d.error {
         frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
@@ -967,24 +986,52 @@ mod tests {
         assert!(lines[rule + 2].contains("second line"));
     }
 
+    /// The commands in the dialog's "Runs" preview, with wrapped rows joined.
+    /// Only the cells inside the dialog border are read.
+    fn previewed_commands(screen: &str) -> Vec<String> {
+        let rows: Vec<Vec<char>> =
+            screen.lines().skip_while(|l| !l.contains("  Runs")).map(|l| l.chars().collect()).collect();
+        let label = rows.first().expect("runs label drawn");
+        let left = label.iter().position(|&c| c == '│').expect("dialog border");
+        let right = left + 1 + label[left + 1..].iter().position(|&c| c == '│').expect("dialog border");
+        let mut commands: Vec<String> = Vec::new();
+        for row in rows.iter().skip(1) {
+            let inside: String = row[left + 1..right].iter().collect();
+            let row = inside.trim();
+            if let Some(start) = row.strip_prefix("$ ") {
+                commands.push(start.to_string());
+            } else if let (Some(last), false) = (commands.last_mut(), row.is_empty()) {
+                last.push(' ');
+                last.push_str(row);
+            } else {
+                break;
+            }
+        }
+        commands
+    }
+
     #[test]
     fn dialog_shows_fields_and_the_exact_commands() {
         let mut state = full_state();
         send(&mut state, KeyCode::Char('j'));
         send(&mut state, KeyCode::Char('s'));
         let screen = text(&render(&state, 120, 30));
-        for want in [
-            "Start session for #2 Docs",
-            "Branch",
-            "docs/2-docs",
-            "Implement directly",
-            "Runs",
-            "$ git worktree add .claude/worktrees/2 -b docs/2-docs origin/main",
-            "claude \"Implement GitHub issue #2: Docs",
-            "ctrl-s to start",
-        ] {
+        for want in
+            ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "ctrl-s to start"]
+        {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
+        let prompt = "Implement GitHub issue #2: Docs Read the issue and its comments with `gh issue view 2 --comments`. \
+                      Add or update tests. Open a ready-for-review PR (not a draft) that closes #2 when the tests pass.";
+        assert_eq!(
+            previewed_commands(&screen),
+            [
+                "git worktree add .claude/worktrees/2 -b docs/2-docs origin/main".to_string(),
+                format!("claude {prompt:?}"),
+            ],
+            "the whole commands, end of the prompt included, in\n{screen}"
+        );
+        assert!(!screen.contains('…'), "no command is cut\n{screen}");
     }
 
     #[test]
@@ -993,10 +1040,26 @@ mod tests {
         state.context.backend = Backend::Herdr;
         send(&mut state, KeyCode::Char('j'));
         send(&mut state, KeyCode::Char('s'));
-        let screen = text(&render(&state, 140, 30));
-        let want = "$ herdr worktree create --branch docs/2-docs --base origin/main --path .claude/worktree";
-        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+        let screen = text(&render(&state, 120, 30));
+        let want =
+            "herdr worktree create --branch docs/2-docs --base origin/main --path .claude/worktrees/2 --label #2";
+        assert_eq!(previewed_commands(&screen).first().map(String::as_str), Some(want), "{screen}");
         assert!(!screen.contains("git worktree add"), "{screen}");
+    }
+
+    #[test]
+    fn dialog_keeps_the_prompt_input_when_the_preview_is_taller_than_the_dialog() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('j'));
+        send(&mut state, KeyCode::Char('s'));
+        let Focus::Dialog(d) = &mut state.focus else { panic!("dialog open") };
+        d.prompt.insert_str("word ".repeat(400));
+        let screen = text(&render(&state, 120, 30));
+        let lines: Vec<&str> = screen.lines().collect();
+        let label = lines.iter().position(|l| l.contains("  Prompt  ")).expect("prompt label drawn");
+        let runs = lines.iter().position(|l| l.contains("  Runs")).expect("runs label drawn");
+        assert!(runs > label + usize::from(PROMPT_MIN_ROWS), "prompt input squeezed in\n{screen}");
+        assert!(screen.contains("$ claude"), "{screen}");
     }
 
     #[test]
