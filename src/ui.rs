@@ -5,7 +5,7 @@
 //! between two rules, and the footer keys. The dialog is a centered overlay.
 
 use crate::app::{
-    self, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, Key, KeyGroup, RowKey,
+    self, Action, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, Key, KeyGroup, RowKey,
     SettingsMenu, StartDialog, State, Tab,
 };
 use crate::config::{Config, SETTINGS};
@@ -472,20 +472,22 @@ fn draw_close(frame: &mut Frame, area: Rect, hits: &mut HitMap) {
 // ---- keybinds --------------------------------------------------------------
 
 /// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
-fn keybinds_lines() -> Vec<Line<'static>> {
+/// An entry line carries its binding's action; headings and blanks carry none.
+fn keybinds_lines() -> Vec<(Line<'static>, Option<Action>)> {
     let keys = |b: &Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
     let key_width = BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
     let mut lines = Vec::new();
     for group in KeyGroup::ALL {
         if !lines.is_empty() {
-            lines.push(Line::raw(""));
+            lines.push((Line::raw(""), None));
         }
-        lines.push(Line::from(span(group.title(), palette::HEADING)));
+        lines.push((Line::from(span(group.title(), palette::HEADING)), None));
         for b in BINDINGS.iter().filter(|b| b.group == group) {
-            lines.push(Line::from(vec![
+            let line = Line::from(vec![
                 span(format!("  {:key_width$}  ", keys(b)), palette::ACCENT),
                 span(b.desc, palette::PLAIN),
-            ]));
+            ]);
+            lines.push((line, Some(b.action)));
         }
     }
     lines
@@ -494,8 +496,8 @@ fn keybinds_lines() -> Vec<Line<'static>> {
 /// Draws the menu scrolled down by `scroll` lines, and returns how far it
 /// can scroll at this size.
 fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap) -> u16 {
-    let lines = keybinds_lines();
-    let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
+    let entries = keybinds_lines();
+    let wanted: u16 = entries.len().try_into().unwrap_or(u16::MAX);
     let width = screen.width.min(64);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
@@ -511,7 +513,17 @@ fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap
     frame.render_widget(block, area);
     draw_close(frame, area, hits);
     let max_scroll = wanted.saturating_sub(inner.height);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
+    let scroll = scroll.min(max_scroll);
+    for (row, (_, action)) in (0..).zip(&entries) {
+        let Some(action) = action else { continue };
+        let line = Rect::new(inner.x, (inner.y + row).saturating_sub(scroll), inner.width, 1);
+        let line = line.intersection(inner);
+        if row >= scroll && !line.is_empty() {
+            hits.targets.push((line, HitTarget::Binding(*action)));
+        }
+    }
+    let lines: Vec<Line<'static>> = entries.into_iter().map(|(line, _)| line).collect();
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
     max_scroll
 }
 
@@ -1162,7 +1174,7 @@ mod tests {
             assert_clickable(&state, &screen, needle, HitTarget::Key(key));
         }
         assert!(
-            state.hits.targets.iter().all(|(_, t)| matches!(t, HitTarget::Key(_))),
+            state.hits.targets.iter().all(|(_, t)| matches!(t, HitTarget::Key(_) | HitTarget::Binding(_))),
             "tabs and rows are not live under an overlay"
         );
 
@@ -1378,6 +1390,48 @@ mod tests {
         for want in ["j / down", "q / ctrl+c", "esc ", "j/k to scroll · esc to close"] {
             assert!(screen.contains(want), "missing {want:?} in\n{screen}");
         }
+    }
+
+    fn binding_row(state: &State, screen: &str, key: Key) -> Option<(u16, Option<HitTarget>)> {
+        let b = BINDINGS.iter().find(|b| b.keys.first() == Some(&key)).expect("binding");
+        let y = u16::try_from(screen.lines().position(|l| l.contains(b.desc))?).expect("y");
+        let hit = state.hits.at(40, y).map(|(_, t)| t);
+        Some((y, hit))
+    }
+
+    #[test]
+    fn each_visible_keybinds_entry_is_a_target_at_its_drawn_row() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        let screen = draw_into(&mut state, 100, 40);
+        let action = BINDINGS.iter().find(|b| b.keys.first() == Some(&Key::Char(','))).expect("binding").action;
+        let (_, hit) = binding_row(&state, &screen, Key::Char(',')).expect("the settings entry is drawn");
+        assert_eq!(hit, Some(HitTarget::Binding(action)));
+        let entries = state.hits.targets.iter().filter(|(_, t)| matches!(t, HitTarget::Binding(_))).count();
+        assert_eq!(entries, BINDINGS.len(), "one target per entry, none for headings");
+    }
+
+    #[test]
+    fn a_scrolled_out_keybinds_entry_has_no_target() {
+        let mut state = full_state();
+        send(&mut state, KeyCode::Char('?'));
+        draw_into(&mut state, 100, 16);
+        let max = state.hits.keybinds_max_scroll;
+        for _ in 0..u32::from(max) + 5 {
+            send(&mut state, KeyCode::Char('j'));
+        }
+        let screen = draw_into(&mut state, 100, 16);
+        let entries: Vec<_> =
+            state.hits.targets.iter().filter_map(|(r, t)| matches!(t, HitTarget::Binding(_)).then_some(r.y)).collect();
+        assert!(!entries.is_empty() && entries.len() < BINDINGS.len(), "only the visible entries are targets");
+        let first = BINDINGS.iter().find(|b| b.group == KeyGroup::ALL[0]).expect("first binding");
+        let first_key = *first.keys.first().expect("key");
+        assert!(!screen.contains(first.desc), "the first entry is scrolled out\n{screen}");
+        assert!(binding_row(&state, &screen, first_key).is_none());
+        let last = BINDINGS.last().expect("binding");
+        let (y, hit) = binding_row(&state, &screen, *last.keys.first().expect("key")).expect("the last entry shows");
+        assert_eq!(hit, Some(HitTarget::Binding(last.action)));
+        assert!(entries.contains(&y));
     }
 
     #[test]

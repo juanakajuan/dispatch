@@ -197,6 +197,8 @@ pub enum HitTarget {
     },
     /// Settings menu row.
     Setting(Setting),
+    /// Keybinds menu entry: close the menu and run the binding's action.
+    Binding(Action),
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -1332,6 +1334,12 @@ fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
             }
         }
         HitTarget::Setting(setting) => return click_setting(state, setting),
+        HitTarget::Binding(action) => {
+            if matches!(state.focus, Focus::Keybinds { .. }) {
+                state.focus = Focus::List;
+                return act(state, action, None);
+            }
+        }
     }
     Vec::new()
 }
@@ -1363,7 +1371,7 @@ fn click_dialog(dialog: &mut StartDialog, target: HitTarget, at: (u16, u16)) {
             let input = if field == DialogField::Branch { &mut dialog.branch } else { &mut dialog.prompt };
             input.move_cursor(tui_textarea::CursorMove::Jump(top.saturating_add(at.1), left.saturating_add(at.0)));
         }
-        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) | HitTarget::Setting(_) => {}
+        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) | HitTarget::Setting(_) | HitTarget::Binding(_) => {}
     }
 }
 
@@ -1939,6 +1947,22 @@ mod tests {
         let (mut state, now) = with_target(HitTarget::Key(Key::Char('S')));
         press(&mut state, click(0, 0, now));
         assert_eq!(state.sort.issues, IssueSort::default().next(), "the sort footer cycles the sort");
+    }
+
+    #[test]
+    fn clicking_a_keybinds_entry_closes_the_menu_and_runs_its_action() {
+        let (mut state, now) = app();
+        press(&mut state, key('?'));
+        state.hits.targets = vec![(Rect::new(0, 0, 10, 1), HitTarget::Binding(Action::Settings))];
+        press(&mut state, click(1, 0, now));
+        assert!(matches!(state.focus, Focus::Settings(_)), "the , entry opens settings");
+
+        let (mut state, now) = app();
+        press(&mut state, key('?'));
+        state.hits.targets = vec![(Rect::new(0, 0, 10, 1), HitTarget::Binding(Action::Refresh))];
+        let cmds = press(&mut state, click(1, 0, now));
+        assert!(matches!(state.focus, Focus::List));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "the r entry refreshes");
     }
 
     #[test]
