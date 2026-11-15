@@ -67,7 +67,7 @@ pub use agent::draw;
 /// The dialog or a menu, over the screen of either view.
 fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
     match &state.focus {
-        Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog),
+        Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog, hits),
         Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu),
         Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll),
         Focus::List | Focus::Filter => {}
@@ -344,11 +344,11 @@ fn field_label(text: &str, focused: bool) -> Line<'static> {
 }
 
 /// Rows of the start dialog that are not the prompt or the "Runs" preview.
-const DIALOG_FIXED_ROWS: u16 = 9;
+const DIALOG_FIXED_ROWS: u16 = 10;
 /// The prompt input keeps at least this many rows when the preview is tall.
 const PROMPT_MIN_ROWS: u16 = 3;
 
-fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) {
+fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog, hits: &mut HitMap) {
     let width = screen.width.min(96);
     let height = screen.height.min(28);
     let area = Rect::new(
@@ -369,7 +369,7 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
     let run_lines = run_lines(state, d, usize::from(inner.width));
     let room = inner.height.saturating_sub(DIALOG_FIXED_ROWS + PROMPT_MIN_ROWS);
     let runs_h = u16::try_from(run_lines.len()).unwrap_or(u16::MAX).min(room);
-    let [branch_l, branch, _, mode, _, prompt_l, prompt, _, runs, error] = Layout::vertical([
+    let [branch_l, branch, _, mode, _, prompt_l, prompt, _, runs, error, buttons] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -380,12 +380,15 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
         Constraint::Length(1),
         Constraint::Length(runs_h),
         Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .areas(inner);
     let indent = |r: Rect| Rect { x: r.x.saturating_add(2), width: r.width.saturating_sub(2), ..r };
     let focus = |f: DialogField| d.field == f;
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
     frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
+    hits.targets.push((branch_l, HitTarget::Field(DialogField::Branch)));
+    hits.targets.push(text_target(&d.branch, DialogField::Branch, indent(branch)));
 
     let icons = state.config.icons.icons();
     let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
@@ -396,17 +399,61 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
         }
     };
     let mut modes = vec![Span::raw("  ")];
-    modes.extend(radio(d.mode == Mode::PlanFirst, "Plan first, then wait for approval"));
+    modes.extend(radio(d.mode == Mode::PlanFirst, PLAN_FIRST));
     modes.push(Span::raw("    "));
-    modes.extend(radio(d.mode == Mode::Implement, "Implement directly"));
+    modes.extend(radio(d.mode == Mode::Implement, IMPLEMENT));
     frame.render_widget(Paragraph::new(vec![field_label("Mode", focus(DialogField::Mode)), Line::from(modes)]), mode);
+    hits.targets.push((mode, HitTarget::Field(DialogField::Mode)));
+    let mut option_x = 2;
+    for (m, text) in [(Mode::PlanFirst, PLAN_FIRST), (Mode::Implement, IMPLEMENT)] {
+        let w = spans_width(&radio(d.mode == m, text));
+        let rect = Rect::new(mode.x.saturating_add(option_x), mode.y + 1, u16::try_from(w).unwrap_or(0), 1);
+        hits.targets.push((rect.intersection(mode), HitTarget::Mode(m)));
+        option_x = option_x.saturating_add(u16::try_from(w + 4).unwrap_or(0));
+    }
     frame.render_widget(Paragraph::new(field_label("Prompt", focus(DialogField::Prompt))), prompt_l);
     frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), indent(prompt));
+    hits.targets.push((prompt_l, HitTarget::Field(DialogField::Prompt)));
+    hits.targets.push(text_target(&d.prompt, DialogField::Prompt, indent(prompt)));
 
     frame.render_widget(Paragraph::new(run_lines), runs);
     if let Some(e) = &d.error {
         frame.render_widget(Paragraph::new(span(format!("  {e}"), palette::ERROR)), error);
     }
+    let (start, cancel) = (format!("[ {START_LABEL} ]"), format!("[ {CANCEL_LABEL} ]"));
+    let start_w = u16::try_from(cells(&start)).unwrap_or(0);
+    let cancel_w = u16::try_from(cells(&cancel)).unwrap_or(0);
+    let buttons_at = Rect { x: buttons.x.saturating_add(2), width: buttons.width.saturating_sub(2), ..buttons };
+    let start_rect = Rect::new(buttons_at.x, buttons.y, start_w, 1).intersection(buttons_at);
+    let cancel_rect = Rect::new(buttons_at.x + start_w + 2, buttons.y, cancel_w, 1).intersection(buttons_at);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            span(start, palette::ACTIVE),
+            Span::raw("  "),
+            span(cancel, palette::DIM),
+        ])),
+        buttons,
+    );
+    hits.targets.push((start_rect, HitTarget::Key(Key::Ctrl('s'))));
+    hits.targets.push((cancel_rect, HitTarget::Key(Key::Code(KeyCode::Esc))));
+}
+
+const PLAN_FIRST: &str = "Plan first, then wait for approval";
+const IMPLEMENT: &str = "Implement directly";
+const START_LABEL: &str = "Start";
+const CANCEL_LABEL: &str = "Cancel";
+
+/// A click target for a text input drawn in `rect`.
+fn text_target(input: &tui_textarea::TextArea<'static>, field: DialogField, rect: Rect) -> (Rect, HitTarget) {
+    // `styled_input` draws a clone whose scroll starts at 0. tui-textarea then
+    // scrolls only as far as keeps the cursor in view, which is this formula.
+    let (row, col) = input.cursor();
+    let scrolled = |cursor: usize, len: u16| {
+        let cursor = u16::try_from(cursor).unwrap_or(u16::MAX);
+        cursor.saturating_sub(len.saturating_sub(1))
+    };
+    (rect, HitTarget::Text { field, top: scrolled(row, rect.height), left: scrolled(col, rect.width) })
 }
 
 // ---- keybinds --------------------------------------------------------------
@@ -522,6 +569,7 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
     use ratatui::style::{Color, Modifier};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -1129,6 +1177,105 @@ mod tests {
         let screen = draw_into(&mut state, 100, 30);
         assert_clickable(&state, &screen, "enter to save", HitTarget::Key(Key::Code(KeyCode::Enter)));
         assert_clickable(&state, &screen, "esc to cancel", HitTarget::Key(Key::Code(KeyCode::Esc)));
+    }
+
+    fn click_at(state: &mut State, x: u16, y: u16) {
+        let ev = crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: KeyModifiers::NONE,
+        };
+        let _ = app::update(state, Msg::Mouse(ev, Instant::now()));
+    }
+
+    fn open_dialog(state: &mut State) {
+        send(state, KeyCode::Char('j'));
+        send(state, KeyCode::Char('s'));
+    }
+
+    #[test]
+    fn dialog_labels_radio_options_and_buttons_are_clickable() {
+        let mut state = full_state();
+        open_dialog(&mut state);
+        let screen = draw_into(&mut state, 120, 40);
+        for (needle, want) in [
+            ("Branch", HitTarget::Field(DialogField::Branch)),
+            ("Mode", HitTarget::Field(DialogField::Mode)),
+            ("Prompt", HitTarget::Field(DialogField::Prompt)),
+            ("Plan first, then wait for approval", HitTarget::Mode(Mode::PlanFirst)),
+            ("Implement directly", HitTarget::Mode(Mode::Implement)),
+            ("[ Start ]", HitTarget::Key(app::Key::Ctrl('s'))),
+            ("[ Cancel ]", HitTarget::Key(app::Key::Code(KeyCode::Esc))),
+        ] {
+            assert_clickable(&state, &screen, needle, want);
+        }
+    }
+
+    #[test]
+    fn clicking_the_drawn_dialog_changes_the_field_and_mode() {
+        let mut state = full_state();
+        open_dialog(&mut state);
+        let screen = draw_into(&mut state, 120, 40);
+        let (x, y) = find(&screen, "Plan first");
+        click_at(&mut state, x + 3, y);
+        let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
+        assert_eq!((d.mode, d.field), (Mode::PlanFirst, DialogField::Mode));
+        let (x, y) = find(&screen, "Prompt");
+        click_at(&mut state, x, y);
+        let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
+        assert_eq!(d.field, DialogField::Prompt);
+        let (x, y) = find(&screen, "[ Cancel ]");
+        click_at(&mut state, x + 2, y);
+        assert!(matches!(state.focus, Focus::List), "the Cancel button closes the dialog");
+    }
+
+    /// The cell under a click target's top-left corner.
+    fn first_cell(state: &State, buf: &Buffer, field: DialogField) -> (Rect, char) {
+        let (rect, _) = state
+            .hits
+            .targets
+            .iter()
+            .find(|(_, t)| matches!(t, HitTarget::Text { field: f, .. } if *f == field))
+            .expect("text target");
+        (*rect, buf[(rect.x, rect.y)].symbol().chars().next().expect("a symbol"))
+    }
+
+    #[test]
+    fn a_click_in_a_scrolled_prompt_lands_on_the_line_under_the_pointer() {
+        let mut state = full_state();
+        open_dialog(&mut state);
+        let Focus::Dialog(d) = &mut state.focus else { panic!("dialog open") };
+        d.prompt = tui_textarea::TextArea::new((0..40).map(|i| format!("{i:02} line")).collect());
+        d.prompt.move_cursor(tui_textarea::CursorMove::Bottom);
+        let buf = frame(&mut state, 120, 40);
+        let (rect, _) = first_cell(&state, &buf, DialogField::Prompt);
+        let first: usize = (0..2)
+            .map(|dx| buf[(rect.x + dx, rect.y)].symbol().to_string())
+            .collect::<String>()
+            .parse()
+            .expect("line number");
+        assert!(first > 0, "the prompt is scrolled down");
+        click_at(&mut state, rect.x + 3, rect.y + 1);
+        let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
+        assert_eq!((d.field, d.prompt.cursor()), (DialogField::Prompt, (first + 1, 3)));
+    }
+
+    #[test]
+    fn a_click_in_a_scrolled_branch_lands_on_the_character_under_the_pointer() {
+        let mut state = full_state();
+        open_dialog(&mut state);
+        let Focus::Dialog(d) = &mut state.focus else { panic!("dialog open") };
+        let alphabet: String = ('!'..='~').collect();
+        d.branch = tui_textarea::TextArea::new(vec![alphabet.clone()]);
+        d.branch.move_cursor(tui_textarea::CursorMove::End);
+        let buf = frame(&mut state, 120, 40);
+        let (rect, shown) = first_cell(&state, &buf, DialogField::Branch);
+        let first = alphabet.find(shown).expect("a character of the branch");
+        assert!(first > 0, "the branch is scrolled right");
+        click_at(&mut state, rect.x + 4, rect.y);
+        let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
+        assert_eq!(d.branch.cursor(), (0, first + 4));
     }
 
     #[test]

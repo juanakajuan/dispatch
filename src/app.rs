@@ -183,6 +183,18 @@ pub enum HitTarget {
     /// Press `Key` in the current focus: key bar entries, the `S sort` footer,
     /// footer pairs of overlays, overlay close controls, filter open and clear.
     Key(Key),
+    /// Start dialog: focus this field (label rows, mode row).
+    Field(DialogField),
+    /// Start dialog: select this mode (each radio option) and focus Mode.
+    Mode(Mode),
+    /// Start dialog text input. `top`/`left` are the textarea scroll offset at
+    /// draw time, so a click at (x, y) in the rect puts the cursor at
+    /// `(top + y - rect.y, left + x - rect.x)`.
+    Text {
+        field: DialogField,
+        top: u16,
+        left: u16,
+    },
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -1298,7 +1310,7 @@ fn press_key(state: &mut State, key: Key) -> Vec<Cmd> {
 }
 
 fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
-    let Some((_, target)) = state.hits.at(column, row) else { return Vec::new() };
+    let Some((rect, target)) = state.hits.at(column, row) else { return Vec::new() };
     let double = state.last_click.is_some_and(|(t, at)| t == target && now.duration_since(at) <= DOUBLE_CLICK);
     state.last_click = if double { None } else { Some((target, now)) };
     let in_list = matches!(state.focus, Focus::List);
@@ -1312,8 +1324,30 @@ fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
             }
         }
         HitTarget::Tab(_) | HitTarget::Row(_) => {}
+        HitTarget::Field(_) | HitTarget::Mode(_) | HitTarget::Text { .. } => {
+            if let Focus::Dialog(dialog) = &mut state.focus {
+                click_dialog(dialog, target, (column - rect.x, row - rect.y));
+            }
+        }
     }
     Vec::new()
+}
+
+/// A click inside the start dialog. `at` is the click's offset in the target's rect.
+fn click_dialog(dialog: &mut StartDialog, target: HitTarget, at: (u16, u16)) {
+    match target {
+        HitTarget::Field(field) => dialog.field = field,
+        HitTarget::Mode(mode) => {
+            dialog.mode = mode;
+            dialog.field = DialogField::Mode;
+        }
+        HitTarget::Text { field, top, left } => {
+            dialog.field = field;
+            let input = if field == DialogField::Branch { &mut dialog.branch } else { &mut dialog.prompt };
+            input.move_cursor(tui_textarea::CursorMove::Jump(top.saturating_add(at.1), left.saturating_add(at.0)));
+        }
+        HitTarget::Tab(_) | HitTarget::Row(_) | HitTarget::Key(_) => {}
+    }
 }
 
 fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
@@ -1935,6 +1969,86 @@ mod tests {
         assert!(press(&mut state, click(0, 0, now)).is_empty(), "one click only selects");
         let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
         assert!(matches!(cmds.as_slice(), [Cmd::Attach(id)] if id.as_str() == "@3"));
+    }
+
+    /// The start dialog for issue #3, with `targets` as the drawn hit map.
+    fn dialog_with(targets: Vec<(Rect, HitTarget)>) -> (State, Instant) {
+        let (mut state, now) = app();
+        press(&mut state, key('s'));
+        state.hits.targets = targets;
+        (state, now)
+    }
+
+    #[test]
+    fn clicking_a_label_focuses_its_field_and_a_radio_option_picks_its_mode() {
+        let (mut state, now) = dialog_with(vec![
+            (Rect::new(0, 0, 20, 1), HitTarget::Field(DialogField::Prompt)),
+            (Rect::new(0, 1, 20, 2), HitTarget::Field(DialogField::Mode)),
+            (Rect::new(0, 2, 10, 1), HitTarget::Mode(Mode::PlanFirst)),
+            (Rect::new(12, 2, 10, 1), HitTarget::Mode(Mode::Implement)),
+        ]);
+        press(&mut state, click(1, 0, now));
+        assert_eq!(dialog(&state).field, DialogField::Prompt);
+        press(&mut state, click(1, 1, now));
+        assert_eq!(dialog(&state).field, DialogField::Mode);
+        press(&mut state, code(KeyCode::Tab));
+        press(&mut state, click(13, 2, now));
+        assert_eq!((dialog(&state).mode, dialog(&state).field), (Mode::Implement, DialogField::Mode));
+        press(&mut state, click(2, 2, now));
+        assert_eq!(dialog(&state).mode, Mode::PlanFirst);
+    }
+
+    #[test]
+    fn clicking_a_text_input_focuses_it_and_puts_the_cursor_under_the_click() {
+        let target = HitTarget::Text { field: DialogField::Prompt, top: 2, left: 5 };
+        let (mut state, now) = dialog_with(vec![(Rect::new(10, 4, 30, 3), target)]);
+        let Focus::Dialog(d) = &mut state.focus else { panic!("dialog open") };
+        d.prompt = tui_textarea::TextArea::new((0..8).map(|i| format!("0123456789 line {i}")).collect());
+        press(&mut state, click(13, 5, now));
+        assert_eq!(dialog(&state).field, DialogField::Prompt);
+        assert_eq!(dialog(&state).prompt.cursor(), (3, 8), "row 2 + (5 - 4), col 5 + (13 - 10)");
+
+        press(&mut state, click(39, 6, now + Duration::from_secs(1)));
+        assert_eq!(dialog(&state).prompt.cursor(), (4, 17), "a click past the end of a line stops at its end");
+    }
+
+    #[test]
+    fn the_start_button_starts_and_the_cancel_button_closes() {
+        let buttons = vec![
+            (Rect::new(0, 0, 9, 1), HitTarget::Key(Key::Ctrl('s'))),
+            (Rect::new(11, 0, 10, 1), HitTarget::Key(Key::Code(KeyCode::Esc))),
+        ];
+        let (mut state, now) = dialog_with(buttons.clone());
+        let cmds = press(&mut state, click(2, 0, now));
+        assert_eq!(starts(&cmds).len(), 1);
+        assert!(matches!(state.focus, Focus::List));
+
+        let (mut state, now) = dialog_with(buttons);
+        let cmds = press(&mut state, click(12, 0, now));
+        assert!(cmds.is_empty() && matches!(state.focus, Focus::List), "cancel closes without a start");
+    }
+
+    #[test]
+    fn a_click_outside_the_dialog_keeps_it_open_with_its_text() {
+        let (mut state, now) = dialog_with(vec![(Rect::new(0, 0, 10, 1), HitTarget::Field(DialogField::Prompt))]);
+        press(&mut state, key('x'));
+        let typed = dialog(&state).branch.lines().join("");
+        press(&mut state, click(50, 20, now));
+        assert_eq!(dialog(&state).branch.lines().join(""), typed);
+        assert_eq!(dialog(&state).field, DialogField::Branch);
+    }
+
+    #[test]
+    fn list_targets_do_nothing_while_the_dialog_is_open() {
+        let (mut state, now) = dialog_with(vec![
+            (Rect::new(0, 0, 10, 1), HitTarget::Tab(Tab::Prs)),
+            (Rect::new(0, 1, 10, 1), HitTarget::Row(RowKey::Issue(IssueNumber(2)))),
+        ]);
+        press(&mut state, click(1, 0, now));
+        press(&mut state, click(1, 1, now));
+        press(&mut state, click(1, 1, now + Duration::from_millis(50)));
+        assert_eq!(state.tab, Tab::Issues);
+        assert_eq!(dialog(&state).issue, IssueNumber(3), "the same dialog is still open");
     }
 
     fn hit_state() -> (State, Instant) {
