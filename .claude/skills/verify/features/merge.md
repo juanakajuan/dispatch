@@ -5,33 +5,35 @@ A user presses `m` twice to merge a PR. The first press says what dispatch expec
 ## Sub-features
 
 - `merge-arm` shows the expectation on the first `m`, for example `Press m again to merge PR #P`.
-- `merge-cancel` disarms when any other key comes before the second `m`.
-- `merge-direct` runs `gh pr merge <P> --<method> --match-head-commit <sha>` for a PR whose merge state is `CLEAN` or `HAS_HOOKS`. If the PR reads back as merged, it stops the running or needs-you session on that branch. If the PR is still open, the toast is `PR #P is in the merge queue`.
-- `merge-handoff` sends the live session on the PR branch a prompt that names the problem and the merge command.
-- `merge-new-session` starts a session to fix a PR that has a problem (failing checks, conflict, behind, blocked by a rule, unstable) and no live session. It goes to the Sessions tab.
+- `merge-cancel` disarms when any other key comes before the second `m`. The arm has no timeout. Only the toast goes after 5 s.
+- `merge-rearm` asks once more when the fresh read changes the plan. If the first press expected a merge or an agent but the second press finds a problem with no live session, the second `m` shows `PR #P has … Press m again to start a session for #N that fixes it.`, and a third `m` starts it.
+- `merge-direct` runs `gh pr merge <P> --<method> --match-head-commit <sha>` for a PR whose merge state is `CLEAN` or `HAS_HOOKS`. The toast is `Merged PR #P (<method>)`. If the PR reads back as merged (or the read fails), it also stops the running or needs-you session on that branch: `Merged PR #P (<method>) and stopped #N's session`. If the PR is still open, the toast is `PR #P is in the merge queue`.
+- `merge-handoff` sends the live session on the PR branch a prompt that names the problem and the merge command. The second press shows `<problem> Asking #N's agent to fix it.`, then `Asked #N's agent to fix and merge its PR`.
+- `merge-new-session` starts a session to fix a PR that has a problem (failing checks, conflict, behind, blocked by a rule, unstable) and no live session. It goes to the Sessions tab. An exited session on the PR branch gives a new session for the same issue. Otherwise the session is for the first issue that the PR closes and that has no session. If the PR closes no issue: `PR #P closes no issue, so dispatch can not start a session for it.` If each closed issue has a session on another branch: `Each issue that PR #P closes already has a session on another branch.`
 - `merge-ready` handles a draft. The first `m` shows `PR #P is a draft. Press m again to mark it ready and merge it.` The second `m` runs `gh pr ready <P>`, reads the PR again, and plans from that. If the merge does not follow, the toast adds ` PR #P is now ready for review.`, because dispatch does not undo `gh pr ready`.
-- `merge-refuse` says why when checks run, the PR is not open, or GitHub has not decided. A PR that became a draft after the first `m` shows `PR #P is a draft now. Press m twice again to mark it ready and merge it.`
-- `merge-method` reads `git config dispatch.mergeMethod`, else the first method the repo allows.
+- `merge-refuse` says why when checks run, the PR is not open, or GitHub has not decided. Other refusals: `PR #P is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first.` and `PR #P is still a draft.` A refusal that only the fresh read finds still arms on the first press with `Press m again to merge PR #P`. A PR that became a draft after the first `m` shows `PR #P is a draft now. Press m twice again to mark it ready and merge it.`
+- `merge-method` reads `git config dispatch.mergeMethod`, else the first method the repo allows. A method the repo does not allow gives `dispatch.mergeMethod is X, but the repo allows only: …`.
 
 ## How to get to it (user POV)
 
 - On the Pull requests tab, select an open PR and press `m` twice.
-- On the Issues tab, select an issue that has a PR and press `m` twice.
+- On the Issues tab, select an issue that has a PR and press `m` twice. The issue uses the PR of its session, else its lead PR (merged before open before draft). An issue with a merged PR and an open PR gives `PR #<merged> is not open.`
 - On the Sessions tab, select a session that has a PR and press `m` twice.
+- The key bar shows `m to merge` only when the selected row has an open or draft PR. The `?` menu lists `m` under `Pull requests`.
 
 ## Driving it with verify.sh
 
 Preconditions:
 
 - A run is up without `--allow-merge`, and doctor shows no `FAIL`. The guard blocks `gh pr merge`, so no PR merges.
-- The Pull requests tab lists an open PR `#P` (state `open` in the detail pane), and the key bar shows `m merge`. Pick repos with the check command in [README.md](README.md). One repo seldom has both a `CLEAN` PR and a PR with a problem that closes an issue, so the direct merge can need a second run on another repo.
+- The Pull requests tab lists an open PR `#P` (state `open` in the detail pane), and the key bar shows `m to merge`. Pick repos with the check command in [README.md](README.md). One repo seldom has both a `CLEAN` PR and a PR with a problem that closes an issue, so the direct merge can need a second run on another repo.
 
 - **Arm.** Press `2`, select `#P`, press `m`. Run `$V keys "$RUN" 2`, move with `j`/`k`, then `$V keys "$RUN" m`. The message row shows `Press m again to merge PR #P`, or a problem sentence such as `PR #P has failing checks. Press m again to start a session for #N that fixes it.` The first press reads only the cached list: `gh-calls.log` gets no `gh pr view P`. Run `$V shot "$RUN" merge-armed`.
 - **Cancel.** Press `j` then `k`, then `m` once. The message row shows the first-press text again, not `Checking PR #P`. dispatch is now armed again.
-- **Direct merge (`CLEAN` PR).** After **Cancel**, press `m` one time (else press it twice). Run `$V keys "$RUN" m` and `$V wait "$RUN" 'blocked by dispatch verify guard' 15`. The message row shows `Checking PR #P`, then `Merge PR #P failed: gh failed with code 1: blocked by dispatch verify guard: gh pr merge P --<method> --match-head-commit <sha>` on two lines. `$RUN/evidence/gh-blocked.log` has `BLOCKED <time> gh pr merge P --<method> --match-head-commit <sha>`. `gh-calls.log` shows `gh pr view P` and `gh repo view` before it. Run `$V shot "$RUN" merge-blocked` at once.
-- **New session (PR with a problem, no session).** Select a PR whose detail pane shows a problem such as `✗ checks failing`, and that closes an issue `#N`. Press `m`. The message row says `PR #P has … Press m again to start a session for #N that fixes it.` Press `m` again. The message row shows `Checking PR #P`, then `PR #P has … Starting a session for #N to fix it.` dispatch goes to the Sessions tab and starts a session for `#N` on the PR branch. `$V state` shows the worktree `.claude/worktrees/N` on the PR head branch and the marker. The argv in `claude-calls.log` has `This worktree is on the branch of PR #P. Run \`gh pr checkout P\` …`.
-- **Handoff (PR with a problem, live session).** Stay on the Sessions tab with `#N` selected. Press `m`. The message row shows `Press m again to ask #N's agent to fix and merge it.` Press `m` again and `$V wait "$RUN" "Asked #N's agent to fix and merge its PR"`. `claude-calls.log` has `got: PR #P has … When the checks pass, merge it with \`gh pr merge P --<method>\`.`, and `$V window "$RUN" '#N'` shows `FAKE-CLAUDE got: PR #P …`.
-- **Not open.** Select a merged PR. The key bar has no `m merge`. Press `m`. The message row shows `PR #P is not open.`
+- **Direct merge (`CLEAN` PR).** After **Cancel**, press `m` one time (else press it twice). Run `$V keys "$RUN" m` and `$V wait "$RUN" 'blocked by dispatch verify guard' 15`. The message row shows `Checking PR #P`, then `Merge PR #P failed: gh failed with code 1: blocked by dispatch verify guard: gh pr merge P --<method> --match-head-commit <sha>`. `$RUN/evidence/gh-blocked.log` has `BLOCKED <time> gh pr merge P --<method> --match-head-commit <sha>`. `gh-calls.log` shows `gh pr view P` and `gh repo view` before it. Run `$V shot "$RUN" merge-blocked` at once.
+- **New session (PR with a problem, no session).** Select a PR whose row or details show a problem such as `✗ checks failing`, and that closes an issue `#N`. Press `m`. The message row says `PR #P has … Press m again to start a session for #N that fixes it.` Press `m` again. The message row shows `Checking PR #P`, then `PR #P has … Starting a session for #N to fix it.` dispatch goes to the Sessions tab and starts a session for `#N` on the PR branch. `$V state` shows the worktree `.claude/worktrees/N` on the PR head branch and the marker. The argv in `claude-calls.log` has `This worktree is on the branch of PR #P. Run \`gh pr checkout P\` …`.
+- **Handoff (PR with a problem, live session).** Stay on the Sessions tab with `#N` selected, or select `#P` on the PR tab. Press `m`. The message row shows `Press m again to ask #N's agent to fix and merge it.` Press `m` again and `$V wait "$RUN" "Asked #N's agent to fix and merge its PR"`. `claude-calls.log` has `got: PR #P has … When the checks pass, merge it with \`gh pr merge P --<method>\`.`, and `$V window "$RUN" '#N'` shows `FAKE-CLAUDE got: PR #P …`.
+- **Not open.** Select a merged PR. The key bar has no `m to merge`. Press `m`. The message row shows `PR #P is not open.`
 
 ## Gotchas
 

@@ -2,7 +2,7 @@
 # Drive the dispatch TUI in an isolated tmux server, for verification.
 #
 #   verify.sh build                      cargo build, print the binary path
-#   verify.sh up [--repo OWNER/NAME] [--size COLSxROWS] [--allow-merge]
+#   verify.sh up [--repo OWNER/NAME] [--size COLSxROWS] [--allow-merge] [--over-ssh]
 #                                        start a run, print RUN=<dir>
 #   verify.sh doctor RUN                 read-only health check of a run
 #   verify.sh keys RUN KEY...            tmux send-keys (Enter, Escape, C-s, Tab, BTab, j, ...)
@@ -36,8 +36,14 @@ load() {
   source "$RUN/run.env"
 }
 
+# Variables that make dispatch pick another multiplexer (herdr, the herdr app)
+# or the SSH copy path. The run never inherits them from the caller's shell.
+# TMUX and TMUX_PANE are stripped only from tmux clients: tmux sets them again in each pane.
+LEAKY_ENV=(HERDR_ENV HERDR_WORKSPACE_ID HC_TERMINAL_SOCKET HC_TERMINAL_ID HC_SCOPE SSH_CONNECTION SSH_TTY)
+clean_env() { local v a=(-u TMUX -u TMUX_PANE); for v in "${LEAKY_ENV[@]}"; do a+=(-u "$v"); done; env "${a[@]}" "$@"; }
+
 # Always the run's own server. -S beats $TMUX, so the user's server is never hit.
-t() { env -u TMUX -u TMUX_PANE tmux -S "$SOCK" "$@"; }
+t() { clean_env tmux -S "$SOCK" "$@"; }
 
 next_index() { printf '%02d' "$(( $(find "$RUN/evidence" -maxdepth 1 -name '[0-9][0-9]-*.txt' | wc -l) + 1 ))"; }
 
@@ -47,12 +53,13 @@ cmd_build() {
 }
 
 cmd_up() {
-  local repo="" size="160x45" allow_merge=0
+  local repo="" size="160x45" allow_merge=0 over_ssh=0
   while (($#)); do
     case "$1" in
       --repo) repo="$2"; shift 2 ;;
       --size) size="$2"; shift 2 ;;
       --allow-merge) allow_merge=1; shift ;;
+      --over-ssh) over_ssh=1; shift ;;
       *) die "unknown up option $1" ;;
     esac
   done
@@ -127,7 +134,7 @@ done
 EOF
   chmod +x "$RUN/bin/"{gh,browser,fake-claude}
 
-  jq -n --arg c "$RUN/bin/fake-claude" '{claude_command: [$c], detect_waiting: true}' >"$RUN/xdg/dispatch/config.json"
+  jq -n --arg c "$RUN/bin/fake-claude" '{claude_command: [$c], detect_waiting: true, multiplexer: "tmux"}' >"$RUN/xdg/dispatch/config.json"
 
   gh repo clone "$repo" "$CLONE" -- --depth 1 --quiet >&2
   # A clone of a fork gets an `upstream` remote that gh resolves by default, and
@@ -147,10 +154,12 @@ BIN=$RUN/bin/dispatch
 BIN_SRC=$bin_src
 BUILT_REV=$(git -C "$ROOT" rev-parse HEAD)$(git -C "$ROOT" diff --quiet HEAD -- src Cargo.toml Cargo.lock || echo -dirty)
 ALLOW_MERGE=$allow_merge
+OVER_SSH=$over_ssh
 EOF
 
   local cols="${size%x*}" rows="${size#*x}"
-  env -u TMUX -u TMUX_PANE \
+  local ssh_env=(); ((over_ssh)) && ssh_env=(SSH_CONNECTION="10.0.0.2 50000 10.0.0.1 22")
+  clean_env "${ssh_env[@]}" \
     PATH="$RUN/bin:$PATH" GH_BROWSER="$RUN/bin/browser" BROWSER="$RUN/bin/browser" \
     XDG_CONFIG_HOME="$RUN/xdg" TMUX_TMPDIR="$RUN/tmux" \
     tmux -S "$SOCK" -f /dev/null new-session -d -s drive -n dispatch -x "$cols" -y "$rows" -c "$CLONE" "$RUN/bin/dispatch"
@@ -197,6 +206,8 @@ cmd_doctor() {
   check "drive pane $PANE is alive" '[[ $(t display-message -p -t "$PANE" "#{pane_dead}" 2>/dev/null) == 0 ]]'
   check "pane runs this run's binary" '[[ $(realpath "/proc/$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)/exe" 2>/dev/null) == "$BIN" ]]'
   check "drive pane has the gh guard first on PATH" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^PATH=$RUN/bin:"'
+  check "drive pane has TMUX on this run's socket" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^TMUX=$SOCK,"'
+  check "drive pane has no herdr, herdr app, or unwanted SSH variables" '! tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -E "^(HERDR_|HC_|SSH_TTY=$( ((OVER_SSH)) || echo "|SSH_CONNECTION=" ))" -q'
   check "binary matches $BIN_SRC (no rebuild since up)" 'cmp -s "$BIN" "$BIN_SRC"'
   check "binary is not older than src/ (built at $BUILT_REV)" '[[ -z $(find "$ROOT/src" "$ROOT/Cargo.toml" -newer "$BIN_SRC" -print -quit) ]]'
   check "gh is logged in, as the drive server sees it" 't run-shell "gh auth status >/dev/null 2>&1 && echo GH_OK" 2>/dev/null | grep -q GH_OK'
@@ -204,10 +215,10 @@ cmd_doctor() {
   check "clone tracks every origin branch" '[[ $(git -C "$CLONE" config --get remote.origin.fetch) == "+refs/heads/*:refs/remotes/origin/*" ]]'
   check "gh in the clone resolves to $REPO (not a fork's parent)" '[[ $(cd "$CLONE" && gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null) == "$REPO" ]]'
   check "last GitHub fetch did not fail" '! screen_text 2>/dev/null | grep -q "refresh failed"'
-  check "tab row shows a fetch age (tabs 1 and 2 only)" 'screen_text 2>/dev/null | sed -n 1p | grep -Eq "updated [0-9]+[smh]? ago"'
-  echo "repo=$REPO built=$BUILT_REV allow_merge=$ALLOW_MERGE"
-  echo "--- screen top and message row"
-  screen_text 2>/dev/null | sed -n '1,2p;$p' || true
+  check "header shows a fetch age (tabs 1 and 2 only)" 'screen_text 2>/dev/null | sed -n 1,8p | grep -Eq " · updated [0-9]+[smh]? ago"'
+  echo "repo=$REPO built=$BUILT_REV allow_merge=$ALLOW_MERGE over_ssh=$OVER_SSH"
+  echo "--- tab row, repo and freshness, footer"
+  screen_text 2>/dev/null | sed -n '2p;5p;$p' || true
   ((ok))
 }
 
@@ -231,7 +242,7 @@ cmd_client() {
   if [[ -f $RUN/client.pgid ]] && kill -0 -- "-$(cat "$RUN/client.pgid")" 2>/dev/null; then
     echo "client already attached (pgid $(cat "$RUN/client.pgid"))"; return 0
   fi
-  setsid bash -c "sleep infinity | script -qfec 'env -u TMUX tmux -S $SOCK attach -t drive:dispatch' /dev/null >/dev/null 2>&1" &
+  setsid bash -c "sleep infinity | script -qfec 'env -u TMUX -u SSH_CONNECTION -u SSH_TTY tmux -S $SOCK attach -t drive:dispatch' /dev/null >/dev/null 2>&1" &
   echo $! >"$RUN/client.pgid"
   local end=$((SECONDS + 5))
   until [[ -n $(t list-clients 2>/dev/null) ]]; do ((SECONDS < end)) || die "client did not attach"; sleep 0.2; done
@@ -254,7 +265,8 @@ cmd_down() {
 # the gh guard is lost.
 cmd_restart() {
   load "$1"
-  t respawn-pane -k -t "$PANE" env "$(t show-environment -g PATH)" "$BIN"
+  local ssh_env=(); [[ ${OVER_SSH:-0} == 1 ]] && ssh_env=(SSH_CONNECTION="10.0.0.2 50000 10.0.0.1 22")
+  t respawn-pane -k -t "$PANE" env "${LEAKY_ENV[@]/#/-u}" "$(t show-environment -g PATH)" "${ssh_env[@]}" "$BIN"
   wait_for 'updated [0-9]+[smh]? ago' 30 >/dev/null || die "dispatch did not finish the first fetch in 30s after restart"
   echo "restarted dispatch in $PANE"
 }

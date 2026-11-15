@@ -21,10 +21,11 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 |---|---|---|
 | tmux server | socket `$RUN/tmux/sock`, no user tmux.conf | The user's tmux sessions are never touched. dispatch runs inside this server, so its windows go there too |
 | checkout | `$RUN/work/<repo>`, a fresh shallow `gh repo clone` | Session worktrees go to `$RUN/work/<repo>/.claude/worktrees/<issue>`, never into the user's checkout. `up` sets `gh repo set-default <repo>`, so a fork does not read its parent. It also tracks every `origin` branch, as a normal clone does |
-| config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
+| config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude` and `multiplexer` is `tmux`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit |
 | `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status` to the real gh. Blocks every other call, `pr merge` too, and logs it |
 | browser | `$RUN/bin/browser` (`GH_BROWSER`, `BROWSER`) | `o` goes through the real `gh … --web`. The URL goes to a log. No browser opens |
+| environment | `up` and `restart` remove `HERDR_ENV`, `HERDR_WORKSPACE_ID`, `HC_TERMINAL_SOCKET`, `HC_TERMINAL_ID`, `HC_SCOPE`, `SSH_CONNECTION`, and `SSH_TTY` | With them, dispatch picks herdr or the herdr app (`hc`) and starts sessions outside the sandbox, or `o` copies a URL instead of opening it. `--over-ssh` sets a fake `SSH_CONNECTION` to test the copy path |
 
 The `bin/` scripts are verification scaffolding. `down` deletes them.
 
@@ -38,13 +39,13 @@ $V up                          # prints RUN=/tmp/dispatch-verify/<id>
 $V up --repo OWNER/NAME        # drive a different GitHub repo (read-only)
 ```
 
-Options: `--size COLSxROWS` (default `160x45`), `--allow-merge` (lets `gh pr merge` through. Use it only on a sandbox repo that you own).
+Options: `--size COLSxROWS` (default `160x45`), `--allow-merge` (lets `gh pr merge` through. Use it only on a sandbox repo that you own), `--over-ssh` (dispatch sees an SSH session, so `o` copies the URL).
 
-`up` copies the binary into the run, clones the repo, starts dispatch in tmux session `drive`, window `dispatch`, and waits up to 30 s for the first fetch. Ready means the tab row shows `updated Ns ago`. If the first fetch fails, `up` saves the screen to `evidence/` and exits non-zero. Run `down` then.
+`up` copies the binary into the run, clones the repo, starts dispatch in tmux session `drive`, window `dispatch`, and waits up to 30 s for the first fetch. Ready means the header shows `<repo> · updated Ns ago`. If the first fetch fails, `up` saves the screen to `evidence/` and exits non-zero. Run `down` then.
 
 The default repo is the `origin` of this checkout. The journeys need live GitHub data (an open issue, an open PR). If the default repo has none, use `--repo` with a public repo that has some. The guard keeps it read-only.
 
-Pick a repo with fewer than about 50 PRs in total (open and closed). dispatch asks for 100 PRs with their checks and merge state in one GraphQL call, and on a larger repo GitHub stops it after about 10 s with `HTTP 502` or `HTTP 504`. The PR tab then stays `No pull requests.` with `refresh failed`. This happens on `ratatui/ratatui`, for example. Repos that worked on 2026-11-11:
+Pick a repo with fewer than about 50 PRs in total (open and closed). dispatch asks for 100 PRs with their checks and merge state in one GraphQL call, and on a larger repo GitHub stops it after about 10 s with `HTTP 502` or `HTTP 504`. The PR tab then stays `No pull requests.` with `refresh failed`. This happens on `ratatui/ratatui`, for example. Repos that worked on 2026-11-14:
 
 - `viur-framework/vi-shoelace`: open issues, merged PRs, and open PRs with failing checks that close an issue (merge new session and handoff).
 - `serkanyersen/dotstate`: an open `CLEAN` PR (direct merge, blocked by the guard).
@@ -61,7 +62,7 @@ Run this first, and again when anything looks wrong. It is read-only.
 $V doctor "$RUN"
 ```
 
-It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the drive pane has the gh guard first on `PATH`, the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD` and tracks every `origin` branch, `gh` in the clone resolves to the run's repo, the last fetch did not fail, and the tab row shows a fetch age. It then prints the tab row and the message row. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
+It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the drive pane has the gh guard first on `PATH`, `TMUX` in the drive pane points at the run's socket, the drive pane has no herdr, herdr app, or SSH variables (except `SSH_CONNECTION` with `--over-ssh`), the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD` and tracks every `origin` branch, `gh` in the clone resolves to the run's repo, the last fetch did not fail, and the header shows a fetch age. It then prints the tab row, the repo and freshness line, and the key bar. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
 
 ## Drive
 
@@ -76,16 +77,19 @@ $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
 $V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
 ```
 
-To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` sets the `PATH` from `up`. Doctor fails on `gh guard first on PATH` if the guard is lost.
+To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` sets the `PATH` from `up` and removes the same variables as `up`. Doctor fails on `gh guard first on PATH` if the guard is lost.
 
-Stable handles on the screen:
+Stable handles on the screen (line numbers are `capture-pane` lines, from 1):
 
-- Tab row (line 1): `1 Issues (N)`, `2 Pull requests (N)`, `3 Sessions (N)`, then `▲N` for sessions that need you, `S sort: <order>`, and on tabs 1 and 2 `updated Ns ago`, `refreshing…`, or `refresh failed Ns ago`. The selected tab has `━` under it on line 2.
-- List rows start with `#<number> ` and the selected row starts with `▌`.
-- The message row (second last line) shows toasts, for example `Stopped #26`, `Opening issue #26 on GitHub`, `Press m again to merge PR #12`. A toast stays for 5 s. A long toast wraps onto the line above, so match it with `wait` on the full screen, not on one line.
-- The key bar (last line) changes by tab. Use it to confirm which tab has focus.
+- Line 1 is blank. Line 2 is the tab row: ` 1  Issues N      2  Pull requests N      3  Sessions N`. The counts have no parentheses. The selected tab has a colored badge, not an underline, so read it from the `.ansi` shot or from the key bar.
+- Lines 4 to 6 are the header next to the logo: `dispatch vX.Y.Z`, then `<repo> · updated Ns ago` (or `loading…`, `refreshing…`, `refresh failed Ns ago`; tabs 1 and 2 only), then `▲ N needs you   ● N working   ○ N exited`. This line is always on screen, so `wait 'needs you'` matches at once. Wait for `▲ 1 needs you`.
+- Rows are in groups with a heading and a count, for example `Ready for review 3`. A row is `❯ <glyph> #<number> <title>  <summary>  <age>`. The selected row starts with `❯`, other rows with two spaces. Find a row with `grep '#N '`.
+- The default view shows only the list. `v` shows the details of the selected row under the list, after a `── #N ──` or `── PR #N ──` line. Press `v` before you wait for detail text such as `state` or `output ─`.
+- The message row, above the prompt rules, shows toasts, for example `Stopped #26`, `Opening issue #26 on GitHub`, `Press m again to merge PR #12`. A toast stays for 5 s. A long toast wraps onto the line above, so match it with `wait` on the full screen.
+- The prompt line, between two rules, shows a hint such as `❯ / to filter issues · s to start a session`, or the kept filter `❯ /word`.
+- The key bar (last line) shows `<key> to <action>` pairs joined by ` · `, only for keys that work on the selected row, for example `? to keys · s to start session · m to merge · o to open on GitHub · q to quit`. `S sort: <order>` is at its right end. A dialog or menu has its own key bar.
 - The start dialog title is `Start session for #<n> <title>`. Its `Runs` block shows the exact commands.
-- Session states: `● running`, `▲ needs you`, `○ exited` (unicode icon set).
+- Session states: `● running`, `▲ needs you`, `○ exited` (unicode icon set; the `icons` setting can change it to Nerd Font glyphs).
 
 Wait for text, never sleep for a fixed time. dispatch draws every 100 ms, and gh calls take 1 to 3 s.
 

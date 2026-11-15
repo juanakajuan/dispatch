@@ -23,8 +23,9 @@ This directory is the maintained source for verifying what a dispatch user sees 
 
 - Send keys only with `$V keys "$RUN" …` and `$V type "$RUN" …`. They go to the dispatch pane by its pane id, even when another window is active.
 - After each key that changes state, `$V wait` for the text that proves the change. Do not sleep.
-- Number keys switch tabs: `1` Issues, `2` Pull requests, `3` Sessions. The selected tab has `━` under it on screen line 2.
-- Find a row by its `#<number> ` prefix. Move to it with `j` and `k`. The selected row starts with `▌`.
+- Number keys switch tabs: `1` Issues, `2` Pull requests, `3` Sessions. The key bar tells which tab has focus, for example `enter to go to issue` only on tab 2.
+- Find a row by `#<number> `. Move to it with `j` and `k`. The selected row starts with `❯`. The selection of each tab stays when you leave the tab and come back.
+- Press `v` to see the details of the selected row. The default view shows only the list.
 
 ## Proof and skip reporting
 
@@ -45,8 +46,9 @@ Each feature file starts with an H1 title and one paragraph about the user-visib
 
 ## Features
 
-- [Issue and PR lists](./lists.md): tabs, fetch freshness, refresh, filter, sort, PR icons on issue rows, pane resize.
+- [Issue and PR lists](./lists.md): tabs, fetch freshness, refresh, filter, sort, the details view, PR icons on issue rows.
 - [Start a session](./start-session.md): the start dialog, its fields, and the worktree, marker, and window it makes.
 - [Sessions](./sessions.md): session states, the output tail, attach, stop, and resume.
 - [Merge](./merge.md): the two-press `m` flow, direct merge, and the handoff to an agent.
 - [Open on GitHub](./open-on-github.md): `o` on an issue, a PR, or a session.
+- [Settings and keys](./settings-and-keybinds.md): the `,` settings menu, the `?` keys menu, and the key bar.
