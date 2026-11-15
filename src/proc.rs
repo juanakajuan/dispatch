@@ -87,9 +87,8 @@ where
     String::from_utf8(output.stdout).map_err(|_| ProcError::NotUtf8 { program: program.to_string() })
 }
 
-/// Starts `program` and returns at once, with no stdio and no wait. A process
-/// group of its own keeps it alive when the terminal that started dispatch
-/// closes. For a server that must outlive dispatch.
+/// A process group of its own keeps it alive when the terminal that started
+/// dispatch closes.
 pub fn spawn_detached<I, S>(program: &str, args: I, cwd: &Path) -> Result<(), ProcError>
 where
     I: IntoIterator<Item = S>,
@@ -149,7 +148,6 @@ pub mod fake {
         record(program.to_string(), args)
     }
 
-    /// A spawn is recorded as `spawn program arg ...`, apart from a run.
     pub(super) fn intercept_spawn<S: AsRef<OsStr>>(program: &str, args: &[S]) -> Option<Result<String, ProcError>> {
         record(format!("spawn {program}"), args)
     }

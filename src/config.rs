@@ -108,8 +108,6 @@ impl ClaudeCommand {
     }
 }
 
-/// Which multiplexer runs the sessions. `Auto` uses herdr when dispatch runs
-/// inside herdr, else tmux. Read once at launch.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Multiplexer {
@@ -282,7 +280,6 @@ impl Setting {
         }
     }
 
-    /// When a change takes effect, if not at once.
     pub fn applies_note(self) -> Option<&'static str> {
         match self {
             Setting::DetectWaiting | Setting::ClaudeCommand => {

@@ -1,13 +1,5 @@
-//! herdr adapter. Private to `session`. Checked against herdr 0.9.5.
-//! Every command prints `{"id":..,"result":{..}}` on success, and
-//! `{"error":{"code":..,"message":..}}` on stderr with exit 1 on failure.
-//! Replies are parsed into serde structs at this boundary, so the rest of
-//! `session` never sees herdr's JSON.
-//!
-//! herdr owns the worktree checkout: `worktree create` makes the git worktree
-//! and a linked workspace for it in one call. dispatch runs Claude by typing a
-//! command line into that workspace's pane, because `herdr agent start`
-//! refuses a multi-line prompt.
+//! dispatch runs Claude by typing a command line into the workspace's pane,
+//! because `herdr agent start` refuses a multi-line prompt.
 
 use super::{WindowId, WindowObs};
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
@@ -17,8 +9,6 @@ use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// herdr's workspace id, for example `w3`. Opaque: taken from herdr's JSON,
-/// never derived from a pane id.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 pub struct WorkspaceId(String);
 
@@ -28,7 +18,6 @@ impl WorkspaceId {
     }
 }
 
-/// herdr's pane id, for example `w3:p1`. Opaque, like `WorkspaceId`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 pub struct PaneId(String);
 
@@ -38,7 +27,6 @@ impl PaneId {
     }
 }
 
-/// The pane that runs Claude, and the workspace that holds it.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PaneRef {
     pub workspace: WorkspaceId,
@@ -52,21 +40,13 @@ impl PaneRef {
     }
 }
 
-/// Where dispatch puts the source workspace that herdr makes each issue's
-/// worktree from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Place {
-    /// `HERDR_ENV=1`: the workspace dispatch itself runs in.
     Inside { source: WorkspaceId },
-    /// Not in herdr: a workspace labelled `dispatch-<repo dir>` on the repo
-    /// root. It is found, or created, on the first start, so dispatch launches
-    /// with no herdr server running.
     Detached { label: String },
 }
 
 impl Place {
-    /// `HERDR_ENV=1` with no workspace id is a setup error, not a fall back to
-    /// detached.
     pub(super) fn detect(
         herdr_env: Option<&str>,
         workspace_id: Option<&str>,
@@ -81,8 +61,6 @@ impl Place {
         }
     }
 }
-
-// ---- JSON boundary ---------------------------------------------------------
 
 #[derive(Deserialize)]
 struct Reply<T> {
@@ -120,8 +98,6 @@ struct PaneRow {
     agent_status: AgentStatus,
 }
 
-/// herdr's own read of what the agent in a pane does. A status that a later
-/// herdr adds counts as `Unknown`, so one new word does not hide every session.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum AgentStatus {
@@ -135,7 +111,6 @@ enum AgentStatus {
 }
 
 impl AgentStatus {
-    /// The agent stopped and the user is next.
     fn waiting(self) -> bool {
         matches!(self, AgentStatus::Blocked | AgentStatus::Done | AgentStatus::Idle)
     }
@@ -200,9 +175,6 @@ fn is_no_server(stderr: &str) -> bool {
     stderr.contains("server_not_running")
 }
 
-// ---- observe ---------------------------------------------------------------
-
-/// `Default` stands for a herdr that is not running: no workspaces, no panes.
 fn query<T: DeserializeOwned + Default>(args: &[&str]) -> Result<T, String> {
     match herdr_raw(args) {
         Ok(text) => parse(&text),
@@ -217,9 +189,6 @@ pub(super) fn list_windows() -> Result<Vec<WindowObs>, String> {
     Ok(window_obs(&workspaces, &panes))
 }
 
-/// One window per workspace that has a worktree checkout. The window is the
-/// pane that hosts an agent, else the first pane. A checkout that is gone from
-/// disk is skipped, like a tmux tag whose directory is gone.
 fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<WindowObs> {
     workspaces
         .workspaces
@@ -239,18 +208,13 @@ fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<WindowObs> {
         .collect()
 }
 
-// ---- start -----------------------------------------------------------------
-
 fn label(issue: IssueNumber) -> String {
     format!("#{}", issue.0)
 }
 
-/// How long a start waits for a server it spawned to answer.
 const SERVER_WAIT: Duration = Duration::from_secs(5);
 const SERVER_POLL: Duration = Duration::from_millis(100);
 
-/// `herdr workspace list`, starting the server first when none runs. The
-/// server is spawned detached, so it outlives dispatch.
 fn workspaces_with_server(budget: Duration) -> Result<WorkspaceList, String> {
     let list = || herdr_raw(["workspace", "list"]);
     match list() {
@@ -273,8 +237,6 @@ fn workspaces_with_server(budget: Duration) -> Result<WorkspaceList, String> {
     }
 }
 
-/// The workspace to make worktrees from. `Detached` finds it by label, and
-/// creates it on the repo root when it is missing.
 fn source(place: &Place, repo_root: &Path) -> Result<WorkspaceId, String> {
     source_within(place, repo_root, SERVER_WAIT)
 }
@@ -294,10 +256,6 @@ fn source_within(place: &Place, repo_root: &Path, budget: Duration) -> Result<Wo
     Ok(created.workspace.workspace_id)
 }
 
-/// `herdr worktree create --workspace <source> --branch <b> [--base <from>]
-/// --path <dir> --label #<n> --no-focus`. herdr makes the git worktree and
-/// opens a linked workspace for it. `from` is `None` for a branch that exists,
-/// so `--base` is left out.
 pub(super) fn create_worktree(
     place: &Place,
     repo_root: &Path,
@@ -314,9 +272,7 @@ pub(super) fn create_worktree(
     herdr(args).map(|_| ())
 }
 
-/// The pane to run Claude in. `worktree create` already opened a workspace for
-/// a new start, so look for an open one first and open a second only when the
-/// worktree has none (a reopen after the workspace was closed).
+/// `herdr worktree create` already opens a workspace on the new checkout.
 pub(super) fn open_window(
     place: &Place,
     repo_root: &Path,
@@ -333,7 +289,6 @@ pub(super) fn open_window(
     launch(&pane, argv, prompt_file)
 }
 
-/// `herdr worktree open --workspace <source> --path <dir> --label #<n> --no-focus`.
 fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, String> {
     let (dir, label) = (dir.as_path().to_string_lossy(), label(issue));
     let args = [
@@ -351,13 +306,9 @@ fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -
     Ok(PaneRef { workspace: opened.workspace.workspace_id, pane: opened.root_pane.pane_id })
 }
 
-/// How long `launch` waits for herdr to see the agent, so the observation
-/// right after a start does not show "exited". A slow start is not an error:
-/// the next tick catches up.
 const AGENT_WAIT: Duration = Duration::from_secs(10);
 const AGENT_POLL: Duration = Duration::from_millis(250);
 
-/// Types `argv` as one command line into the pane's shell and presses Enter.
 pub(super) fn launch(pane: &PaneRef, argv: &[String], prompt_file: &Path) -> Result<(), String> {
     write_prompt(argv, prompt_file)?;
     herdr(["pane", "run", pane.pane.as_str(), command_line(argv, prompt_file).as_str()])?;
@@ -376,14 +327,11 @@ fn wait_for_agent(pane: &PaneRef, budget: Duration) {
     }
 }
 
-/// `<git common dir>/dispatch/prompts/<issue>.txt`, overwritten on each start.
 pub(super) fn prompt_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
     git_common_dir.join("dispatch").join("prompts").join(format!("{}.txt", issue.0))
 }
 
-/// The shell would break a multi-line prompt that is typed as one line, so the
-/// text goes to a file and `command_line` reads it back. One such argument fits
-/// one file.
+/// The shell would break a multi-line prompt that is typed as one line.
 fn write_prompt(argv: &[String], file: &Path) -> Result<(), String> {
     let mut multi_line = argv.iter().filter(|a| a.contains('\n'));
     let Some(text) = multi_line.next() else { return Ok(()) };
@@ -397,8 +345,6 @@ fn write_prompt(argv: &[String], file: &Path) -> Result<(), String> {
     std::fs::write(file, text).map_err(err)
 }
 
-/// Quotes each argument POSIX-style, so zsh, bash, and fish read the same
-/// words. An argument with a newline becomes `"$(cat '<prompt_file>')"`.
 fn command_line(argv: &[String], prompt_file: &Path) -> String {
     let quote = |s: &str| format!("'{}'", s.replace('\'', r"'\''"));
     argv.iter()
@@ -415,15 +361,11 @@ fn command_line(argv: &[String], prompt_file: &Path) -> String {
         .join(" ")
 }
 
-/// `herdr workspace focus <ws>`.
 pub(super) fn focus(workspace: &WorkspaceId) -> Result<(), String> {
     herdr(["workspace", "focus", workspace.as_str()]).map(|_| ())
 }
 
-// ---- stop, send, tail ------------------------------------------------------
-
-/// `herdr workspace close <ws>`. The checkout and the branch stay. A workspace
-/// that is already gone counts as closed.
+/// The checkout and the branch stay.
 pub(super) fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
     match herdr_raw(["workspace", "close", workspace.as_str()]) {
         Ok(_) => Ok(()),

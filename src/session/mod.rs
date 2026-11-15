@@ -1,5 +1,3 @@
-//! Sessions. The only module that knows git, tmux, and herdr exist.
-//!
 //! Session truth lives in git and the multiplexer, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
@@ -7,9 +5,6 @@
 //!   branches dispatch made, for which issue
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
 //!   window runs Claude in which worktree
-//! - herdr (instead of tmux, by the `multiplexer` setting): a workspace
-//!   whose worktree checkout is the issue's directory, and the pane in it that
-//!   hosts an agent
 //!
 //! `observe()` reads all three and joins them on the worktree path. Nothing is
 //! cached here; `Workspace` is immutable and `Clone`, so each worker thread
@@ -30,8 +25,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-/// Where Claude runs for one session, in whichever multiplexer dispatch
-/// started in. The variant is the adapter, so no call can mix the two.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WindowId {
     Tmux(tmux::WindowId),
@@ -40,7 +33,6 @@ pub enum WindowId {
 
 #[cfg(test)]
 impl WindowId {
-    /// A tmux id such as `@3`, so tests build ids without a multiplexer.
     pub fn parse(raw: &str) -> Result<WindowId, String> {
         tmux::WindowId::parse(raw).map(WindowId::Tmux)
     }
@@ -53,7 +45,6 @@ impl WindowId {
     }
 }
 
-/// What one adapter saw of one window. `join` turns these into sessions.
 struct WindowObs {
     id: WindowId,
     worktree: WorktreePath,
@@ -61,7 +52,6 @@ struct WindowObs {
     waiting: bool,
 }
 
-/// Which multiplexer runs the sessions, for the view to show the right commands.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
     #[default]
@@ -69,7 +59,6 @@ pub enum Backend {
     Herdr,
 }
 
-/// The multiplexer dispatch runs in, with that multiplexer's startup facts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mux {
     Tmux(tmux::Place),
@@ -77,14 +66,11 @@ enum Mux {
 }
 
 impl Mux {
-    /// The `--settings` hooks set a tmux window option, so only tmux gets
-    /// them. herdr detects a waiting agent itself.
     fn hooks(&self, launch: &Launch) -> Option<&'static str> {
         (launch.detect_waiting && matches!(self, Mux::Tmux(_))).then_some(WAITING_HOOKS)
     }
 }
 
-/// Lines of `text` without the blank lines at its end.
 fn text_lines(text: &str) -> Vec<String> {
     let mut out: Vec<String> = text.lines().map(str::to_string).collect();
     while out.last().is_some_and(|l| l.trim().is_empty()) {
@@ -212,11 +198,7 @@ impl fmt::Display for StartConflict {
 /// How the shell attaches. Pure data, so the choice is unit tested.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AttachPlan {
-    /// Inside tmux or herdr: select the window or workspace; dispatch keeps
-    /// running in its own.
     Switch(Vec<String>),
-    /// Outside the multiplexer: the shell leaves the alternate screen, runs this argv in
-    /// the foreground, and restores the TUI when it returns.
     Suspend(Vec<String>),
 }
 
@@ -265,8 +247,6 @@ impl fmt::Display for SetupError {
     }
 }
 
-/// Runs `program version_flag` once, so a missing multiplexer shows as a setup
-/// error that names it.
 fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> Result<(), SetupError> {
     crate::proc::run(program, [version_flag], cwd).map(|_| ()).map_err(|e| match e {
         crate::proc::ProcError::Spawn { .. } => SetupError::ProgramMissing(program),
@@ -274,7 +254,6 @@ fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> 
     })
 }
 
-/// The environment variables that pick and place a multiplexer, read once.
 #[derive(Clone, Debug, Default)]
 struct MuxEnv {
     herdr_env: Option<String>,
@@ -289,9 +268,6 @@ impl MuxEnv {
     }
 }
 
-/// `Auto` uses herdr inside herdr (`HERDR_ENV=1`), else tmux. `Tmux` always
-/// uses tmux. `Herdr` always uses herdr: inside herdr it uses dispatch's own
-/// workspace, outside it a detached one.
 fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) -> Result<Mux, SetupError> {
     let inside_herdr = env.herdr_env.as_deref() == Some("1");
     let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
@@ -308,8 +284,6 @@ fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) ->
 
 impl Workspace {
     /// Fails before the TUI starts, so the user sees a plain error line.
-    /// `multiplexer` is chosen once here, so a settings change applies at the
-    /// next launch.
     pub fn discover(cwd: &std::path::Path, multiplexer: Multiplexer) -> Result<Workspace, SetupError> {
         let git::RepoDirs { root: repo_root, common: git_common_dir } =
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
@@ -483,10 +457,6 @@ impl Workspace {
         }
     }
 
-    /// Fails only when the window belongs to the other multiplexer, which
-    /// `observe` never produces. A detached herdr runs `workspace focus` here,
-    /// before the plan comes back, so the herdr that the plan opens shows the
-    /// session.
     pub fn attach_plan(&self, window: &WindowId) -> Result<AttachPlan, SessionError> {
         match (&self.mux, window) {
             (Mux::Tmux(place), WindowId::Tmux(id)) => Ok(tmux_attach_plan(place, id)),
@@ -1219,8 +1189,6 @@ mod tests {
         );
     }
 
-    // ---- herdr, through the proc fake ----
-
     #[derive(Default)]
     #[expect(clippy::struct_excessive_bools, reason = "one independent flag per fake world fact")]
     struct HerdrSim {
@@ -1231,7 +1199,6 @@ mod tests {
         agent: bool,
     }
 
-    /// A tiny git and herdr, like `install_world` is for tmux.
     fn install_herdr_world(base: PathBuf, sim: Rc<RefCell<HerdrSim>>) {
         fake::install(move |call| {
             let mut s = sim.borrow_mut();
@@ -1482,7 +1449,6 @@ mod tests {
         }
     }
 
-    /// `(choice, in herdr, in tmux)` to the backend and where it puts sessions.
     #[test]
     fn the_multiplexer_choice_picks_the_backend_from_the_environment() {
         use Multiplexer::{Auto, Herdr, Tmux};
