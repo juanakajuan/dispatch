@@ -14,7 +14,7 @@ fn o_opens_the_selected_issue_pr_or_session_issue() {
     let (mut state, _) = app();
     press(&mut state, key('j'));
     assert_eq!(opens(&press(&mut state, key('o'))), [GithubRef::Issue(IssueNumber(2))]);
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Opening issue #2 on GitHub"));
+    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Opening issue #2 on GitHub"));
 
     press(&mut state, key('2'));
     press(&mut state, key('j'));
@@ -34,7 +34,7 @@ fn o_on_an_empty_list_sends_nothing() {
     let (mut state, _) = app();
     press(&mut state, key('3'));
     assert!(press(&mut state, key('o')).is_empty());
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Nothing to open."));
+    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Nothing to open."));
 
     press(&mut state, key('1'));
     press(&mut state, key('/'));
@@ -60,7 +60,7 @@ fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
     press(&mut state, key('j'));
     let cmds = press(&mut state, key('o'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::FetchPageUrl(GithubRef::Issue(IssueNumber(2)))))]));
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copying the issue #2 URL"));
+    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Copying the issue #2 URL"));
     let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
     assert_eq!(bar, [("o", "copy URL")]);
 
@@ -71,7 +71,7 @@ fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
 
     press(&mut state, Msg::Copied { target, result: Ok(url) });
     assert!(
-        state.toast.as_ref().is_some_and(|t| t.text == "Copied https://github.com/o/r/issues/2"),
+        state.toast.as_ref().is_some_and(|t| t.text() == "Copied https://github.com/o/r/issues/2"),
         "the toast shows the URL, because a terminal can ignore OSC 52 without an error"
     );
 }

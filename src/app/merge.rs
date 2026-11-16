@@ -3,13 +3,13 @@ use super::feed::refresh_github;
 use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
 use super::msg::{Cmd, Job, WriteJob};
 use super::sessions::goto_session;
-use super::toast::say;
+use super::toast;
 use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest, Unusable};
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::merge::{Consent, MergeAsk, MergeError};
 use crate::session::request::{Launch, StartFrom, StartRequest};
-use std::fmt::{self, Write as _};
+use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Armed {
@@ -115,7 +115,7 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let pr = match merge_target(state) {
         Ok(pr) => pr,
         Err(why) => {
-            say(state, why.to_string());
+            toast::info(state, why.to_string());
             return Vec::new();
         }
     };
@@ -137,7 +137,7 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
                     format!("{sentence} Press m again to start a session for {i} that fixes it."),
                 ),
                 Err(why) => {
-                    say(state, format!("{sentence} {why}"));
+                    toast::info(state, format!("{sentence} {why}"));
                     return Vec::new();
                 }
             }
@@ -152,10 +152,10 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let ask = MergeAsk { pr: n, consent };
     if armed != Some(&Armed::Merge(ask)) {
         state.armed = Some(Armed::Merge(ask));
-        say(state, expect);
+        toast::info(state, expect);
         return Vec::new();
     }
-    say(state, format!("Checking PR {n}"));
+    toast::info(state, format!("Checking PR {n}"));
     vec![Cmd::Job(Job::Write(WriteJob::Merge(ask)))]
 }
 
@@ -195,7 +195,7 @@ pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd
     if ended_ready {
         // dispatch does not undo `gh pr ready`, so the toast must say it ran.
         if let Some(toast) = &mut state.toast {
-            let _ = write!(toast.text, " PR {} is now ready for review.", ask.pr);
+            toast.append(&format!("PR {} is now ready for review.", ask.pr));
         }
     }
     if ended_ready || refused {
@@ -210,27 +210,27 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             let mut cmds = Vec::new();
             match live_session_on_pr(state, ask.pr) {
                 Some(issue) => {
-                    say(state, format!("Merged PR {} ({method}) and stopped {issue}'s session", ask.pr));
+                    toast::info(state, format!("Merged PR {} ({method}) and stopped {issue}'s session", ask.pr));
                     cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
                 }
-                None => say(state, format!("Merged PR {} ({method})", ask.pr)),
+                None => toast::info(state, format!("Merged PR {} ({method})", ask.pr)),
             }
             refresh_github(state, &mut cmds);
             cmds
         }
         Ok(MergeOutcome::Queued) => {
-            say(state, format!("PR {} is in the merge queue", ask.pr));
+            toast::info(state, format!("PR {} is in the merge queue", ask.pr));
             let mut cmds = Vec::new();
             refresh_github(state, &mut cmds);
             cmds
         }
         Ok(MergeOutcome::Handoff { problem, method, pr }) => handoff(state, ask, &pr, problem, method),
         Ok(MergeOutcome::Refused(why)) => {
-            say(state, why.to_string());
+            toast::info(state, why.to_string());
             Vec::new()
         }
         Err(e) => {
-            say(state, format!("Merge PR {} failed: {e}", ask.pr));
+            toast::error(state, format!("Merge PR {} failed: {e}", ask.pr));
             Vec::new()
         }
     }
@@ -254,7 +254,7 @@ pub(super) fn handoff(
     let sentence = plan::problem_sentence(pr.number, pr.base.display(), problem);
     let issue = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
-            say(state, format!("{sentence} Asking {i}'s agent to fix it."));
+            toast::info(state, format!("{sentence} Asking {i}'s agent to fix it."));
             return vec![Cmd::Job(Job::Write(WriteJob::Send {
                 issue: i,
                 text: plan::handoff_prompt(pr.number, pr.base.display(), problem, method),
@@ -262,22 +262,22 @@ pub(super) fn handoff(
         }
         Ok(Fixer::NewSession(i)) => i,
         Err(why) => {
-            say(state, format!("{sentence} {why}"));
+            toast::info(state, format!("{sentence} {why}"));
             return Vec::new();
         }
     };
     let req = match fix_request(issue, pr, problem, method) {
         Ok(req) => req,
         Err(why) => {
-            say(state, format!("{sentence} {why}"));
+            toast::info(state, format!("{sentence} {why}"));
             return Vec::new();
         }
     };
     if ask.consent == Consent::StartFixSession {
-        say(state, format!("{sentence} Starting a session for {issue} to fix it."));
+        toast::info(state, format!("{sentence} Starting a session for {issue} to fix it."));
         return start_fix(state, req);
     }
     state.armed = Some(Armed::Fix { pr: pr.number, req });
-    say(state, format!("{sentence} Press m again to start a session for {issue} that fixes it."));
+    toast::info(state, format!("{sentence} Press m again to start a session for {issue} that fixes it."));
     Vec::new()
 }

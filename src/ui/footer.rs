@@ -2,6 +2,7 @@ use super::header::feed_failure;
 use super::palette;
 use super::text::{cells, one_line, row_line, span, spans_width};
 use crate::app::list::Tab;
+use crate::app::toast::Level;
 use crate::app::{self, Focus, State};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -13,8 +14,11 @@ use ratatui::widgets::Paragraph;
 /// feed. Drawn on the message row above the prompt.
 pub(super) fn message(state: &State) -> Option<(String, Style)> {
     if let Some(toast) = &state.toast {
-        let style = if toast.text.contains("failed") { palette::ERROR } else { palette::PLAIN };
-        return Some((one_line(&toast.text), style));
+        let style = match toast.level() {
+            Level::Error => palette::ERROR,
+            Level::Info => palette::PLAIN,
+        };
+        return Some((one_line(toast.text()), style));
     }
     let failure = match state.tab {
         Tab::Issues => feed_failure(&state.issues),

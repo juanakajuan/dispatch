@@ -1,6 +1,6 @@
 use super::keys::{Key, key_of};
 use super::msg::Cmd;
-use super::toast::say;
+use super::toast;
 use super::{Focus, State};
 use crate::domain::{GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
 use crate::session::{Session, SessionState};
@@ -107,7 +107,7 @@ pub(super) fn go_to_issue_of_pr(state: &mut State) {
             state.selected.issue = Some(issue);
             state.filter.clear();
         }
-        None => say(state, format!("PR {n} closes no issue.")),
+        None => toast::info(state, format!("PR {n} closes no issue.")),
     }
 }
 

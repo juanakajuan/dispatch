@@ -71,3 +71,24 @@ fn at_a_wide_width_every_hint_is_shown() {
         }
     }
 }
+
+#[test]
+fn a_toast_is_red_for_a_failed_job_and_plain_for_a_warning_whatever_its_text() {
+    let mut state = full_state();
+    let error = crate::proc::fake::fail("git", 128, "no network");
+    let base = crate::domain::OriginRef::parse("origin/main").expect("ref");
+    let warning = crate::session::error::StartWarning::FetchFailed { base, error };
+    let session = state.sessions[&IssueNumber(3)].clone();
+    let outcome = crate::session::StartOutcome { session, warnings: vec![warning] };
+    let _ = app::update(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+    let (text, style) = super::footer::message(&state).expect("toast");
+    assert!(text.contains("fetch failed"), "{text}");
+    assert_eq!(style, palette::PLAIN, "a start that went on is not an error");
+
+    let error = crate::github::GhError::Run(crate::proc::fake::fail("gh", 1, "no browser"));
+    let target = crate::domain::GithubRef::Issue(IssueNumber(2));
+    let _ = app::update(&mut state, Msg::Opened { target, result: Err(error) });
+    let (text, style) = super::footer::message(&state).expect("toast");
+    assert_eq!(text, "Open issue #2 failed: gh failed with code 1: no browser");
+    assert_eq!(style, palette::ERROR);
+}

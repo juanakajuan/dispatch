@@ -1,6 +1,6 @@
 use super::State;
-use super::msg::{Cmd, GITHUB_COOLDOWN, Job, Observation, ReadJob, SESSIONS_EVERY, TOAST_FOR};
-use super::toast::say;
+use super::msg::{Cmd, GITHUB_COOLDOWN, Job, Observation, ReadJob, SESSIONS_EVERY};
+use super::toast;
 use crate::github::GhError;
 use crate::session::SessionState;
 use crate::session::error::SessionError;
@@ -92,13 +92,7 @@ pub(super) fn observe_now(state: &mut State) -> Vec<Cmd> {
 }
 
 pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
-    if let Some(toast) = &mut state.toast {
-        match toast.shown_at {
-            None => toast.shown_at = Some(now),
-            Some(at) if now.duration_since(at) >= TOAST_FOR => state.toast = None,
-            Some(_) => {}
-        }
-    }
+    toast::expire(state, now);
     let mut cmds = Vec::new();
     let idle = !state.issues.poll.in_flight() && !state.prs.poll.in_flight();
     let soon = state.due.github_soon && idle && now >= state.due.github_sent + GITHUB_COOLDOWN;
@@ -133,7 +127,7 @@ pub(super) fn observed(state: &mut State, result: Result<Observation, SessionErr
             state.sessions = sessions;
             state.summaries = summaries;
         }
-        Err(e) => say(state, format!("sessions: {e}")),
+        Err(e) => toast::error(state, format!("sessions: {e}")),
     }
     Vec::new()
 }

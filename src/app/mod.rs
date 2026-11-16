@@ -20,7 +20,7 @@ use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
 use sessions::{attached, resumed, sent, started, stopped};
-use toast::{Toast, say};
+use toast::Toast;
 
 pub mod dialog;
 pub mod feed;
@@ -170,7 +170,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Attached(result) => attached(state, result),
         Msg::Saved(result) => {
             if let Err(e) = result {
-                say(state, format!("Saving settings failed: {e}"));
+                toast::error(state, format!("Saving settings failed: {e}"));
             }
             Vec::new()
         }

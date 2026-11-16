@@ -115,7 +115,7 @@ pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
 }
 
 pub(super) fn toast(state: &State) -> String {
-    state.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    state.toast.as_ref().map(|t| t.text().to_string()).unwrap_or_default()
 }
 
 fn gh_error(stderr: &str) -> GhError {

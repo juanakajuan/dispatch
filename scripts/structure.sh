@@ -45,6 +45,10 @@ if grep -rnE 'Job::Read\(ReadJob::(FetchIssues|FetchPrs|ObserveSessions)' src --
   echo "A poll job sent around its Poll can stack a second gh call. Send it with feed.poll.request(ReadJob::...) or state.observe.request(...)."; fail=1
 fi
 
+if grep -rnE 'toast\.text(\(\))?\.contains\(|text(\(\))?\.contains\("failed"\)' src/ui; then
+  echo "The view colours a toast by its words, so a warning that says \"failed\" turns red. Match on toast.level() instead."; fail=1
+fi
+
 awk '$1 != "banners" { print $1 }' "$allow" | while read -r f; do
   [ -f "$f" ] || { echo "$allow lists $f, which does not exist. Delete its line."; exit 1; }
 done || fail=1

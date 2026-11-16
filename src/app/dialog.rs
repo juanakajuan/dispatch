@@ -1,7 +1,7 @@
 use super::keys::{Key, key_of};
 use super::msg::{Cmd, Job, WriteJob};
 use super::sessions::goto_session;
-use super::toast::say;
+use super::toast;
 use super::{Focus, State};
 use crate::domain::{BranchName, Issue, IssueNumber, Mode};
 use crate::session::request::start_defaults;
@@ -105,6 +105,6 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     state.starting.insert(n);
     state.focus = Focus::List;
     goto_session(state, n);
-    say(state, format!("Starting {n}"));
+    toast::info(state, format!("Starting {n}"));
     vec![Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))]
 }
