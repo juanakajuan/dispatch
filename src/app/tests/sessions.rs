@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::OriginRef;
 use crate::session::error::StartWarning;
+use crate::transcript::Transcript;
 
 #[test]
 fn a_attaches_a_live_session_and_resumes_an_exited_one() {
@@ -17,9 +18,35 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
     assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
 
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.transcripts.insert(IssueNumber(3), Transcript { said: None });
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == IssueNumber(3)));
     assert!(state.toast.as_ref().is_some_and(|t| t.text().contains("claude --continue")));
+}
+
+#[test]
+fn a_on_an_exited_session_with_no_conversation_opens_the_start_dialog() {
+    let (mut state, _) = app();
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    let cmds = press(&mut state, key('a'));
+    assert!(cmds.is_empty(), "claude --continue would exit at once");
+    let Focus::Dialog(d) = &state.focus else { panic!("dialog") };
+    assert_eq!(d.issue, IssueNumber(3));
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.text().to_string()).as_deref(),
+        Some("#3 has no conversation to continue. Start it again.")
+    );
+
+    let (mut state, _) = app();
+    state.sessions.insert(IssueNumber(9), session(9, SessionState::Exited));
+    state.tab = Tab::Sessions;
+    state.tabs.sessions.selected = Some(IssueNumber(9));
+    assert!(press(&mut state, key('a')).is_empty());
+    assert!(!matches!(state.focus, Focus::Dialog(_)));
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.text().to_string()).as_deref(),
+        Some("#9 has no conversation to continue, and the issue is not listed.")
+    );
 }
 
 #[test]

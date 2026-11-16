@@ -85,9 +85,8 @@ impl Liveness {
 pub(super) enum Backend {
     Tmux(tmux::Place),
     Herdr(herdr::Place),
-    /// The herdr app. hc finds its core itself, so the only fact is whether
-    /// dispatch runs inside the app.
-    Hc(hc::Place),
+    /// The herdr app. hc finds its core itself.
+    Hc(hc::Hc),
 }
 
 /// Runs `$body` with `$mux` bound to the backend's `Mux` impl.
@@ -135,6 +134,7 @@ pub(super) struct MuxEnv {
     pub(super) herdr_workspace: Option<String>,
     pub(super) tmux: Option<String>,
     pub(super) hc_socket: Option<String>,
+    pub(super) path: Option<String>,
 }
 
 impl MuxEnv {
@@ -149,6 +149,7 @@ impl MuxEnv {
             herdr_workspace: var("HERDR_WORKSPACE_ID"),
             tmux: var("TMUX"),
             hc_socket: var("HC_TERMINAL_SOCKET"),
+            path: var("PATH"),
         }
     }
 }
@@ -163,7 +164,8 @@ pub(super) fn detect_mux(
     let inside_app = env.hc_socket.as_deref().is_some_and(|s| !s.is_empty());
     if choice == Multiplexer::HerdrApp || (choice == Multiplexer::Auto && !inside_herdr && inside_app) {
         require("hc", "--version", repo_root)?;
-        return Ok(Backend::Hc(if inside_app { hc::Place::App } else { hc::Place::Outside }));
+        let place = if inside_app { hc::Place::App } else { hc::Place::Outside };
+        return Ok(Backend::Hc(hc::Hc { place, path: env.path.clone() }));
     }
     if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
         require("herdr", "--version", repo_root)?;

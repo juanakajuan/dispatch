@@ -52,7 +52,15 @@ pub enum Place {
     Outside,
 }
 
-impl Mux for Place {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hc {
+    pub place: Place,
+    /// dispatch's `PATH`. hc starts a program with its core's environment,
+    /// not the caller's, so the core may not find a `claude` that dispatch finds.
+    pub path: Option<String>,
+}
+
+impl Mux for Hc {
     type Window = Pane;
 
     fn list(&self, repo: Repo<'_>) -> Result<Vec<Observed<Pane>>, MuxError> {
@@ -60,7 +68,7 @@ impl Mux for Place {
     }
 
     fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(repo.root, dir, issue, argv).map(|_| ())
+        open_window(repo.root, dir, issue, &self.launch_argv(argv)).map(|_| ())
     }
 
     /// hc cannot restart a finished terminal, so a new one takes its place.
@@ -87,11 +95,23 @@ impl Mux for Place {
     }
 
     fn attach(&self, window: &Pane) -> AttachPlan {
-        match self {
+        match self.place {
             Place::App => AttachPlan::Switch(
                 ["herdr-app", "do", "space.select", "--id", window.space.as_str()].map(String::from).to_vec(),
             ),
             Place::Outside => AttachPlan::Suspend(["hc", "attach", window.address.as_str()].map(String::from).to_vec()),
+        }
+    }
+}
+
+impl Hc {
+    fn launch_argv(&self, argv: &[String]) -> Vec<String> {
+        match &self.path {
+            Some(path) => {
+                let env = ["/usr/bin/env".to_string(), format!("PATH={path}")];
+                env.into_iter().chain(argv.iter().cloned()).collect()
+            }
+            None => argv.to_vec(),
         }
     }
 }

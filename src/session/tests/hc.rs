@@ -47,7 +47,7 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
 
 fn hc_workspace(base: &std::path::Path) -> Workspace {
     let mut ws = workspace(base);
-    ws.mux = Backend::Hc(hc::Place::Outside);
+    ws.mux = Backend::Hc(hc::Hc { place: hc::Place::Outside, path: None });
     ws
 }
 
@@ -94,6 +94,19 @@ fn hc_start_adds_the_worktree_with_git_and_runs_claude_with_the_labels() {
     let before = fake::calls().len();
     ws.start(&r, &launch()).expect("second start");
     assert!(!fake::calls()[before..].iter().any(|c| c.starts_with("hc run")), "a live session is not started twice");
+}
+
+#[test]
+fn hc_start_runs_claude_with_the_path_dispatch_sees() {
+    let base = temp_dir("hc-path");
+    let mut ws = workspace(&base);
+    ws.mux = Backend::Hc(hc::Hc { place: hc::Place::Outside, path: Some("/home/u/.local/bin:/usr/bin".to_string()) });
+    install_hc_world(base.clone(), Rc::new(RefCell::new(HcSim::default())));
+    let mut r = req();
+    r.prompt = "go".to_string();
+    ws.start(&r, &launch()).expect("start");
+    let run = hc_calls().pop().expect("a call");
+    assert_eq!(run, hc_run(&base, "/usr/bin/env PATH=/home/u/.local/bin:/usr/bin claude go"));
 }
 
 #[test]
@@ -224,7 +237,7 @@ fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
         ws.attach_plan(id).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
     );
-    ws.mux = Backend::Hc(hc::Place::App);
+    ws.mux = Backend::Hc(hc::Hc { place: hc::Place::App, path: None });
     let space = hc::space_id(&dir);
     assert_eq!(
         ws.attach_plan(id).expect("plan"),

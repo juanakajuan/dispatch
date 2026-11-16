@@ -20,6 +20,7 @@ fn env(herdr: bool, tmux: bool) -> MuxEnv {
         herdr_workspace: herdr.then(|| "w1".to_string()),
         tmux: tmux.then(|| "/tmp/tmux-1000/default,1,0".to_string()),
         hc_socket: None,
+        path: Some("/u/bin:/bin".to_string()),
     }
 }
 
@@ -62,7 +63,8 @@ fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
     use Multiplexer::{Auto, Herdr, HerdrApp, Tmux};
     let tmux_detached = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
     let herdr_inside = Backend::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
-    let (app, outside) = (Backend::Hc(hc::Place::App), Backend::Hc(hc::Place::Outside));
+    let hc = |place| Backend::Hc(hc::Hc { place, path: Some("/u/bin:/bin".to_string()) });
+    let (app, outside) = (hc(hc::Place::App), hc(hc::Place::Outside));
     let table = [
         (Auto, in_app(env(false, false)), &app),
         (Auto, in_app(env(false, true)), &app),
