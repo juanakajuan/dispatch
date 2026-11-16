@@ -42,7 +42,7 @@ load() {
 KEEP_ENV=(HOME USER LOGNAME LANG LC_ALL TERM COLORTERM TMPDIR XDG_RUNTIME_DIR SSH_AUTH_SOCK GH_TOKEN GITHUB_TOKEN PATH)
 clean_env() { local v a=(); for v in "${KEEP_ENV[@]}"; do [[ -n ${!v+x} ]] && a+=("$v=${!v}"); done; env -i "${a[@]}" "$@"; }
 # What the drive pane may hold: KEEP_ENV, what `up` sets, and what tmux adds to each pane.
-PANE_ENV_RE="^(${KEEP_ENV[*]}|GH_BROWSER|BROWSER|XDG_CONFIG_HOME|TMUX_TMPDIR|TMUX|TMUX_PANE|TERM_PROGRAM|TERM_PROGRAM_VERSION|PWD|SHLVL|SSH_CONNECTION)="
+PANE_ENV_RE="^(${KEEP_ENV[*]}|GH_BROWSER|BROWSER|XDG_CONFIG_HOME|TMUX_TMPDIR|TMUX|TMUX_PANE|TERM_PROGRAM|TERM_PROGRAM_VERSION|PWD|SHLVL|SHELL|_|SSH_CONNECTION)="
 PANE_ENV_RE="${PANE_ENV_RE// /|}"
 
 # Always the run's own server. -S beats $TMUX, so the user's server is never hit.
@@ -162,7 +162,9 @@ EOF
 
   local cols="${size%x*}" rows="${size#*x}"
   local ssh_env=(); ((over_ssh)) && ssh_env=(SSH_CONNECTION="10.0.0.2 50000 10.0.0.1 22")
-  clean_env "${ssh_env[@]}" \
+  # SHELL=/bin/sh: tmux runs the pane command with $SHELL -c, and sh execs it,
+  # so the pane process is dispatch. The login shell may be fish, which does not.
+  clean_env "${ssh_env[@]}" SHELL=/bin/sh \
     PATH="$RUN/bin:$PATH" GH_BROWSER="$RUN/bin/browser" BROWSER="$RUN/bin/browser" \
     XDG_CONFIG_HOME="$RUN/xdg" TMUX_TMPDIR="$RUN/tmux" \
     tmux -S "$SOCK" -f /dev/null new-session -d -s drive -n dispatch -x "$cols" -y "$rows" -c "$CLONE" "$RUN/bin/dispatch"
