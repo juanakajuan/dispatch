@@ -1,6 +1,8 @@
 //! dispatch runs Claude by typing a launcher script's path into the
 //! workspace's pane, because `herdr agent start` refuses a multi-line prompt.
 
+mod wire;
+
 use super::start_argv::herdr_worktree_create_args;
 use super::{WindowId, WindowObs};
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
@@ -9,6 +11,7 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use wire::{Created, Opened, PaneGet, PaneList, WorkspaceList, parse, window_obs};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 pub struct WorkspaceId(String);
@@ -63,91 +66,6 @@ impl Place {
     }
 }
 
-#[derive(Deserialize)]
-struct Reply<T> {
-    result: T,
-}
-
-#[derive(Default, Deserialize)]
-struct WorkspaceList {
-    workspaces: Vec<WorkspaceRow>,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceRow {
-    workspace_id: WorkspaceId,
-    label: Option<String>,
-    worktree: Option<WorktreeRow>,
-}
-
-#[derive(Deserialize)]
-struct WorktreeRow {
-    checkout_path: Option<String>,
-}
-
-#[derive(Default, Deserialize)]
-struct PaneList {
-    panes: Vec<PaneRow>,
-}
-
-#[derive(Deserialize)]
-struct PaneRow {
-    pane_id: PaneId,
-    workspace_id: WorkspaceId,
-    agent: Option<String>,
-    #[serde(default)]
-    agent_status: AgentStatus,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum AgentStatus {
-    Idle,
-    Working,
-    Blocked,
-    Done,
-    #[default]
-    #[serde(other)]
-    Unknown,
-}
-
-impl AgentStatus {
-    fn waiting(self) -> bool {
-        matches!(self, AgentStatus::Blocked | AgentStatus::Done | AgentStatus::Idle)
-    }
-}
-
-#[derive(Deserialize)]
-struct Opened {
-    workspace: OpenedWorkspace,
-    root_pane: OpenedPane,
-}
-
-#[derive(Deserialize)]
-struct Created {
-    workspace: OpenedWorkspace,
-}
-
-#[derive(Deserialize)]
-struct OpenedWorkspace {
-    workspace_id: WorkspaceId,
-}
-
-#[derive(Deserialize)]
-struct OpenedPane {
-    pane_id: PaneId,
-}
-
-#[derive(Deserialize)]
-struct PaneGet {
-    pane: PaneAgent,
-}
-
-#[derive(Deserialize)]
-struct PaneAgent {
-    agent: Option<String>,
-}
-
 fn herdr_raw<I, S>(args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
@@ -162,10 +80,6 @@ where
     S: AsRef<std::ffi::OsStr>,
 {
     herdr_raw(args).map_err(|e| e.to_string())
-}
-
-fn parse<T: DeserializeOwned>(text: &str) -> Result<T, String> {
-    serde_json::from_str::<Reply<T>>(text).map(|r| r.result).map_err(|e| format!("herdr printed unexpected JSON: {e}"))
 }
 
 fn call<T: DeserializeOwned>(args: &[&str]) -> Result<T, String> {
@@ -188,25 +102,6 @@ pub(super) fn list_windows() -> Result<Vec<WindowObs>, String> {
     let workspaces: WorkspaceList = query(&["workspace", "list"])?;
     let panes: PaneList = query(&["pane", "list"])?;
     Ok(window_obs(&workspaces, &panes))
-}
-
-fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<WindowObs> {
-    workspaces
-        .workspaces
-        .iter()
-        .filter_map(|ws| {
-            let checkout = ws.worktree.as_ref()?.checkout_path.as_deref()?;
-            let worktree = WorktreePath::from_observed(checkout)?;
-            let own: Vec<&PaneRow> = panes.panes.iter().filter(|p| p.workspace_id == ws.workspace_id).collect();
-            let pane = own.iter().find(|p| p.agent.is_some()).or(own.first())?;
-            Some(WindowObs {
-                id: WindowId::Herdr(PaneRef { workspace: ws.workspace_id.clone(), pane: pane.pane_id.clone() }),
-                worktree,
-                dead: pane.agent.is_none(),
-                waiting: pane.agent_status.waiting(),
-            })
-        })
-        .collect()
 }
 
 pub(super) fn label(issue: IssueNumber) -> String {
@@ -383,62 +278,6 @@ mod tests {
     use crate::proc::fake;
     use crate::testutil::temp_dir;
 
-    const WORKSPACES: &str = r##"{"id":"cli:workspace:list","result":{"type":"workspace_list","workspaces":[
-        {"workspace_id":"w1","label":"dispatch","worktree":null},
-        {"workspace_id":"w2","label":"#7","worktree":{"checkout_path":"CHECKOUT_A","branch":"fix/7-x"}},
-        {"workspace_id":"w3","label":"#8","worktree":{"checkout_path":"CHECKOUT_B"}},
-        {"workspace_id":"w4","label":"#9","worktree":{"checkout_path":"/definitely/not/here"}}]}}"##;
-
-    const PANES: &str = r#"{"id":"cli:pane:list","result":{"type":"pane_list","panes":[
-        {"pane_id":"w1:p1","workspace_id":"w1","agent":null,"agent_status":"unknown"},
-        {"pane_id":"w2:p1","workspace_id":"w2","agent":null,"agent_status":"unknown"},
-        {"pane_id":"w2:p2","workspace_id":"w2","agent":"claude","agent_status":"blocked"},
-        {"pane_id":"w3:p1","workspace_id":"w3","agent":null,"agent_status":"unknown"},
-        {"pane_id":"w4:p1","workspace_id":"w4","agent":"claude","agent_status":"working"}]}}"#;
-
-    fn fixture(dirs: &[&Path; 2]) -> (WorkspaceList, PaneList) {
-        let text = WORKSPACES
-            .replace("CHECKOUT_A", &dirs[0].to_string_lossy())
-            .replace("CHECKOUT_B", &dirs[1].to_string_lossy());
-        (parse(&text).expect("workspaces"), parse(PANES).expect("panes"))
-    }
-
-    fn pane() -> PaneRef {
-        PaneRef::new("w3", "w3:p1")
-    }
-
-    #[test]
-    fn workspaces_become_windows_by_their_agent_pane() {
-        let base = temp_dir("herdr-obs");
-        let (a, b) = (base.join("a"), base.join("b"));
-        std::fs::create_dir(&a).expect("mkdir");
-        std::fs::create_dir(&b).expect("mkdir");
-        let (workspaces, panes) = fixture(&[&a, &b]);
-        let got = window_obs(&workspaces, &panes);
-        let summary: Vec<_> = got.iter().map(|o| (o.id.clone(), o.dead, o.waiting)).collect();
-        assert_eq!(
-            summary,
-            [
-                (WindowId::Herdr(PaneRef::new("w2", "w2:p2")), false, true),
-                (WindowId::Herdr(PaneRef::new("w3", "w3:p1")), true, false),
-            ],
-            "no worktree and a missing checkout are skipped; the agent pane wins; no agent is dead"
-        );
-        assert!(got[0].worktree.as_path().ends_with("a"));
-    }
-
-    #[test]
-    fn only_blocked_done_and_idle_wait() {
-        let waits = |status: &str| {
-            let row = format!(r#"{{"pane_id":"p","workspace_id":"w","agent":"claude","agent_status":"{status}"}}"#);
-            serde_json::from_str::<PaneRow>(&row).expect("row").agent_status.waiting()
-        };
-        assert_eq!(
-            ["idle", "working", "blocked", "done", "unknown", "from-the-future"].map(waits),
-            [true, false, true, true, false, false]
-        );
-    }
-
     #[test]
     fn a_herdr_that_is_not_running_has_no_windows() {
         let error = r#"{"id":"cli:workspace:list","error":{"code":"server_not_running","message":"no herdr server"}}"#;
@@ -459,6 +298,10 @@ mod tests {
         assert_eq!(Place::detect(Some("1"), Some("w1"), "orbit"), Ok(inside));
         assert!(Place::detect(Some("1"), None, "orbit").is_err());
         assert!(Place::detect(Some("1"), Some(""), "orbit").is_err());
+    }
+
+    fn pane() -> PaneRef {
+        PaneRef::new("w3", "w3:p1")
     }
 
     const ROOT: &str = "/w/orbit";
