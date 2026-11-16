@@ -1,8 +1,8 @@
 use super::{GitWorld, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
-use crate::session::mux::Mux;
-use crate::session::{AttachPlan, SessionState, WindowId, Workspace, hc};
+use crate::session::mux::Backend;
+use crate::session::{AttachPlan, SessionState, Workspace, hc};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -47,7 +47,7 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
 
 fn hc_workspace(base: &std::path::Path) -> Workspace {
     let mut ws = workspace(base);
-    ws.mux = Mux::Hc(hc::Place::Outside);
+    ws.mux = Backend::Hc(hc::Place::Outside);
     ws
 }
 
@@ -80,7 +80,7 @@ fn hc_start_adds_the_worktree_with_git_and_runs_claude_with_the_labels() {
     let mut r = req();
     r.prompt = "line one\nit's \"line\" two;".to_string();
     let out = ws.start(&r, &launch()).expect("start");
-    assert_eq!(out.session.state(), SessionState::NeedsYou, "an idle status is waiting");
+    assert_eq!(out.session.state, SessionState::NeedsYou, "an idle status is waiting");
     let dir = base.join("orbit/.claude/worktrees/142");
     assert_eq!(
         hc_calls(),
@@ -178,13 +178,11 @@ fn hc_observe_prefers_a_live_terminal_over_a_newer_finished_one() {
     let sim = HcSim { git: GitWorld::started(), terminals, gone: false };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
-    let space = hc::space_id(&base.join("orbit/.claude/worktrees/142"));
     assert_eq!(
-        session.window.as_ref().expect("window").id,
-        WindowId::Hc(hc::Pane::new("t2", space.as_str())),
-        "the pane carries the space id derived from the worktree"
+        ws.attach_plan(IssueNumber(142)).expect("plan"),
+        AttachPlan::Suspend(["hc", "attach", "t2"].map(String::from).to_vec())
     );
-    assert_eq!(session.state(), SessionState::Running);
+    assert_eq!(session.state, SessionState::Running);
     assert_eq!(
         fake::calls().iter().find(|c| c.starts_with("hc ls")).map(String::as_str),
         Some(format!("hc ls --all --json --label dispatch.repo={}", base.join("orbit").display()).as_str())
@@ -216,15 +214,23 @@ fn hc_send_refuses_a_finished_terminal() {
 fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
     let base = temp_dir("hc-attach");
     let mut ws = hc_workspace(&base);
-    let id = WindowId::Hc(hc::Pane::new("t4", "sp4"));
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "live", Some("working"))], gone: false };
+    let sim = Rc::new(RefCell::new(sim));
+    install_hc_world(base.clone(), Rc::clone(&sim));
+    let id = IssueNumber(142);
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
+        ws.attach_plan(id).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
     );
-    ws.mux = Mux::Hc(hc::Place::App);
+    ws.mux = Backend::Hc(hc::Place::App);
+    let space = hc::space_id(&dir);
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
-        AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", "sp4"].map(String::from).to_vec())
+        ws.attach_plan(id).expect("plan"),
+        AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", space.as_str()].map(String::from).to_vec()),
+        "the space id is derived from the worktree"
     );
-    assert!(ws.attach_plan(&WindowId::parse("@4").expect("id")).is_err(), "a tmux window is not ours");
+    sim.borrow_mut().terminals = vec![("t4", "finished", None)];
+    assert!(ws.attach_plan(id).is_err(), "a finished terminal has nothing to attach to");
 }

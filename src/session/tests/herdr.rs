@@ -1,8 +1,8 @@
 use super::{GitWorld, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
-use crate::session::mux::Mux;
-use crate::session::{AttachPlan, SessionState, WindowId, Workspace, herdr};
+use crate::session::mux::Backend;
+use crate::session::{AttachPlan, SessionState, Workspace, herdr};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ fn install_herdr_world(base: PathBuf, sim: Rc<RefCell<HerdrSim>>) {
 fn herdr_workspace(base: &std::path::Path) -> Workspace {
     let mut ws = workspace(base);
     let place = herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside herdr");
-    ws.mux = Mux::Herdr(place);
+    ws.mux = Backend::Herdr(place);
     ws
 }
 
@@ -80,7 +80,7 @@ fn herdr_start_of_a_new_branch_creates_the_worktree_through_herdr_and_types_clau
     let ws = herdr_workspace(&base);
     install_herdr_world(base.clone(), Rc::new(RefCell::new(HerdrSim::default())));
     let out = ws.start(&req(), &launch()).expect("start");
-    assert_eq!(out.session.state(), SessionState::NeedsYou, "herdr reports an idle agent as waiting");
+    assert_eq!(out.session.state, SessionState::NeedsYou, "herdr reports an idle agent as waiting");
     let dir = base.join("orbit/.claude/worktrees/142");
     assert_eq!(
         herdr_calls(),
@@ -213,25 +213,29 @@ fn herdr_send_refuses_a_pane_without_an_agent() {
 fn herdr_attach_focuses_the_workspace() {
     let base = temp_dir("herdr-attach");
     let ws = herdr_workspace(&base);
-    let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = Rc::new(RefCell::new(HerdrSim { git: GitWorld::started(), workspace_open: true, agent: true }));
+    install_herdr_world(base.clone(), Rc::clone(&sim));
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
+        ws.attach_plan(IssueNumber(142)).expect("plan"),
         AttachPlan::Switch(["herdr", "workspace", "focus", "w5"].map(String::from).to_vec())
     );
-    assert!(ws.attach_plan(&WindowId::parse("@4").expect("id")).is_err(), "a tmux window is not ours");
+    sim.borrow_mut().agent = false;
+    assert!(ws.attach_plan(IssueNumber(142)).is_err(), "a pane without an agent has nothing to attach to");
 }
 
 #[test]
 fn a_detached_herdr_attaches_by_focusing_the_workspace_then_opening_herdr() {
     let base = temp_dir("herdr-attach-detached");
     let mut ws = herdr_workspace(&base);
-    ws.mux = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
-    fake::install(|_| Ok(String::new()));
-    let id = WindowId::Herdr(herdr::PaneRef::new("w5", "w5:p1"));
+    ws.mux = Backend::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = HerdrSim { git: GitWorld::started(), workspace_open: true, agent: true };
+    install_herdr_world(base.clone(), Rc::new(RefCell::new(sim)));
     let script = r#"herdr workspace focus "$1" >/dev/null && exec herdr"#;
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
+        ws.attach_plan(IssueNumber(142)).expect("plan"),
         AttachPlan::Suspend(["sh", "-c", script, "sh", "w5"].map(String::from).to_vec())
     );
-    assert!(fake::calls().is_empty(), "planning runs nothing");
+    assert!(herdr_calls().is_empty(), "planning only reads");
 }

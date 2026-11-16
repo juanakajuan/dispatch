@@ -7,7 +7,6 @@ use super::toast::say;
 use crate::domain::{BranchName, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest};
 use crate::merge::job::{MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
-use crate::session::SessionState;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use std::fmt::Write as _;
 
@@ -65,10 +64,7 @@ pub(super) fn merge_target(state: &State) -> Result<&PullRequest, String> {
 /// issue the PR closes that has no session yet.
 pub(super) fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, String> {
     if let Some(s) = state.sessions.values().find(|s| s.branch.as_str() == pr.head) {
-        return Ok(match s.state() {
-            SessionState::Running | SessionState::NeedsYou => Fixer::Agent(s.issue),
-            SessionState::Exited => Fixer::NewSession(s.issue),
-        });
+        return Ok(if s.state.is_live() { Fixer::Agent(s.issue) } else { Fixer::NewSession(s.issue) });
     }
     let n = pr.number.0;
     if pr.closes.is_empty() {
@@ -208,11 +204,7 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
 /// merged PR needs no agent, so `merged` stops it like `x` does.
 pub(super) fn live_session_on_pr(state: &State, pr: PrNumber) -> Option<IssueNumber> {
     let head = &state.prs.items.iter().find(|p| p.number == pr)?.head;
-    state
-        .sessions
-        .values()
-        .find(|s| s.branch.as_str() == head && matches!(s.state(), SessionState::Running | SessionState::NeedsYou))
-        .map(|s| s.issue)
+    state.sessions.values().find(|s| s.branch.as_str() == head && s.state.is_live()).map(|s| s.issue)
 }
 
 /// The check found `problem` on `pr`, the PR as GitHub showed it now.

@@ -4,7 +4,7 @@ use crate::config::settings::Setting;
 use crate::domain::{GithubRef, Issue, IssueNumber, PullRequest};
 use crate::merge::job::MergeRun;
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{Sessions, StartOutcome, WindowId};
+use crate::session::{Sessions, StartOutcome};
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::time::{Duration, Instant};
 
@@ -67,7 +67,7 @@ pub enum Msg {
 pub enum Cmd {
     Job(Job),
     /// Runs on the main thread: `AttachPlan::Suspend` must own the terminal.
-    Attach(WindowId),
+    Attach(IssueNumber),
     /// Runs on the main thread: the copy writes to the terminal.
     Copy {
         target: GithubRef,

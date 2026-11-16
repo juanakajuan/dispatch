@@ -1,7 +1,7 @@
 use super::State;
 use super::msg::{Cmd, GITHUB_COOLDOWN, Job, SESSIONS_EVERY, TOAST_FOR};
 use super::toast::say;
-use crate::session::{Session, SessionState, Sessions};
+use crate::session::{SessionState, Sessions};
 use std::time::Instant;
 
 /// Remote data plus its load status. `items` keeps the last good data when a
@@ -108,7 +108,7 @@ pub(super) fn observed(state: &mut State, result: Result<Sessions, String>) -> V
     state.inflight.sessions = false;
     match result {
         Ok(sessions) => {
-            if state.sessions.iter().any(|(n, s)| went_idle(s.state(), sessions.get(n).map(Session::state))) {
+            if state.sessions.iter().any(|(n, s)| went_idle(s.state, sessions.get(n).map(|s| s.state))) {
                 state.due.github_soon = true;
             }
             state.sessions = sessions;

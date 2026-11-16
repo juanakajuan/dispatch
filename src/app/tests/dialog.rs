@@ -12,7 +12,7 @@ fn s_on_an_issue_opens_the_dialog_with_label_defaults() {
 #[test]
 fn s_on_an_issue_with_a_session_goes_to_it_and_opens_no_dialog() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('s'));
     assert!(cmds.is_empty());
     assert_eq!(state.tab, Tab::Sessions);

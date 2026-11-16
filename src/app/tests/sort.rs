@@ -53,7 +53,7 @@ fn s_cycles_every_issue_mode_in_order_and_wraps() {
 #[test]
 fn rows_group_by_state_before_the_sort_orders_them() {
     let mut state = sortable();
-    state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
+    state.sessions.insert(IssueNumber(1), session(1, SessionState::NeedsYou));
     state.prs.items[0].closes = vec![IssueNumber(3)];
     for _ in 0..=IssueSort::ALL.len() {
         assert_eq!(numbers(&state), [1, 3, 2], "needs you, in review, open: {}", state.sort.label(Tab::Issues));
@@ -77,14 +77,14 @@ fn each_tab_keeps_its_own_mode() {
     assert_eq!(state.sort.label(Tab::Prs), "attention", "PRs have no comment mode");
 
     press(&mut state, key('3'));
-    state.sessions.insert(IssueNumber(1), session(1, Some((true, true))));
-    state.sessions.insert(IssueNumber(9), session(9, Some((true, false))));
-    state.sessions.insert(IssueNumber(10), session(10, None));
+    state.sessions.insert(IssueNumber(1), session(1, SessionState::NeedsYou));
+    state.sessions.insert(IssueNumber(9), session(9, SessionState::Running));
+    state.sessions.insert(IssueNumber(10), session(10, SessionState::Exited));
     assert_eq!(numbers(&state), [1, 9, 10]);
     press(&mut state, shift_s());
     assert_eq!(state.sort.label(Tab::Sessions), "number");
     assert_eq!(numbers(&state), [1, 9, 10]);
-    state.sessions.insert(IssueNumber(1), session(1, None));
+    state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
     assert_eq!(numbers(&state), [9, 1, 10], "the group comes first, then the number");
 
     press(&mut state, key('1'));

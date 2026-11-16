@@ -1,6 +1,6 @@
 use super::{PaneId, PaneRef, WorkspaceId};
 use crate::domain::WorktreePath;
-use crate::session::{WindowId, WindowObs};
+use crate::session::mux::{Liveness, Observed};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
@@ -93,7 +93,7 @@ pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<T, String> {
     serde_json::from_str::<Reply<T>>(text).map(|r| r.result).map_err(|e| format!("herdr printed unexpected JSON: {e}"))
 }
 
-pub(super) fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<WindowObs> {
+pub(super) fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<Observed<PaneRef>> {
     workspaces
         .workspaces
         .iter()
@@ -102,12 +102,13 @@ pub(super) fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<Wi
             let worktree = WorktreePath::from_observed(checkout)?;
             let own: Vec<&PaneRow> = panes.panes.iter().filter(|p| p.workspace_id == ws.workspace_id).collect();
             let pane = own.iter().find(|p| p.agent.is_some()).or(own.first())?;
-            Some(WindowObs {
-                id: WindowId::Herdr(PaneRef { workspace: ws.workspace_id.clone(), pane: pane.pane_id.clone() }),
-                worktree,
-                dead: pane.agent.is_none(),
-                waiting: pane.agent_status.waiting(),
-            })
+            let liveness = match &pane.agent {
+                None => Liveness::Dead,
+                Some(_) if pane.agent_status.waiting() => Liveness::Waiting,
+                Some(_) => Liveness::Working,
+            };
+            let window = PaneRef { workspace: ws.workspace_id.clone(), pane: pane.pane_id.clone() };
+            Some(Observed { window, worktree, liveness })
         })
         .collect()
 }
@@ -146,13 +147,10 @@ mod tests {
         std::fs::create_dir(&b).expect("mkdir");
         let (workspaces, panes) = fixture(&[&a, &b]);
         let got = window_obs(&workspaces, &panes);
-        let summary: Vec<_> = got.iter().map(|o| (o.id.clone(), o.dead, o.waiting)).collect();
+        let summary: Vec<_> = got.iter().map(|o| (o.window.clone(), o.liveness)).collect();
         assert_eq!(
             summary,
-            [
-                (WindowId::Herdr(PaneRef::new("w2", "w2:p2")), false, true),
-                (WindowId::Herdr(PaneRef::new("w3", "w3:p1")), true, false),
-            ],
+            [(PaneRef::new("w2", "w2:p2"), Liveness::Waiting), (PaneRef::new("w3", "w3:p1"), Liveness::Dead),],
             "no worktree and a missing checkout are skipped; the agent pane wins; no agent is dead"
         );
         assert!(got[0].worktree.as_path().ends_with("a"));

@@ -3,7 +3,7 @@
 //! here, so the preview cannot drift from a real start (cbee386).
 
 use super::herdr;
-use super::mux::Mux;
+use super::mux::Backend;
 use super::request::Launch;
 use super::worktree::WORKTREES_DIR;
 use crate::config::ClaudeCommand;
@@ -12,7 +12,7 @@ use crate::domain::{IssueNumber, Mode};
 /// The start dialog's "Runs" preview.
 #[derive(Clone, Debug)]
 pub struct StartPreview {
-    pub(super) mux: Mux,
+    pub(super) mux: Backend,
     pub(super) base: String,
 }
 
@@ -30,8 +30,8 @@ impl StartPreview {
         let dir = format!("{}/{}", WORKTREES_DIR, issue.0);
         let base = Some(self.base.as_str());
         let (program, args) = match &self.mux {
-            Mux::Tmux(_) | Mux::Hc(_) => ("git", worktree_add_args(&dir, branch, base)),
-            Mux::Herdr(place) => {
+            Backend::Tmux(_) | Backend::Hc(_) => ("git", worktree_add_args(&dir, branch, base)),
+            Backend::Herdr(place) => {
                 let source = match place {
                     herdr::Place::Inside { source } => source.as_str().to_string(),
                     herdr::Place::Detached { label } => format!("<workspace {label}>"),
@@ -47,7 +47,7 @@ impl StartPreview {
     #[cfg(test)]
     pub fn herdr_inside(source: &str) -> StartPreview {
         let source = serde_json::from_value(serde_json::json!(source)).expect("workspace id");
-        StartPreview { mux: Mux::Herdr(herdr::Place::Inside { source }), base: "origin/main".to_string() }
+        StartPreview { mux: Backend::Herdr(herdr::Place::Inside { source }), base: "origin/main".to_string() }
     }
 }
 
@@ -55,7 +55,7 @@ impl StartPreview {
 impl Default for StartPreview {
     fn default() -> StartPreview {
         let place = super::tmux::Place::Detached { session_name: "dispatch-orbit".to_string() };
-        StartPreview { mux: Mux::Tmux(place), base: "origin/main".to_string() }
+        StartPreview { mux: Backend::Tmux(place), base: "origin/main".to_string() }
     }
 }
 

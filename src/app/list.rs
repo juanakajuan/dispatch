@@ -213,7 +213,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
 /// running, so the row does not jump when the window appears.
 pub(super) fn activity(state: &State, n: IssueNumber) -> Option<SessionState> {
     match state.sessions.get(&n) {
-        Some(s) => Some(s.state()),
+        Some(s) => Some(s.state),
         None => state.starting.contains(&n).then_some(SessionState::Running),
     }
 }

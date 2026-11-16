@@ -92,7 +92,7 @@ fn filter_esc_clears_and_backspace_edits() {
 fn pr_enter_goes_to_the_closed_issue_and_pr_rows_show_the_session() {
     let (mut state, _) = app();
     press(&mut state, key('2'));
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     assert_eq!(current_session(&state).map(|s| s.issue), Some(IssueNumber(3)), "via closes");
     press(&mut state, code(KeyCode::Enter));
     assert_eq!(state.tab, Tab::Issues);
@@ -124,16 +124,16 @@ fn lead_pr_prefers_merged_then_open_then_draft_and_skips_closed() {
 #[test]
 fn session_pr_is_found_by_head_branch() {
     let (state, _) = app();
-    let s = session(3, None);
+    let s = session(3, SessionState::Exited);
     assert_eq!(pr_for_session(&state, &s).map(|p| p.number), Some(PrNumber(10)));
-    assert!(pr_for_session(&state, &session(4, None)).is_none());
+    assert!(pr_for_session(&state, &session(4, SessionState::Exited)).is_none());
 }
 
 #[test]
 fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(1), session(1, None));
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+    state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     state.starting.insert(IssueNumber(2));
     press(&mut state, key('3'));
     assert_eq!(

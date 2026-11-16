@@ -11,9 +11,9 @@ mod start_argv;
 mod tmux;
 mod worktree;
 
-use super::mux::Mux;
+use super::mux::{Backend, Liveness, Observed};
 use super::request::{Launch, StartFrom, StartRequest};
-use super::{WindowId, WindowObs, Workspace, git, tmux as tmux_backend};
+use super::{Workspace, git, tmux as tmux_backend};
 use crate::config::ClaudeCommand;
 use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
 use crate::proc::{ProcError, fake};
@@ -35,8 +35,8 @@ fn markers(rows: &[(&str, u32)]) -> git::Markers {
     rows.iter().map(|(b, n)| (br(b), IssueNumber(*n))).collect()
 }
 
-fn win(id: &str, path: &str, dead: bool, waiting: bool) -> WindowObs {
-    WindowObs { id: WindowId::parse(id).expect("window id"), worktree: wp(path), dead, waiting }
+fn win(id: &str, path: &str, liveness: Liveness) -> Observed<tmux_backend::WindowId> {
+    Observed { window: tmux_backend::WindowId::parse(id).expect("window id"), worktree: wp(path), liveness }
 }
 
 fn req() -> StartRequest {
@@ -55,7 +55,7 @@ fn workspace(base: &Path) -> Workspace {
         repo_root: base.join("orbit"),
         git_common_dir: base.join("orbit").join(".git"),
         base: "origin/main".to_string(),
-        mux: Mux::Tmux(tmux_backend::Place::Inside { session_id: "$1".to_string() }),
+        mux: Backend::Tmux(tmux_backend::Place::Inside { session_id: "$1".to_string() }),
     }
 }
 

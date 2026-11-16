@@ -2,10 +2,11 @@ use super::{br, markers, req, win, wp, wt};
 use crate::config::ClaudeCommand;
 use crate::domain::{IssueNumber, Mode, WorktreePath};
 use crate::session::error::StartConflict;
-use crate::session::join::join;
+use crate::session::join::{join, sessions};
+use crate::session::mux::{Liveness, Observed};
 use crate::session::plan::{Layout, StartObservation, StartPlan, Step, plan_start};
 use crate::session::request::StartFrom;
-use crate::session::{WindowId, WindowObs, git};
+use crate::session::{git, tmux};
 use std::path::PathBuf;
 
 /// `worktree_dir_for` of `layout().repo_root` and issue 142.
@@ -23,7 +24,7 @@ fn layout() -> Layout {
 struct World {
     worktrees: Vec<git::Worktree>,
     markers: git::Markers,
-    windows: Vec<WindowObs>,
+    windows: Vec<Observed<tmux::WindowId>>,
     target_dir_exists: bool,
     branch_exists: bool,
 }
@@ -41,7 +42,7 @@ impl World {
 
     fn obs(&self) -> StartObservation {
         StartObservation {
-            sessions: join(&self.worktrees, &self.markers, &self.windows),
+            sessions: sessions(&join(&self.worktrees, &self.markers, &self.windows)),
             worktrees: self.worktrees.clone(),
             markers: self.markers.clone(),
             target_dir_exists: self.target_dir_exists,
@@ -68,11 +69,10 @@ impl World {
                 self.markers.insert(branch.clone(), *issue);
             }
             Step::OpenWindow { dir, .. } => {
-                self.windows.push(WindowObs {
-                    id: WindowId::parse("@9").expect("id"),
+                self.windows.push(Observed {
+                    window: tmux::WindowId::parse("@9").expect("id"),
                     worktree: dir.clone(),
-                    dead: false,
-                    waiting: false,
+                    liveness: Liveness::Working,
                 });
             }
         }
@@ -81,7 +81,7 @@ impl World {
 
 fn open_step() -> Step {
     let argv = ["claude".to_string(), "p".to_string()].to_vec();
-    Step::OpenWindow { dir: wp(TARGET), name: "#142".to_string(), argv }
+    Step::OpenWindow { dir: wp(TARGET), argv }
 }
 
 fn add(branch: &str, from: Option<&str>) -> Step {
@@ -108,7 +108,7 @@ fn plan_session_with_live_window_is_already_running() {
     let mut w = World::empty();
     w.worktrees.push(wt(TARGET, Some("fix/142-x")));
     w.markers = markers(&[("fix/142-x", 142)]);
-    w.windows.push(win("@3", TARGET, false, false));
+    w.windows.push(win("@3", TARGET, Liveness::Working));
     assert!(matches!(w.plan(), Ok(StartPlan::AlreadyRunning(s)) if s.issue == IssueNumber(142)));
 }
 
@@ -118,7 +118,7 @@ fn plan_session_without_live_window_opens_one() {
     w.worktrees.push(wt(TARGET, Some("fix/142-x")));
     w.markers = markers(&[("fix/142-x", 142)]);
     assert_eq!(steps(w.plan()), [open_step()]);
-    w.windows.push(win("@3", TARGET, true, false));
+    w.windows.push(win("@3", TARGET, Liveness::Dead));
     assert_eq!(steps(w.plan()), [open_step()]);
 }
 

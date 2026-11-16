@@ -12,7 +12,7 @@ use crate::domain::{BranchName, WorktreePath};
 use crate::domain::{Checks, IssueNumber, PrState, PullRequest};
 use crate::glyphs::IconSet;
 use crate::session::Session;
-use crate::session::{StartPreview, Window, WindowId};
+use crate::session::{SessionState, StartPreview};
 use crate::testutil::{issue, pr};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Terminal;
@@ -45,14 +45,13 @@ pub(super) fn full_state() -> State {
     state.prs.status = FeedStatus::Fresh { at: Instant::now() };
     state.inflight.issues = false;
     state.inflight.prs = false;
-    let id = WindowId::parse("@3").expect("id");
     state.sessions.insert(
         IssueNumber(3),
         Session {
             issue: IssueNumber(3),
             branch: BranchName::parse("fix/3-x").expect("branch"),
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),
-            window: Some(Window { id, alive: true, waiting: true }),
+            state: SessionState::NeedsYou,
         },
     );
     state

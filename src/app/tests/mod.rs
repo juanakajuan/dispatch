@@ -15,9 +15,8 @@ use crate::domain::{Mergeability, WorktreePath};
 use crate::glyphs::IconSet;
 use crate::merge::job::{MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergeProblem};
-use crate::session::Window;
 use crate::session::request::{Launch, StartFrom, StartRequest};
-use crate::session::{Session, StartOutcome, WindowId};
+use crate::session::{Session, SessionState, StartOutcome};
 use crate::sort::{Cycle, IssueSort};
 use crate::testutil::{issue, pr};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -54,16 +53,12 @@ pub(super) fn click(col: u16, row: u16, at: Instant) -> Msg {
     )
 }
 
-pub(super) fn session(n: u32, window: Option<(bool, bool)>) -> Session {
+pub(super) fn session(n: u32, state: SessionState) -> Session {
     Session {
         issue: IssueNumber(n),
         branch: BranchName::parse(&format!("fix/{n}-x")).expect("branch"),
         worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
-        window: window.map(|(alive, waiting)| Window {
-            id: WindowId::parse(&format!("@{n}")).expect("id"),
-            alive,
-            waiting,
-        }),
+        state,
     }
 }
 

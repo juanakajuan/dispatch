@@ -46,10 +46,8 @@ pub(super) enum Step {
     /// `git config branch.<b>.dispatch-issue N`.
     /// Overwrites, so running it twice is harmless.
     Mark { branch: BranchName, issue: IssueNumber },
-    /// Two tmux calls: new-window (or new-session when the detached session
-    /// is missing) with argv `claude ...`, then set-option for
-    /// `@dispatch-worktree` and `remain-on-exit on` on that window id.
-    OpenWindow { dir: WorktreePath, name: String, argv: Vec<String> },
+    /// `Mux::open` with argv `claude ...`.
+    OpenWindow { dir: WorktreePath, argv: Vec<String> },
 }
 
 /// Pure. Decision table, tested row by row:
@@ -79,7 +77,6 @@ pub(super) fn plan_start(
     let target = worktree_dir_for(&layout.repo_root, req.issue);
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
-        name: format!("#{}", req.issue.0),
         argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
     };
     let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
@@ -87,9 +84,10 @@ pub(super) fn plan_start(
     let planned = WorktreePath::planned(target.clone());
 
     if let Some(s) = obs.sessions.get(&req.issue) {
-        return Ok(match &s.window {
-            Some(w) if w.alive => StartPlan::AlreadyRunning(s.clone()),
-            _ => StartPlan::Steps(vec![open(s.worktree.clone())]),
+        return Ok(if s.state.is_live() {
+            StartPlan::AlreadyRunning(s.clone())
+        } else {
+            StartPlan::Steps(vec![open(s.worktree.clone())])
         });
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.path.as_path() == target) {

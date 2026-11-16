@@ -1,10 +1,11 @@
 //! dispatch runs Claude by typing a launcher script's path into the
 //! workspace's pane, because `herdr agent start` refuses a multi-line prompt.
 
+mod mux;
 mod wire;
 
+use super::mux::Observed;
 use super::start_argv::herdr_worktree_create_args;
-use super::{WindowId, WindowObs};
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
@@ -98,7 +99,7 @@ fn query<T: DeserializeOwned + Default>(args: &[&str]) -> Result<T, String> {
     }
 }
 
-pub(super) fn list_windows() -> Result<Vec<WindowObs>, String> {
+fn list_windows() -> Result<Vec<Observed<PaneRef>>, String> {
     let workspaces: WorkspaceList = query(&["workspace", "list"])?;
     let panes: PaneList = query(&["pane", "list"])?;
     Ok(window_obs(&workspaces, &panes))
@@ -152,7 +153,7 @@ fn source_within(place: &Place, repo_root: &Path, budget: Duration) -> Result<Wo
     Ok(created.workspace.workspace_id)
 }
 
-pub(super) fn create_worktree(
+fn create_worktree(
     place: &Place,
     repo_root: &Path,
     dir: &Path,
@@ -166,7 +167,7 @@ pub(super) fn create_worktree(
 }
 
 /// `herdr worktree create` already opens a workspace on the new checkout.
-pub(super) fn open_window(
+fn open_window(
     place: &Place,
     repo_root: &Path,
     dir: &WorktreePath,
@@ -174,10 +175,9 @@ pub(super) fn open_window(
     argv: &[String],
     script: &Path,
 ) -> Result<(), String> {
-    let open = list_windows()?.into_iter().find(|o| o.worktree == *dir);
-    let pane = match open {
-        Some(WindowObs { id: WindowId::Herdr(pane), .. }) => pane,
-        _ => open_worktree(&source(place, repo_root)?, dir, issue)?,
+    let pane = match list_windows()?.into_iter().find(|o| o.worktree == *dir) {
+        Some(open) => open.window,
+        None => open_worktree(&source(place, repo_root)?, dir, issue)?,
     };
     launch(&pane, argv, script)
 }
@@ -202,7 +202,7 @@ fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -
 const AGENT_WAIT: Duration = Duration::from_secs(10);
 const AGENT_POLL: Duration = Duration::from_millis(250);
 
-pub(super) fn launch(pane: &PaneRef, argv: &[String], script: &Path) -> Result<(), String> {
+fn launch(pane: &PaneRef, argv: &[String], script: &Path) -> Result<(), String> {
     write_script(argv, script)?;
     herdr(["pane", "run", pane.pane.as_str(), typed_path(script)?.as_str()])?;
     wait_for_agent(pane, AGENT_WAIT);
@@ -220,7 +220,7 @@ fn wait_for_agent(pane: &PaneRef, budget: Duration) {
     }
 }
 
-pub(super) fn script_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
+fn script_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
     git_common_dir.join("dispatch").join("launch").join(format!("{}.sh", issue.0))
 }
 
@@ -257,7 +257,7 @@ fn typed_path(path: &Path) -> Result<String, String> {
 }
 
 /// The checkout and the branch stay.
-pub(super) fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
+fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
     match herdr_raw(["workspace", "close", workspace.as_str()]) {
         Ok(_) => Ok(()),
         Err(e) if e.stderr().contains("workspace_not_found") || is_no_server(e.stderr()) => Ok(()),
@@ -267,7 +267,7 @@ pub(super) fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
 
 /// Types `text` into the pane, then presses Enter: two calls, like tmux, so
 /// Claude reads the text as typing and Enter as a submit.
-pub(super) fn send_line(pane: &PaneRef, text: &str) -> Result<(), String> {
+fn send_line(pane: &PaneRef, text: &str) -> Result<(), String> {
     herdr(["pane", "send-text", pane.pane.as_str(), text])?;
     herdr(["pane", "send-keys", pane.pane.as_str(), "enter"]).map(|_| ())
 }

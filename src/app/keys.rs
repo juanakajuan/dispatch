@@ -7,7 +7,7 @@ use super::open::open_key;
 use super::sessions::{attach_key, start_key, stop_key};
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
-use crate::session::{Session, SessionState};
+use crate::session::SessionState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,13 +256,13 @@ pub fn footer_hints(state: &State) -> Vec<(&'static str, &'static str)> {
 
 /// The key bar for the list: (keys, description).
 pub(super) fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
-    let session = current_session(state).map(Session::state);
+    let session = current_session(state).map(|s| s.state);
     let shown = |when: When| match when {
         When::Always => true,
         When::OnIssues => state.tab == Tab::Issues,
         When::OnPrs => state.tab == Tab::Prs,
         When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
-        When::SessionLive => matches!(session, Some(SessionState::Running | SessionState::NeedsYou)),
+        When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,

@@ -7,14 +7,14 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
     assert!(cmds.is_empty());
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("Press s")));
 
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('a'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Attach(id)] if id.as_str() == "@3"));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
 
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, true))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
     assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
 
-    state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Resume(n, _))] if *n == IssueNumber(3)));
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("claude --continue")));
@@ -24,9 +24,9 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
 fn x_stops_only_a_live_session_by_issue_number() {
     let (mut state, _) = app();
     assert!(press(&mut state, key('x')).is_empty());
-    state.sessions.insert(IssueNumber(3), session(3, Some((false, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
     assert!(press(&mut state, key('x')).is_empty(), "exited has nothing to stop");
-    state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('x'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Stop(n))] if *n == IssueNumber(3)));
 }
@@ -47,7 +47,8 @@ fn results_of_writes_clear_starting_toast_and_ask_for_an_observation() {
 fn a_finished_start_shows_its_session_at_once_with_its_warning() {
     let (mut state, _) = app();
     state.starting.insert(IssueNumber(3));
-    let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: vec!["fetch failed".to_string()] };
+    let outcome =
+        StartOutcome { session: session(3, SessionState::Running), warnings: vec!["fetch failed".to_string()] };
     press(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
     assert!(state.sessions.contains_key(&IssueNumber(3)));
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("fetch failed")));

@@ -98,7 +98,7 @@ fn assert_triggers_one_refresh(state: &mut State, msg: Msg) {
 #[test]
 fn a_start_or_a_stop_refreshes_github() {
     let (mut state, _) = app();
-    let outcome = StartOutcome { session: session(3, Some((true, false))), warnings: Vec::new() };
+    let outcome = StartOutcome { session: session(3, SessionState::Running), warnings: Vec::new() };
     assert_triggers_one_refresh(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
     assert_triggers_one_refresh(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
 
@@ -114,9 +114,9 @@ fn a_start_or_a_stop_refreshes_github() {
 #[test]
 fn a_session_that_goes_idle_or_exits_refreshes_github() {
     let observe = |sessions: Vec<Session>| Msg::Sessions(Ok(sessions.into_iter().map(|s| (s.issue, s)).collect()));
-    let running = || session(3, Some((true, false)));
-    let needs_you = || session(3, Some((true, true)));
-    let exited = || session(3, Some((false, false)));
+    let running = || session(3, SessionState::Running);
+    let needs_you = || session(3, SessionState::NeedsYou);
+    let exited = || session(3, SessionState::Exited);
     for (before, after) in
         [(running(), Some(needs_you())), (running(), Some(exited())), (needs_you(), Some(exited())), (running(), None)]
     {

@@ -1,7 +1,7 @@
 use crate::config::Multiplexer;
 use crate::proc::fake;
 use crate::session::error::SetupError;
-use crate::session::mux::{Mux, MuxEnv, detect_mux};
+use crate::session::mux::{Backend, MuxEnv, detect_mux};
 use crate::session::{hc, herdr, tmux};
 
 #[test]
@@ -26,10 +26,10 @@ fn in_app(env: MuxEnv) -> MuxEnv {
 #[test]
 fn the_multiplexer_choice_picks_the_backend_from_the_environment() {
     use Multiplexer::{Auto, Herdr, Tmux};
-    let inside_herdr = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
-    let detached_herdr = Mux::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
-    let inside_tmux = Mux::Tmux(tmux::Place::Inside { session_id: "$1".to_string() });
-    let detached_tmux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+    let inside_herdr = Backend::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+    let detached_herdr = Backend::Herdr(herdr::Place::detect(None, None, "orbit").expect("detached"));
+    let inside_tmux = Backend::Tmux(tmux::Place::Inside { session_id: "$1".to_string() });
+    let detached_tmux = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
     let table = [
         (Auto, false, false, &detached_tmux),
         (Auto, false, true, &inside_tmux),
@@ -56,9 +56,9 @@ fn the_multiplexer_choice_picks_the_backend_from_the_environment() {
 #[test]
 fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
     use Multiplexer::{Auto, Herdr, HerdrApp, Tmux};
-    let tmux_detached = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
-    let herdr_inside = Mux::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
-    let (app, outside) = (Mux::Hc(hc::Place::App), Mux::Hc(hc::Place::Outside));
+    let tmux_detached = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+    let herdr_inside = Backend::Herdr(herdr::Place::detect(Some("1"), Some("w1"), "orbit").expect("inside"));
+    let (app, outside) = (Backend::Hc(hc::Place::App), Backend::Hc(hc::Place::Outside));
     let table = [
         (Auto, in_app(env(false, false)), &app),
         (Auto, in_app(env(false, true)), &app),

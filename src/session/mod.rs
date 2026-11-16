@@ -20,6 +20,7 @@ mod hc;
 mod herdr;
 mod join;
 mod mux;
+mod ops;
 mod plan;
 pub mod request;
 mod start_argv;
@@ -31,42 +32,10 @@ pub use start_argv::StartPreview;
 use crate::config::Multiplexer;
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
 use error::{SessionError, SetupError};
-use join::join;
-use mux::{Mux, MuxEnv, detect_mux};
-use plan::{Layout, StartObservation, StartPlan, Step, plan_start};
+use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use worktree::{WORKTREES_DIR, WORKTREES_EXCLUDE, worktree_dir_for};
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum WindowId {
-    Tmux(tmux::WindowId),
-    Herdr(herdr::PaneRef),
-    Hc(hc::Pane),
-}
-
-#[cfg(test)]
-impl WindowId {
-    pub fn parse(raw: &str) -> Result<WindowId, String> {
-        tmux::WindowId::parse(raw).map(WindowId::Tmux)
-    }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            WindowId::Tmux(id) => id.as_str(),
-            WindowId::Herdr(p) => p.pane.as_str(),
-            WindowId::Hc(p) => p.address.as_str(),
-        }
-    }
-}
-
-struct WindowObs {
-    id: WindowId,
-    worktree: WorktreePath,
-    dead: bool,
-    waiting: bool,
-}
 
 /// One issue being worked in one worktree. Derived, never stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,35 +43,21 @@ pub struct Session {
     pub issue: IssueNumber,
     pub branch: BranchName,
     pub worktree: WorktreePath,
-    pub window: Option<Window>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Window {
-    pub id: WindowId,
-    /// False when Claude exited and `remain-on-exit` keeps the dead pane, so
-    /// the last screen stays readable.
-    pub alive: bool,
-    /// Set by the Claude hooks in `WAITING_HOOKS`. Always false when
-    /// `Config::detect_waiting` is off.
-    pub waiting: bool,
+    pub state: SessionState,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
     Running,
+    /// Claude waits for the user.
     NeedsYou,
+    /// Claude exited, or its window is gone. The worktree and branch stay.
     Exited,
 }
 
-impl Session {
-    /// The only place state is decided. No stored state can disagree with it.
-    pub fn state(&self) -> SessionState {
-        match &self.window {
-            Some(w) if w.alive && w.waiting => SessionState::NeedsYou,
-            Some(w) if w.alive => SessionState::Running,
-            _ => SessionState::Exited,
-        }
+impl SessionState {
+    pub fn is_live(self) -> bool {
+        matches!(self, SessionState::Running | SessionState::NeedsYou)
     }
 }
 
@@ -132,7 +87,7 @@ pub struct Workspace {
     git_common_dir: PathBuf,
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
-    mux: Mux,
+    mux: Backend,
 }
 
 impl Workspace {
@@ -153,180 +108,46 @@ impl Workspace {
         StartPreview { mux: self.mux.clone(), base: self.base.clone() }
     }
 
-    /// Three subprocesses (worktree list, config regexp, tmux list-windows),
-    /// then the pure `join`. A missing tmux server is an empty window list.
+    fn repo(&self) -> Repo<'_> {
+        Repo { root: &self.repo_root, git_common_dir: &self.git_common_dir }
+    }
+
+    /// A missing multiplexer server is an empty window list.
     pub fn observe(&self) -> Result<Sessions, SessionError> {
-        let (worktrees, markers, windows) = self.read_world()?;
-        Ok(join(&worktrees, &markers, &windows))
-    }
-
-    fn read_world(&self) -> Result<(Vec<git::Worktree>, git::Markers, Vec<WindowObs>), String> {
-        let windows = match &self.mux {
-            Mux::Tmux(_) => tmux::list_windows()?,
-            Mux::Herdr(_) => herdr::list_windows()?,
-            Mux::Hc(_) => hc::list_windows(&self.repo_root)?,
-        };
-        Ok((git::list_worktrees(&self.repo_root)?, git::list_markers(&self.repo_root)?, windows))
-    }
-
-    fn observe_for_start(&self, req: &StartRequest) -> Result<StartObservation, String> {
-        let (worktrees, markers, windows) = self.read_world()?;
-        Ok(StartObservation {
-            sessions: join(&worktrees, &markers, &windows),
-            worktrees,
-            markers,
-            target_dir_exists: worktree_dir_for(&self.repo_root, req.issue).exists(),
-            branch_exists: git::branch_exists(&self.repo_root, &req.branch)?,
-        })
-    }
-
-    fn layout(&self, launch: &Launch) -> Layout {
-        Layout {
-            repo_root: self.repo_root.clone(),
-            base: self.base.clone(),
-            hooks: self.mux.hooks(launch),
-            claude: launch.claude.clone(),
-        }
+        each_backend!(&self.mux, mux => ops::observe(self, mux))
     }
 
     /// Converges to "a live window runs Claude in this issue's worktree".
     /// Safe to call twice, and safe to call again after a crash at any step:
     /// it re-observes, plans only the missing steps, and runs them.
     pub fn start(&self, req: &StartRequest, launch: &Launch) -> Result<StartOutcome, SessionError> {
-        let obs = self.observe_for_start(req)?;
-        match plan_start(&obs, req, &self.layout(launch)).map_err(SessionError::Conflict)? {
-            StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
-            StartPlan::Steps(steps) => {
-                let warnings = self.run_steps(steps, req.issue)?;
-                let session = self.observe()?.remove(&req.issue).ok_or_else(|| {
-                    SessionError::Command(format!("session for #{} is not visible after start", req.issue.0))
-                })?;
-                Ok(StartOutcome { session, warnings })
-            }
-        }
+        each_backend!(&self.mux, mux => ops::start(self, mux, req, launch))
     }
 
-    /// The step runner. A failed `Fetch` is a warning: the start continues
-    /// from the local base. A failed exclude before `AddWorktree` is a warning
-    /// too: the worktree only shows in `git status`. Any other failure stops
-    /// the run, and the next `start` plans from whatever state exists.
-    fn run_steps(&self, steps: Vec<Step>, issue: IssueNumber) -> Result<Vec<String>, String> {
-        let mut warnings = Vec::new();
-        for step in steps {
-            match step {
-                Step::Fetch(remote_ref) => {
-                    if let Err(e) = git::fetch(&self.repo_root, &remote_ref) {
-                        warnings.push(format!("fetch failed, using the local {remote_ref}: {e}"));
-                    }
-                }
-                Step::AddWorktree { dir, branch, from } => {
-                    if let Err(e) = git::ensure_excluded(&self.git_common_dir, WORKTREES_EXCLUDE) {
-                        warnings.push(format!("{WORKTREES_DIR} still shows in git status: {e}"));
-                    }
-                    match &self.mux {
-                        Mux::Tmux(_) | Mux::Hc(_) => {
-                            git::add_worktree(&self.repo_root, &dir, &branch, from.as_deref())?;
-                        }
-                        Mux::Herdr(place) => {
-                            herdr::create_worktree(place, &self.repo_root, &dir, &branch, from.as_deref(), issue)?;
-                        }
-                    }
-                }
-                Step::Mark { branch, issue } => git::set_marker(&self.repo_root, &branch, issue)?,
-                Step::OpenWindow { dir, name, argv } => self.open_window(&dir, &name, issue, &argv)?,
-            }
-        }
-        Ok(warnings)
-    }
-
-    fn open_window(&self, dir: &WorktreePath, name: &str, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
-        match &self.mux {
-            Mux::Tmux(place) => tmux::open_window(place, dir, name, argv).map(|_| ()),
-            Mux::Herdr(place) => herdr::open_window(
-                place,
-                &self.repo_root,
-                dir,
-                issue,
-                argv,
-                &herdr::script_file(&self.git_common_dir, issue),
-            ),
-            Mux::Hc(_) => hc::open_window(&self.repo_root, dir, issue, argv).map(|_| ()),
-        }
-    }
-
-    /// Runs `claude --continue` for an exited session: `respawn-window -k` when
-    /// the dead pane is still there (same window id), else a new tagged window
-    /// as in `start`. No-op if the window is alive. It observes again first, so
-    /// a stale row can not aim at a window id that tmux reused.
+    /// Runs `claude --continue` for an exited session: in the dead window
+    /// when it is still there, else in a new window as in `start`. No-op if
+    /// the window is alive.
     pub fn resume(&self, issue: IssueNumber, launch: &Launch) -> Result<(), SessionError> {
-        let Some(session) = self.observe()?.remove(&issue) else {
-            return Err(SessionError::Command(format!("no session for #{}", issue.0)));
-        };
-        let argv = launch.claude.argv(&start_argv::continue_args(self.mux.hooks(launch)));
-        match &session.window {
-            Some(w) if w.alive => Ok(()),
-            Some(w) => match &w.id {
-                WindowId::Tmux(id) => Ok(tmux::respawn(id, &session.worktree, &argv)?),
-                WindowId::Herdr(pane) => {
-                    Ok(herdr::launch(pane, &argv, &herdr::script_file(&self.git_common_dir, issue))?)
-                }
-                WindowId::Hc(pane) => {
-                    hc::remove(&pane.address)?;
-                    Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?)
-                }
-            },
-            None => Ok(self.open_window(&session.worktree, &format!("#{}", issue.0), issue, &argv)?),
-        }
+        each_backend!(&self.mux, mux => ops::resume(self, mux, issue, launch))
     }
 
     /// Kills the window. The worktree and branch stay. A window that is
     /// already gone counts as success.
     pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
-        match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(Window { id: WindowId::Tmux(id), .. }) => Ok(tmux::kill_window(&id)?),
-            Some(Window { id: WindowId::Herdr(pane), .. }) => Ok(herdr::close_workspace(&pane.workspace)?),
-            Some(Window { id: WindowId::Hc(pane), .. }) => Ok(hc::stop(&pane.address)?),
-            None => Ok(()),
-        }
+        each_backend!(&self.mux, mux => ops::stop(self, mux, issue))
     }
 
-    /// Types `text` into the session's Claude prompt and submits it. Observes
-    /// again first, like `stop`, and refuses a dead pane, where the keys would
-    /// go nowhere.
+    /// Types `text` into the session's Claude prompt and submits it. Refuses
+    /// a dead window, where the keys would go nowhere.
     pub fn send(&self, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
-        match self.observe()?.remove(&issue).and_then(|s| s.window) {
-            Some(Window { id: WindowId::Tmux(id), alive: true, .. }) => Ok(tmux::send_line(&id, text)?),
-            Some(Window { id: WindowId::Herdr(pane), alive: true, .. }) => Ok(herdr::send_line(&pane, text)?),
-            Some(Window { id: WindowId::Hc(pane), alive: true, .. }) => Ok(hc::send_line(&pane.address, text)?),
-            _ => Err(SessionError::Command(format!("#{} has no running session", issue.0))),
-        }
+        each_backend!(&self.mux, mux => ops::send(self, mux, issue, text))
     }
 
-    pub fn attach_plan(&self, window: &WindowId) -> Result<AttachPlan, SessionError> {
-        match (&self.mux, window) {
-            (Mux::Tmux(place), WindowId::Tmux(id)) => Ok(tmux_attach_plan(place, id)),
-            (Mux::Herdr(herdr::Place::Inside { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Switch(
-                ["herdr", "workspace", "focus", pane.workspace.as_str()].map(String::from).to_vec(),
-            )),
-            (Mux::Herdr(herdr::Place::Detached { .. }), WindowId::Herdr(pane)) => Ok(AttachPlan::Suspend(
-                ["sh", "-c", "herdr workspace focus \"$1\" >/dev/null && exec herdr", "sh", pane.workspace.as_str()]
-                    .map(String::from)
-                    .to_vec(),
-            )),
-            (Mux::Hc(place), WindowId::Hc(pane)) => Ok(hc::attach_plan(*place, pane)),
-            _ => Err(SessionError::Command("that window belongs to another multiplexer".to_string())),
-        }
+    /// How to show the issue's live window. Fails when the window died since
+    /// the last poll; the next poll shows the session as exited.
+    pub fn attach_plan(&self, issue: IssueNumber) -> Result<AttachPlan, SessionError> {
+        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, issue))
     }
-}
-
-fn tmux_attach_plan(place: &tmux::Place, window: &tmux::WindowId) -> AttachPlan {
-    let session = place.session_target();
-    let select = ["tmux", "select-window", "-t", window.as_str()].map(String::from);
-    let (verb, plan): (&str, fn(Vec<String>) -> AttachPlan) = match place {
-        tmux::Place::Inside { .. } => ("switch-client", AttachPlan::Switch),
-        tmux::Place::Detached { .. } => ("attach-session", AttachPlan::Suspend),
-    };
-    plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
 }
 
 #[cfg(test)]

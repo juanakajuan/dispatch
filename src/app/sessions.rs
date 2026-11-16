@@ -5,8 +5,8 @@ use super::msg::{Cmd, Job};
 use super::toast::say;
 use super::{Focus, State};
 use crate::domain::IssueNumber;
+use crate::session::StartOutcome;
 use crate::session::request::Launch;
-use crate::session::{SessionState, StartOutcome};
 
 /// `s` or Enter on an issue, or a double-click on one.
 pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
@@ -39,8 +39,8 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         return Vec::new();
     };
     let issue = session.issue;
-    if let (Some(w), SessionState::Running | SessionState::NeedsYou) = (&session.window, session.state()) {
-        vec![Cmd::Attach(w.id.clone())]
+    if session.state.is_live() {
+        vec![Cmd::Attach(issue)]
     } else {
         say(state, format!("Resuming #{} with claude --continue", issue.0));
         vec![Cmd::Job(Job::Resume(issue, Launch::from_config(&state.config)))]
@@ -48,7 +48,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
 }
 
 pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
-    let live = current_session(state).filter(|s| matches!(s.state(), SessionState::Running | SessionState::NeedsYou));
+    let live = current_session(state).filter(|s| s.state.is_live());
     if let Some(issue) = live.map(|s| s.issue) {
         say(state, format!("Stopping #{}", issue.0));
         return vec![Cmd::Job(Job::Stop(issue))];

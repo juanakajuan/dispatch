@@ -94,7 +94,7 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &
     }
     frame.render_widget(Paragraph::new(centered(tabs, tab_row.width)), tab_row);
 
-    let count = |want: SessionState| state.sessions.values().filter(|s| s.state() == want).count();
+    let count = |want: SessionState| state.sessions.values().filter(|s| s.state == want).count();
     let needs = count(SessionState::NeedsYou);
     let working = count(SessionState::Running) + state.starting.len();
     let exited = count(SessionState::Exited);

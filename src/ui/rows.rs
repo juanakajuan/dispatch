@@ -7,7 +7,7 @@ use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::session::{Session, SessionState};
+use crate::session::SessionState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
@@ -89,8 +89,7 @@ pub(super) fn row_parts(
     now: jiff::Timestamp,
     icons: &Icons,
 ) -> (Span<'static>, String, Vec<Span<'static>>, String) {
-    let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(Session::state), state.starting.contains(&n))
-    {
+    let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(|s| s.state), state.starting.contains(&n)) {
         (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
         (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
         (Some(SessionState::Exited), _) => Some(span(icons.exited, palette::EXITED)),

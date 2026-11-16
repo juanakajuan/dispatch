@@ -1,8 +1,8 @@
 use super::{GitWorld, br, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
-use crate::session::mux::Mux;
-use crate::session::{AttachPlan, SessionState, WindowId, tmux};
+use crate::session::mux::Backend;
+use crate::session::{AttachPlan, SessionState, tmux};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -59,7 +59,7 @@ fn start_runs_the_steps_in_order_and_a_second_start_runs_none() {
     let r = req();
     install_world(base.clone(), Rc::new(RefCell::new(Sim::default())));
     let out = ws.start(&r, &launch()).expect("start");
-    assert_eq!(out.session.state(), SessionState::Running);
+    assert_eq!(out.session.state, SessionState::Running);
     assert!(out.warnings.is_empty());
     let dir = base.join("orbit/.claude/worktrees/142");
     let calls = fake::calls();
@@ -172,20 +172,26 @@ fn resume_respawns_a_dead_pane_in_an_old_sibling_worktree() {
 fn attach_inside_switches_and_outside_suspends() {
     let base = temp_dir("attach");
     let mut ws = workspace(&base);
-    let id = WindowId::parse("@4").expect("id");
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = Rc::new(RefCell::new(Sim { git: GitWorld::started(), window: true, tagged: true, ..Sim::default() }));
+    install_world(base.clone(), Rc::clone(&sim));
+    let id = IssueNumber(142);
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
+        ws.attach_plan(id).expect("plan"),
         AttachPlan::Switch(
             ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
         )
     );
-    ws.mux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+    ws.mux = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
     assert_eq!(
-        ws.attach_plan(&id).expect("plan"),
+        ws.attach_plan(id).expect("plan"),
         AttachPlan::Suspend(
             ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"]
                 .map(String::from)
                 .to_vec()
         )
     );
+    sim.borrow_mut().window = false;
+    let gone = ws.attach_plan(id).expect_err("the window is gone");
+    assert_eq!(gone.to_string(), "#142 has no running session");
 }
