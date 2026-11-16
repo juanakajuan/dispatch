@@ -95,7 +95,7 @@ pub struct State {
     /// Set by an `m` or `D` that waits for one more press of the same key on
     /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
-    pub summaries: std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>,
+    pub transcripts: std::collections::BTreeMap<IssueNumber, crate::transcript::Transcript>,
 }
 
 pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>) {
@@ -120,7 +120,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         hits: HitMap::default(),
         last_click: None,
         armed: None,
-        summaries: std::collections::BTreeMap::new(),
+        transcripts: std::collections::BTreeMap::new(),
         config,
     };
     let cmds = [

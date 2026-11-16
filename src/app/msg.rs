@@ -8,7 +8,7 @@ use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
 use crate::session::{RemoveOutcome, Sessions, StartOutcome};
-use crate::transcript::Summary;
+use crate::transcript::Transcript;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -73,8 +73,8 @@ pub enum Msg {
 /// One look at the sessions, with what each one's Claude last said.
 pub struct Observation {
     pub sessions: Sessions,
-    /// PROTOTYPE: what each session's Claude last said.
-    pub summaries: BTreeMap<IssueNumber, Summary>,
+    /// Only sessions that have a conversation.
+    pub transcripts: BTreeMap<IssueNumber, Transcript>,
 }
 
 /// Work for the shell.

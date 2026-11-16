@@ -52,9 +52,17 @@ enum Block {
     Other,
 }
 
-pub fn latest(worktree: &Path) -> Option<Summary> {
+/// A conversation Claude saved in a worktree. `claude --continue` needs one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Transcript {
+    /// None until Claude says something.
+    pub said: Option<Summary>,
+}
+
+/// None when the worktree has no conversation.
+pub fn read(worktree: &Path) -> Option<Transcript> {
     let file = newest_transcript(&projects_dir()?.join(encode(worktree)))?;
-    parse_latest(&read_tail(&file)?)
+    Some(Transcript { said: read_tail(&file).and_then(|text| parse_latest(&text)) })
 }
 
 #[expect(

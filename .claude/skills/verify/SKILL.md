@@ -21,6 +21,7 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 |---|---|---|
 | tmux server | socket `$RUN/tmux/sock`, no user tmux.conf | The user's tmux sessions are never touched. dispatch runs inside this server, so its windows go there too |
 | checkout | `$RUN/work/<repo>`, a fresh shallow `gh repo clone` | Session worktrees go to `$RUN/work/<repo>/.claude/worktrees/<issue>`, never into the user's checkout. `up` sets `gh repo set-default <repo>`, so a fork does not read its parent. It also tracks every `origin` branch, as a normal clone does |
+| Claude config | `$RUN/claude` (`CLAUDE_CONFIG_DIR`) | dispatch reads session transcripts from `projects/` here, never from your `~/.claude`. The fake claude writes one on each fresh start |
 | config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude` and `multiplexer` is `tmux`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit |
 | `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status` to the real gh. Blocks every other call, `pr merge` too, and logs it |

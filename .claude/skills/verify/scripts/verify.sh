@@ -42,7 +42,7 @@ load() {
 KEEP_ENV=(HOME USER LOGNAME LANG LC_ALL TERM COLORTERM TMPDIR XDG_RUNTIME_DIR SSH_AUTH_SOCK GH_TOKEN GITHUB_TOKEN PATH)
 clean_env() { local v a=(); for v in "${KEEP_ENV[@]}"; do [[ -n ${!v+x} ]] && a+=("$v=${!v}"); done; env -i "${a[@]}" "$@"; }
 # What the drive pane may hold: KEEP_ENV, what `up` sets, and what tmux adds to each pane.
-PANE_ENV_RE="^(${KEEP_ENV[*]}|GH_BROWSER|BROWSER|XDG_CONFIG_HOME|TMUX_TMPDIR|TMUX|TMUX_PANE|TERM_PROGRAM|TERM_PROGRAM_VERSION|PWD|SHLVL|SHELL|_|SSH_CONNECTION)="
+PANE_ENV_RE="^(${KEEP_ENV[*]}|GH_BROWSER|BROWSER|XDG_CONFIG_HOME|CLAUDE_CONFIG_DIR|TMUX_TMPDIR|TMUX|TMUX_PANE|TERM_PROGRAM|TERM_PROGRAM_VERSION|PWD|SHLVL|SHELL|_|SSH_CONNECTION)="
 PANE_ENV_RE="${PANE_ENV_RE// /|}"
 
 # Always the run's own server. -S beats $TMUX, so the user's server is never hit.
@@ -75,7 +75,7 @@ cmd_up() {
 
   local id; id="$(date +%Y%m%d-%H%M%S)-$$"
   RUN="$HOME_DIR/$id"
-  mkdir -p "$RUN"/{bin,evidence,tmux,work,xdg/dispatch}
+  mkdir -p "$RUN"/{bin,claude,evidence,tmux,work,xdg/dispatch}
   RUN="$(realpath "$RUN")"
   # dispatch reads $XDG_CONFIG_HOME/dispatch/config.json. gh and git read the same
   # base dir, so link every other entry of the real config dir into the run's dir.
@@ -124,6 +124,12 @@ hook() {
   [[ -n \$c ]] && sh -c "\$c"
   printf '%s hook %s\n' "\$(date -Is)" "\$1" >>"\$log"
 }
+# Real claude saves a transcript on its first prompt. dispatch resumes only a worktree that has one.
+# The path is fixed here because the hc backend passes the program no environment but PATH.
+if [[ \${1:-} != --continue ]]; then
+  project="$RUN/claude/projects/\${PWD//[^a-zA-Z0-9]/-}"
+  mkdir -p "\$project" && echo '{"type":"user"}' >"\$project/fake.jsonl"
+fi
 echo "FAKE-CLAUDE started in \$PWD on branch \$(git branch --show-current)"
 hook UserPromptSubmit; echo "FAKE-CLAUDE working"; sleep 2
 hook Stop; echo "FAKE-CLAUDE waiting for input (type exit to quit)"
@@ -166,7 +172,7 @@ EOF
   # so the pane process is dispatch. The login shell may be fish, which does not.
   clean_env "${ssh_env[@]}" SHELL=/bin/sh \
     PATH="$RUN/bin:$PATH" GH_BROWSER="$RUN/bin/browser" BROWSER="$RUN/bin/browser" \
-    XDG_CONFIG_HOME="$RUN/xdg" TMUX_TMPDIR="$RUN/tmux" \
+    XDG_CONFIG_HOME="$RUN/xdg" CLAUDE_CONFIG_DIR="$RUN/claude" TMUX_TMPDIR="$RUN/tmux" \
     tmux -S "$SOCK" -f /dev/null new-session -d -s drive -n dispatch -x "$cols" -y "$rows" -c "$CLONE" "$RUN/bin/dispatch"
   t set-option -g remain-on-exit on
   t set-option -g window-size manual
@@ -260,7 +266,7 @@ cmd_down() {
   [[ $RUN == "$(realpath "$HOME_DIR")"/* ]] || die "refusing to clean $RUN: not under $HOME_DIR"
   t kill-server 2>/dev/null || true
   if [[ -f $RUN/client.pgid ]]; then kill -- "-$(cat "$RUN/client.pgid")" 2>/dev/null || true; rm -f "$RUN/client.pgid"; fi
-  rm -rf "$RUN/work" "$RUN/xdg" "$RUN/bin" "$RUN/tmux"
+  rm -rf "$RUN/work" "$RUN/xdg" "$RUN/claude" "$RUN/bin" "$RUN/tmux"
   echo "cleaned $RUN. Evidence kept in $RUN/evidence"
   ls "$RUN/evidence"
 }

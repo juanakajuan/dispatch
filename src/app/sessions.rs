@@ -42,9 +42,24 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
     let issue = session.issue;
     if session.state.is_live() {
         vec![Cmd::Attach(issue)]
+    } else if !state.transcripts.contains_key(&issue) {
+        start_again(state, issue);
+        Vec::new()
     } else {
         toast::info(state, format!("Resuming {issue} with claude --continue"));
         vec![Cmd::Job(Job::Write(WriteJob::Resume(issue, Launch::from_config(&state.config))))]
+    }
+}
+
+/// `claude --continue` exits at once in a worktree with no conversation,
+/// as after a start whose Claude never ran.
+fn start_again(state: &mut State, n: IssueNumber) {
+    match state.issues.items.iter().find(|i| i.number == n) {
+        Some(issue) => {
+            state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
+            toast::info(state, format!("{n} has no conversation to continue. Start it again."));
+        }
+        None => toast::error(state, format!("{n} has no conversation to continue, and the issue is not listed.")),
     }
 }
 

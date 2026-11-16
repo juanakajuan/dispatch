@@ -73,7 +73,7 @@ pub(super) fn empty_text(state: &State) -> String {
 
 /// What the session's Claude last said: its recap, or its last message.
 pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> {
-    let s = state.summaries.get(&n)?;
+    let s = state.transcripts.get(&n)?.said.as_ref()?;
     let mut v = Vec::new();
     if s.kind == crate::transcript::SummaryKind::Recap {
         v.push(span("※ ", palette::ACCENT));
