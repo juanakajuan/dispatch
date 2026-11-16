@@ -4,7 +4,7 @@ The Sessions tab lists each session that dispatch started, with its state. From 
 
 ## Sub-features
 
-- `sessions-state` shows `● running`, `▲ needs you`, or `○ exited` as the row glyph, and the counts on header line 6: `▲ N needs you   ● N working   ○ N exited`.
+- `sessions-state` shows `● running`, `▲ needs you`, or `○ exited` as the row glyph, and the counts on header line 6: `▲ N needs you   ● N working   ○ N exited   ✓ N merged`. A session whose branch has a merged PR shows a purple `✓`, in a `Merged` group after `Exited`, whatever its window does.
 - `sessions-attach` moves the tmux client to the session window with `a` on any tab, or Enter on the Sessions tab.
 - `sessions-stop` kills the window with `x` on a live session. The worktree and the branch stay. On an exited session, `x` shows `No running session here.`
 - `sessions-resume` runs `claude --continue` in the worktree with `a` (or Enter on the Sessions tab) on an exited session. The key bar shows `a to resume`. A missing window (after `x`) gets a new `#N` window. A dead pane (after the agent exits) is respawned in the same window.

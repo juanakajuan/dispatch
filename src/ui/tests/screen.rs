@@ -289,3 +289,23 @@ fn a_narrow_terminal_cuts_the_issue_title_and_keeps_the_summary() {
     assert!(row.contains("bug, p1"), "labels are missing: {row:?}");
     assert!(screen.contains("q to quit"), "the key bar is cut\n{screen}");
 }
+
+#[test]
+fn a_session_whose_pr_merged_shows_the_merged_glyph_and_count() {
+    let mut state = full_state();
+    let _ = app::update(
+        &mut state,
+        Msg::Prs {
+            result: Ok(vec![PullRequest { state: PrState::Merged, ..pr(10, "fix/3-x", &[3]) }]),
+            at: Instant::now(),
+        },
+    );
+    for tab in ['1', '3'] {
+        send(&mut state, KeyCode::Char(tab));
+        let buf = render(&state, 100, 20);
+        assert_eq!(mark_cell(&buf, 3), ("✓".to_string(), palette::PURPLE), "tab {tab}");
+        let screen = text(&buf);
+        assert!(screen.contains("○ 0 exited   ✓ 1 merged"), "header count\n{screen}");
+        assert!(screen.contains("0 needs you"), "a merged session is not counted as needing you\n{screen}");
+    }
+}

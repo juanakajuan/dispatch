@@ -83,13 +83,13 @@ To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`.
 Stable handles on the screen (line numbers are `capture-pane` lines, from 1):
 
 - Line 1 is blank. Line 2 is the tab row: ` 1  Issues N      2  Pull requests N      3  Sessions N`. The counts have no parentheses. The selected tab has a colored badge, not an underline, so read it from the `.ansi` shot or from the key bar.
-- Lines 4 to 6 are the header next to the logo: `dispatch vX.Y.Z`, then `<repo> · updated Ns ago` (or `loading…`, `refreshing…`, `refresh failed Ns ago`; tabs 1 and 2 only), then `▲ N needs you   ● N working   ○ N exited`. This line is always on screen, so `wait 'needs you'` matches at once. Wait for `▲ 1 needs you`.
+- Lines 4 to 6 are the header next to the logo: `dispatch vX.Y.Z`, then `<repo> · updated Ns ago` (or `loading…`, `refreshing…`, `refresh failed Ns ago`; tabs 1 and 2 only), then `▲ N needs you   ● N working   ○ N exited   ✓ N merged`. This line is always on screen, so `wait 'needs you'` matches at once. Wait for `▲ 1 needs you`.
 - Rows are in groups with a heading and a count, for example `Ready for review 3`. A row is `❯ <glyph> #<number> <title>  <summary>  <age>`. The selected row starts with `❯`, other rows with two spaces. Find a row with `grep '#N '`.
 - The message row, above the prompt rules, shows toasts, for example `Stopped #26`, `Opening issue #26 on GitHub`, `Press m again to merge PR #12`. A toast stays for 5 s. A long toast wraps onto the line above, so match it with `wait` on the full screen.
 - The prompt line, between two rules, shows a hint such as `❯ / to filter issues · s to start a session`, or the kept filter `❯ /word`.
 - The key bar (last line) shows `<key> to <action>` pairs joined by ` · `, only for keys that work on the selected row, for example `? to keys · s to start session · m to merge · o to open on GitHub · q to quit`. `S sort: <order>` is at its right end. A dialog or menu has its own key bar.
 - The start dialog title is `Start session for #<n> <title>`. Its `Runs` block shows the exact commands.
-- Session states: `● running`, `▲ needs you`, `○ exited` (unicode icon set; the `icons` setting can change it to Nerd Font glyphs).
+- Session states: `● running`, `▲ needs you`, `○ exited`, `✓` merged (a purple `✓` when the PR on the session's branch is merged; unicode icon set; the `icons` setting can change it to Nerd Font glyphs).
 
 Wait for text, never sleep for a fixed time. dispatch draws every 100 ms, and gh calls take 1 to 3 s.
 

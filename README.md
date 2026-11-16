@@ -107,7 +107,7 @@ Each tab opens in the `attention` order. Items that need you come first:
 
 - **Issues.** Issues whose session shows `needs you`, then issues with a running session, then all other issues. In each group, the newest issue comes first.
 - **Pull requests.** Open PRs with failing checks or a merge conflict, then other open PRs, then drafts, then merged PRs, then closed PRs. In each group, the newest PR comes first.
-- **Sessions.** Sessions that show `needs you`, then running sessions, then exited sessions. In each group, the lowest issue number comes first, so `#9` comes before `#10`.
+- **Sessions.** Sessions that show `needs you`, then running sessions, then exited sessions, then merged sessions. In each group, the lowest issue number comes first, so `#9` comes before `#10`.
 
 A session that is starting counts as running.
 
@@ -201,7 +201,7 @@ dispatch writes no state file. A session is derived from git and tmux each time:
 
 So you can quit dispatch, kill it, or restart the machine, and the sessions are still listed. A start is safe to repeat. dispatch looks at what exists and runs only the missing steps. A second start for the same issue does not make a second worktree.
 
-If a session's window is gone, the session shows as `exited`. If you check out another branch inside the worktree, the session disappears from the list until you switch back.
+If a session's window is gone, the session shows as `exited`. If the PR on the session's branch is merged, the session shows a purple `✓` and sits in the `Merged` group, even when its window still runs. Its work is done, and `D` removes it. If you check out another branch inside the worktree, the session disappears from the list until you switch back.
 
 ## Remove a session's worktree
 

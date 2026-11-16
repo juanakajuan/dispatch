@@ -1,11 +1,10 @@
 use super::palette;
 use super::text::{centered, one_line, row_line, span, spans_width};
 use crate::app::feed::LastFetch;
-use crate::app::list::Tab;
+use crate::app::list::{Group, RowKey, SessionGroup, Tab, group_of};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::glyphs::Icons;
-use crate::session::SessionState;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -94,10 +93,13 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &
     }
     frame.render_widget(Paragraph::new(centered(tabs, tab_row.width)), tab_row);
 
-    let count = |want: SessionState| state.sessions.values().filter(|s| s.state == want).count();
-    let needs = count(SessionState::NeedsYou);
-    let working = count(SessionState::Running) + state.starting.len();
-    let exited = count(SessionState::Exited);
+    let count = |want: SessionGroup| {
+        state.sessions.keys().filter(|n| group_of(state, RowKey::Session(**n)) == Group::Session(want)).count()
+    };
+    let needs = count(SessionGroup::NeedsYou);
+    let working = count(SessionGroup::Working) + state.starting.len();
+    let exited = count(SessionGroup::Exited);
+    let merged = count(SessionGroup::Merged);
     let needs_style = if needs > 0 { palette::NEEDS_YOU } else { palette::DIM };
     let lit = |n: usize, style| if n > 0 { style } else { palette::DIM };
     let third = vec![
@@ -107,6 +109,8 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &
         span(format!("{working} working"), palette::DIM),
         span(format!("   {} ", icons.exited), lit(exited, palette::EXITED)),
         span(format!("{exited} exited"), palette::DIM),
+        span(format!("   {} ", icons.pr_merged), lit(merged, palette::MERGED)),
+        span(format!("{merged} merged"), palette::DIM),
     ];
 
     frame.render_widget(
