@@ -1,7 +1,7 @@
 //! git adapter. Private to `session`. Parsers are pure and tested on text
 //! captured from git 2.56.
 
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -139,17 +139,15 @@ pub(super) fn branch_exists(root: &Path, branch: &BranchName) -> Result<bool, St
     }
 }
 
-/// `base` is `origin/main`: fetch that one branch from that remote.
-pub(super) fn fetch(root: &Path, base: &str) -> Result<(), String> {
-    let (remote, branch) = base.split_once('/').unwrap_or(("origin", base));
-    text(root, ["fetch", remote, branch]).map(|_| ())
+pub(super) fn fetch(root: &Path, remote_ref: &OriginRef) -> Result<(), String> {
+    text(root, ["fetch", "origin", remote_ref.branch().as_str()]).map(|_| ())
 }
 
 pub(super) fn add_worktree(
     root: &Path,
     dir: &Path,
     branch: &BranchName,
-    create_from: Option<&str>,
+    create_from: Option<&OriginRef>,
 ) -> Result<(), String> {
     text(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
 }
@@ -248,8 +246,8 @@ mod tests {
     #[test]
     fn fetch_splits_remote_and_branch() {
         fake::install(|_| Ok(String::new()));
-        fetch(Path::new("/"), "origin/main").expect("ok");
-        assert_eq!(fake::calls(), ["git fetch origin main"]);
+        fetch(Path::new("/"), &OriginRef::parse("origin/release/1.0").expect("ref")).expect("ok");
+        assert_eq!(fake::calls(), ["git fetch origin release/1.0"]);
     }
 
     #[test]

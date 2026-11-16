@@ -95,7 +95,7 @@ fn run_steps<M: Mux>(ws: &Workspace, mux: &M, steps: Vec<Step>, issue: IssueNumb
                 if let Err(e) = git::ensure_excluded(&ws.git_common_dir, WORKTREES_EXCLUDE) {
                     warnings.push(format!("{WORKTREES_DIR} still shows in git status: {e}"));
                 }
-                mux.add_worktree(ws.repo(), &dir, &branch, from.as_deref(), issue)?;
+                mux.add_worktree(ws.repo(), &dir, &branch, from.as_ref(), issue)?;
             }
             Step::Mark { branch, issue } => git::set_marker(&ws.repo_root, &branch, issue)?,
             Step::OpenWindow { dir, argv } => mux.open(ws.repo(), &dir, issue, &argv)?,

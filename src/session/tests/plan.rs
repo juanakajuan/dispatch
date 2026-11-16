@@ -1,6 +1,6 @@
 use super::{br, markers, req, win, wp, wt};
 use crate::config::ClaudeCommand;
-use crate::domain::{IssueNumber, Mode, WorktreePath};
+use crate::domain::{IssueNumber, Mode, OriginRef, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
 use crate::session::mux::{Liveness, Observed};
@@ -15,7 +15,7 @@ const TARGET: &str = "/a/orbit/.claude/worktrees/142";
 fn layout() -> Layout {
     Layout {
         repo_root: PathBuf::from("/a/orbit"),
-        base: "origin/main".to_string(),
+        base: origin("origin/main"),
         hooks: None,
         claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
     }
@@ -85,11 +85,15 @@ fn open_step() -> Step {
 }
 
 fn add(branch: &str, from: Option<&str>) -> Step {
-    Step::AddWorktree { dir: PathBuf::from(TARGET), branch: br(branch), from: from.map(String::from) }
+    Step::AddWorktree { dir: PathBuf::from(TARGET), branch: br(branch), from: from.map(origin) }
 }
 
 fn fetch(remote_ref: &str) -> Step {
-    Step::Fetch(remote_ref.to_string())
+    Step::Fetch(origin(remote_ref))
+}
+
+fn origin(remote_ref: &str) -> OriginRef {
+    OriginRef::parse(remote_ref).expect("origin ref")
 }
 
 fn mark(branch: &str) -> Step {

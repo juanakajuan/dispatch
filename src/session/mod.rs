@@ -30,7 +30,7 @@ mod worktree;
 pub use start_argv::StartPreview;
 
 use crate::config::Multiplexer;
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use error::{SessionError, SetupError};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
@@ -85,8 +85,8 @@ pub struct Workspace {
     repo_root: PathBuf,
     /// The git dir that all worktrees share, for `info/exclude`.
     git_common_dir: PathBuf,
-    /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
-    base: String,
+    /// From `git symbolic-ref --short refs/remotes/origin/HEAD`.
+    base: OriginRef,
     mux: Backend,
 }
 
@@ -95,7 +95,8 @@ impl Workspace {
     pub fn discover(cwd: &std::path::Path, multiplexer: Multiplexer) -> Result<Workspace, SetupError> {
         let git::RepoDirs { root: repo_root, common: git_common_dir } =
             git::repo_dirs(cwd).map_err(SetupError::NotARepo)?;
-        let base = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
+        let head = git::origin_head(&repo_root).map_err(SetupError::NoOriginHead)?;
+        let base = OriginRef::parse(&head).ok_or(SetupError::BadOriginHead(head))?;
         let mux = detect_mux(multiplexer, &MuxEnv::from_process(), &repo_root)?;
         Ok(Workspace { repo_root, git_common_dir, base, mux })
     }

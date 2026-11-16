@@ -15,7 +15,7 @@ use super::mux::{Backend, Liveness, Observed};
 use super::request::{Launch, StartFrom, StartRequest};
 use super::{Workspace, git, tmux as tmux_backend};
 use crate::config::ClaudeCommand;
-use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, Mode, OriginRef, WorktreePath};
 use crate::proc::{ProcError, fake};
 use std::path::{Path, PathBuf};
 
@@ -54,7 +54,7 @@ fn workspace(base: &Path) -> Workspace {
     Workspace {
         repo_root: base.join("orbit"),
         git_common_dir: base.join("orbit").join(".git"),
-        base: "origin/main".to_string(),
+        base: OriginRef::parse("origin/main").expect("ref"),
         mux: Backend::Tmux(tmux_backend::Place::Inside { session_id: "$1".to_string() }),
     }
 }

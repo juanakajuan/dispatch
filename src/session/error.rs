@@ -54,6 +54,7 @@ impl fmt::Display for StartConflict {
 pub enum SetupError {
     NotARepo(String),
     NoOriginHead(String),
+    BadOriginHead(String),
     ProgramMissing(&'static str),
     Command(String),
 }
@@ -63,6 +64,9 @@ impl fmt::Display for SetupError {
         match self {
             SetupError::NotARepo(m) => write!(f, "dispatch must run inside a git repository: {m}"),
             SetupError::NoOriginHead(m) => write!(f, "cannot find the default branch of origin: {m}"),
+            SetupError::BadOriginHead(raw) => {
+                write!(f, "origin/HEAD is {raw}, not origin/<branch>. Run `git remote set-head origin --auto`.")
+            }
             SetupError::ProgramMissing(program) => write!(f, "{program} is not installed or not on PATH"),
             SetupError::Command(m) => f.write_str(m),
         }

@@ -1,7 +1,7 @@
 use super::{
     PaneRef, Place, close_workspace, create_worktree, launch, list_windows, open_window, script_file, send_line,
 };
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::session::AttachPlan;
 use crate::session::mux::{Mux, Observed, Repo};
 use std::path::Path;
@@ -20,7 +20,7 @@ impl Mux for Place {
         repo: Repo<'_>,
         dir: &Path,
         branch: &BranchName,
-        from: Option<&str>,
+        from: Option<&OriginRef>,
         issue: IssueNumber,
     ) -> Result<(), String> {
         create_worktree(self, repo.root, dir, branch, from, issue)

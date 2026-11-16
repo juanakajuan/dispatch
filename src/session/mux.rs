@@ -2,7 +2,7 @@ use super::error::SetupError;
 use super::request::Launch;
 use super::{AttachPlan, git, hc, herdr, tmux};
 use crate::config::Multiplexer;
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use std::path::Path;
 
 /// What a multiplexer does for dispatch. One impl per backend, on its
@@ -18,7 +18,7 @@ pub(super) trait Mux {
         repo: Repo<'_>,
         dir: &Path,
         branch: &BranchName,
-        from: Option<&str>,
+        from: Option<&OriginRef>,
         _issue: IssueNumber,
     ) -> Result<(), String> {
         git::add_worktree(repo.root, dir, branch, from)

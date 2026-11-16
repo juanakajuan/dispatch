@@ -78,6 +78,33 @@ impl BranchName {
     }
 }
 
+/// A branch on the `origin` remote. Displays as `origin/<branch>`, the form
+/// that `git symbolic-ref --short` prints and `git worktree add` takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OriginRef(BranchName);
+
+impl OriginRef {
+    pub fn of(branch: BranchName) -> OriginRef {
+        OriginRef(branch)
+    }
+
+    /// `origin/<branch>`, with a valid branch.
+    pub fn parse(raw: &str) -> Option<OriginRef> {
+        let branch = raw.trim().strip_prefix("origin/")?;
+        BranchName::parse(branch).ok().map(OriginRef)
+    }
+
+    pub fn branch(&self) -> &BranchName {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OriginRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "origin/{}", self.0.as_str())
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum BranchNameError {
     Empty,
@@ -232,6 +259,17 @@ mod tests {
         assert_eq!(BranchName::parse("a\\b"), Err(BranchNameError::BadChar('\\')));
         for bad in ["-x", "/x", "x/", "x.", "x.lock", "a..b", "a//b", "a@{b", "@", "a/.b"] {
             assert!(matches!(BranchName::parse(bad), Err(BranchNameError::BadSequence(_))), "{bad}");
+        }
+    }
+
+    #[test]
+    fn origin_ref_needs_the_origin_prefix_and_a_valid_branch() {
+        let main = OriginRef::parse("origin/main\n").expect("origin/main");
+        assert_eq!(main.branch().as_str(), "main");
+        assert_eq!(main.to_string(), "origin/main");
+        assert_eq!(OriginRef::parse("origin/release/1.0").map(|r| r.to_string()), Some("origin/release/1.0".into()));
+        for bad in ["main", "upstream/main", "origin/", "origin/a..b"] {
+            assert_eq!(OriginRef::parse(bad), None, "{bad}");
         }
     }
 

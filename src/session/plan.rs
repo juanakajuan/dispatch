@@ -4,7 +4,7 @@ use super::start_argv::claude_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
 use crate::config::ClaudeCommand;
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use std::path::PathBuf;
 
 /// Everything `plan_start` needs. Gathered by `observe_for_start`.
@@ -20,8 +20,7 @@ pub(super) struct StartObservation {
 
 pub(super) struct Layout {
     pub(super) repo_root: PathBuf,
-    /// `origin/main`.
-    pub(super) base: String,
+    pub(super) base: OriginRef,
     pub(super) hooks: Option<&'static str>,
     pub(super) claude: ClaudeCommand,
 }
@@ -37,12 +36,11 @@ pub(super) enum StartPlan {
 /// `plan_start` recognizes and finishes.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Step {
-    /// `git fetch origin <branch>` for a remote ref such as `origin/main`, so
-    /// the new branch starts from fresh commits.
-    Fetch(String),
+    /// `git fetch origin <branch>`, so the new branch starts from fresh commits.
+    Fetch(OriginRef),
     /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
     /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
-    AddWorktree { dir: PathBuf, branch: BranchName, from: Option<String> },
+    AddWorktree { dir: PathBuf, branch: BranchName, from: Option<OriginRef> },
     /// `git config branch.<b>.dispatch-issue N`.
     /// Overwrites, so running it twice is harmless.
     Mark { branch: BranchName, issue: IssueNumber },
@@ -80,7 +78,7 @@ pub(super) fn plan_start(
         argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
     };
     let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
-    let add = |branch: BranchName, from: Option<String>| Step::AddWorktree { dir: target.clone(), branch, from };
+    let add = |branch: BranchName, from: Option<OriginRef>| Step::AddWorktree { dir: target.clone(), branch, from };
     let planned = WorktreePath::planned(target.clone());
 
     if let Some(s) = obs.sessions.get(&req.issue) {
@@ -115,7 +113,7 @@ pub(super) fn plan_start(
     let mut steps = Vec::new();
     let from = (!obs.branch_exists).then(|| match req.from {
         StartFrom::Base => layout.base.clone(),
-        StartFrom::Origin => format!("origin/{}", req.branch.as_str()),
+        StartFrom::Origin => OriginRef::of(req.branch.clone()),
     });
     if let Some(remote_ref) = &from {
         steps.push(Step::Fetch(remote_ref.clone()));

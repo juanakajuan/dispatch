@@ -6,7 +6,7 @@ mod wire;
 
 use super::mux::Observed;
 use super::start_argv::herdr_worktree_create_args;
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -158,7 +158,7 @@ fn create_worktree(
     repo_root: &Path,
     dir: &Path,
     branch: &BranchName,
-    from: Option<&str>,
+    from: Option<&OriginRef>,
     issue: IssueNumber,
 ) -> Result<(), String> {
     let source = source(place, repo_root)?;
