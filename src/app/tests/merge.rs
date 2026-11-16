@@ -1,5 +1,8 @@
 use super::*;
 use crate::domain::{PrBranch, Unusable};
+use crate::github::GhError;
+use crate::merge::MergeError;
+use crate::merge::plan::MergeRefusal;
 
 fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
     cmds.iter()
@@ -13,11 +16,15 @@ fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
 const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: false };
 const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: true, ready_ok: false };
 
-fn ran(result: Result<MergeOutcome, String>) -> MergeRun {
+fn gh_failed(stderr: &str) -> MergeError {
+    MergeError::Gh(GhError::Run(crate::proc::fake::fail("gh", 1, stderr)))
+}
+
+fn ran(result: Result<MergeOutcome, MergeError>) -> MergeRun {
     MergeRun { marked_ready: false, result }
 }
 
-fn ran_after_ready(result: Result<MergeOutcome, String>) -> MergeRun {
+fn ran_after_ready(result: Result<MergeOutcome, MergeError>) -> MergeRun {
     MergeRun { marked_ready: true, result }
 }
 
@@ -273,12 +280,13 @@ fn a_queued_merge_says_so() {
 #[test]
 fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast() {
     let (mut state, _) = app();
-    let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Refused("wait".to_string()))) });
+    let refused = MergeOutcome::Refused(MergeRefusal::ChecksRunning(PrNumber(10)));
+    let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(refused)) });
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "a stale list catches up");
-    assert_eq!(toast(&state), "wait");
-    let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Err("not allowed".to_string())) });
+    assert_eq!(toast(&state), "PR #10 has checks that are still running. Press m again when they finish.");
+    let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Err(gh_failed("not allowed"))) });
     assert!(cmds.is_empty());
-    assert_eq!(toast(&state), "Merge PR #10 failed: not allowed");
+    assert_eq!(toast(&state), "Merge PR #10 failed: gh failed with code 1: not allowed");
 }
 
 const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: true };
@@ -302,12 +310,15 @@ fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
         Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) })
     };
     let outcomes = [
-        (Ok(MergeOutcome::Refused("wait.".to_string())), "wait. PR #10 is now ready for review."),
+        (
+            Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(PrNumber(10)))),
+            "PR #10 is still a draft. PR #10 is now ready for review.",
+        ),
         (
             handoff_after_ready(),
             "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it. PR #10 is now ready for review.",
         ),
-        (Err("boom".to_string()), "Merge PR #10 failed: boom PR #10 is now ready for review."),
+        (Err(gh_failed("boom")), "Merge PR #10 failed: gh failed with code 1: boom PR #10 is now ready for review."),
     ];
     for (result, text) in outcomes {
         let (mut state, _) = app();

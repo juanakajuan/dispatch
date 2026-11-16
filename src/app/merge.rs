@@ -5,6 +5,7 @@ use super::msg::{Cmd, Job};
 use super::sessions::goto_session;
 use super::toast::say;
 use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest};
+use crate::merge::MergeError;
 use crate::merge::job::{MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::session::request::{Launch, StartFrom, StartRequest};
@@ -172,7 +173,7 @@ pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd
     cmds
 }
 
-pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, String>) -> Vec<Cmd> {
+pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, MergeError>) -> Vec<Cmd> {
     match result {
         Ok(MergeOutcome::Merged(method)) => {
             let mut cmds = Vec::new();
@@ -194,7 +195,7 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
         }
         Ok(MergeOutcome::Handoff { problem, method, pr }) => handoff(state, ask, &pr, problem, method),
         Ok(MergeOutcome::Refused(why)) => {
-            say(state, why);
+            say(state, why.to_string());
             Vec::new()
         }
         Err(e) => {

@@ -1,6 +1,7 @@
 //! Pure merge rules. No I/O.
 
 use crate::domain::{Checks, MergeMethod, Mergeability, PrNumber, PrState, PullRequest};
+use std::fmt;
 
 /// What `m` does with a PR.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -11,8 +12,45 @@ pub enum MergePlan {
     Handoff(MergeProblem),
     /// A draft. dispatch marks it ready, looks at it again, and plans from that.
     MarkReady,
-    /// Nothing to do now. The text says why.
-    Refuse(String),
+    /// Nothing to do now.
+    Refuse(MergeRefusal),
+}
+
+/// Why `m` does nothing now. Each is one sentence for the toast.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeRefusal {
+    AlreadyMerged(PrNumber),
+    Closed(PrNumber),
+    ChecksRunning(PrNumber),
+    MergeabilityUnknown(PrNumber),
+    BlockedWithoutChecks(PrNumber),
+    /// The PR became a draft after the first `m`, which did not ask to mark it ready.
+    DraftNow(PrNumber),
+    /// `gh pr ready` ran, and GitHub still shows a draft.
+    StillDraft(PrNumber),
+}
+
+impl fmt::Display for MergeRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MergeRefusal::AlreadyMerged(n) => write!(f, "PR {n} is already merged."),
+            MergeRefusal::Closed(n) => write!(f, "PR {n} is closed."),
+            MergeRefusal::ChecksRunning(n) => {
+                write!(f, "PR {n} has checks that are still running. Press m again when they finish.")
+            }
+            MergeRefusal::MergeabilityUnknown(n) => {
+                write!(f, "GitHub does not know yet if PR {n} can merge. Try again in a moment.")
+            }
+            MergeRefusal::BlockedWithoutChecks(n) => write!(
+                f,
+                "PR {n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
+            ),
+            MergeRefusal::DraftNow(n) => {
+                write!(f, "PR {n} is a draft now. Press m twice again to mark it ready and merge it.")
+            }
+            MergeRefusal::StillDraft(n) => write!(f, "PR {n} is still a draft."),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,24 +68,18 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
     match pr.state {
         PrState::Open => {}
         PrState::Draft => return MergePlan::MarkReady,
-        PrState::Merged => return MergePlan::Refuse(format!("PR {n} is already merged.")),
-        PrState::Closed => return MergePlan::Refuse(format!("PR {n} is closed.")),
+        PrState::Merged => return MergePlan::Refuse(MergeRefusal::AlreadyMerged(n)),
+        PrState::Closed => return MergePlan::Refuse(MergeRefusal::Closed(n)),
     }
     match (pr.mergeability, pr.checks) {
         (Mergeability::Conflict, _) => MergePlan::Handoff(MergeProblem::Conflict),
         #[expect(clippy::match_same_arms, reason = "order matters: `Pending` must refuse before `Unstable` hands off")]
         (_, Checks::Fail) => MergePlan::Handoff(MergeProblem::ChecksFailing),
-        (_, Checks::Pending) => {
-            MergePlan::Refuse(format!("PR {n} has checks that are still running. Press m again when they finish."))
-        }
+        (_, Checks::Pending) => MergePlan::Refuse(MergeRefusal::ChecksRunning(n)),
         (Mergeability::Unstable, _) => MergePlan::Handoff(MergeProblem::ChecksFailing),
-        (Mergeability::Unknown, _) => {
-            MergePlan::Refuse(format!("GitHub does not know yet if PR {n} can merge. Try again in a moment."))
-        }
+        (Mergeability::Unknown, _) => MergePlan::Refuse(MergeRefusal::MergeabilityUnknown(n)),
         (Mergeability::Behind, _) => MergePlan::Handoff(MergeProblem::Behind),
-        (Mergeability::Blocked, Checks::None) => MergePlan::Refuse(format!(
-            "PR {n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
-        )),
+        (Mergeability::Blocked, Checks::None) => MergePlan::Refuse(MergeRefusal::BlockedWithoutChecks(n)),
         (Mergeability::Blocked, _) => MergePlan::Handoff(MergeProblem::Blocked),
         (Mergeability::Clean, _) => MergePlan::Direct,
     }
@@ -86,12 +118,29 @@ pub fn fix_session_prompt(pr: PrNumber, base: &str, problem: MergeProblem, metho
 /// setting; `allowed` is what the repo allows, in gh order. Without a
 /// setting, the first allowed method wins, so a repo that allows one method
 /// gets that one and a repo that allows all gets `merge`.
-pub fn merge_method(configured: Option<MergeMethod>, allowed: &[MergeMethod]) -> Result<MergeMethod, String> {
-    let names = || allowed.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ");
+pub fn merge_method(configured: Option<MergeMethod>, allowed: &[MergeMethod]) -> Result<MergeMethod, MethodError> {
     match configured {
         Some(m) if allowed.contains(&m) => Ok(m),
-        Some(m) => Err(format!("dispatch.mergeMethod is {m}, but the repo allows only: {}", names())),
-        None => allowed.first().copied().ok_or_else(|| "the repo allows no merge method".to_string()),
+        Some(m) => Err(MethodError::NotAllowed { configured: m, allowed: allowed.to_vec() }),
+        None => allowed.first().copied().ok_or(MethodError::NoneAllowed),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MethodError {
+    NotAllowed { configured: MergeMethod, allowed: Vec<MergeMethod> },
+    NoneAllowed,
+}
+
+impl fmt::Display for MethodError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MethodError::NotAllowed { configured, allowed } => {
+                let names = allowed.iter().map(|m| m.as_str()).collect::<Vec<_>>().join(", ");
+                write!(f, "dispatch.mergeMethod is {configured}, but the repo allows only: {names}")
+            }
+            MethodError::NoneAllowed => f.write_str("the repo allows no merge method"),
+        }
     }
 }
 
@@ -110,14 +159,12 @@ mod tests {
         assert_eq!(plan(Mergeability::Unstable, Checks::Pass), MergePlan::Handoff(MergeProblem::ChecksFailing));
         assert_eq!(plan(Mergeability::Behind, Checks::Pass), MergePlan::Handoff(MergeProblem::Behind));
         assert_eq!(plan(Mergeability::Blocked, Checks::Pass), MergePlan::Handoff(MergeProblem::Blocked));
-        assert!(
-            matches!(plan(Mergeability::Blocked, Checks::Pending), MergePlan::Refuse(why) if why.contains("still running"))
-        );
-        assert!(
-            matches!(plan(Mergeability::Unknown, Checks::Pass), MergePlan::Refuse(why) if why.contains("Try again"))
-        );
-        assert!(
-            matches!(plan(Mergeability::Blocked, Checks::None), MergePlan::Refuse(why) if why.contains("no checks yet")),
+        let n = PrNumber(10);
+        assert_eq!(plan(Mergeability::Blocked, Checks::Pending), MergePlan::Refuse(MergeRefusal::ChecksRunning(n)));
+        assert_eq!(plan(Mergeability::Unknown, Checks::Pass), MergePlan::Refuse(MergeRefusal::MergeabilityUnknown(n)));
+        assert_eq!(
+            plan(Mergeability::Blocked, Checks::None),
+            MergePlan::Refuse(MergeRefusal::BlockedWithoutChecks(n)),
             "nothing for the agent to fix"
         );
     }
@@ -126,8 +173,34 @@ mod tests {
     fn merge_plan_marks_a_draft_ready_and_refuses_a_closed_pr() {
         let plan = |state| merge_plan(&PullRequest { state, ..pr(10, "h", &[]) });
         assert_eq!(plan(PrState::Draft), MergePlan::MarkReady);
-        assert_eq!(plan(PrState::Merged), MergePlan::Refuse("PR #10 is already merged.".to_string()));
-        assert_eq!(plan(PrState::Closed), MergePlan::Refuse("PR #10 is closed.".to_string()));
+        assert_eq!(plan(PrState::Merged), MergePlan::Refuse(MergeRefusal::AlreadyMerged(PrNumber(10))));
+        assert_eq!(plan(PrState::Closed), MergePlan::Refuse(MergeRefusal::Closed(PrNumber(10))));
+    }
+
+    #[test]
+    fn each_refusal_is_one_sentence_for_the_toast() {
+        let n = PrNumber(10);
+        let cases = [
+            (MergeRefusal::AlreadyMerged(n), "PR #10 is already merged."),
+            (MergeRefusal::Closed(n), "PR #10 is closed."),
+            (
+                MergeRefusal::ChecksRunning(n),
+                "PR #10 has checks that are still running. Press m again when they finish.",
+            ),
+            (
+                MergeRefusal::MergeabilityUnknown(n),
+                "GitHub does not know yet if PR #10 can merge. Try again in a moment.",
+            ),
+            (
+                MergeRefusal::BlockedWithoutChecks(n),
+                "PR #10 is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first.",
+            ),
+            (MergeRefusal::DraftNow(n), "PR #10 is a draft now. Press m twice again to mark it ready and merge it."),
+            (MergeRefusal::StillDraft(n), "PR #10 is still a draft."),
+        ];
+        for (refusal, sentence) in cases {
+            assert_eq!(refusal.to_string(), sentence);
+        }
     }
 
     #[test]
@@ -154,10 +227,9 @@ mod tests {
         assert_eq!(merge_method(None, &[Rebase]), Ok(Rebase), "the only allowed method");
         assert_eq!(merge_method(None, &[Squash, Rebase]), Ok(Squash));
         assert_eq!(merge_method(Some(Rebase), &[Merge, Rebase]), Ok(Rebase));
-        assert_eq!(
-            merge_method(Some(Squash), &[Merge, Rebase]),
-            Err("dispatch.mergeMethod is squash, but the repo allows only: merge, rebase".to_string())
-        );
-        assert!(merge_method(None, &[]).is_err());
+        let err = merge_method(Some(Squash), &[Merge, Rebase]).expect_err("not allowed");
+        assert_eq!(err.to_string(), "dispatch.mergeMethod is squash, but the repo allows only: merge, rebase");
+        assert_eq!(merge_method(None, &[]), Err(MethodError::NoneAllowed));
+        assert_eq!(MethodError::NoneAllowed.to_string(), "the repo allows no merge method");
     }
 }
