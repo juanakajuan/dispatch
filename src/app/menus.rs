@@ -1,4 +1,5 @@
 use super::keys::{Key, key_of};
+use super::mouse::press_key;
 use super::msg::{Cmd, Job, WriteJob};
 use super::{Focus, State};
 use crate::config::settings::{Change, SETTINGS, Setting};
@@ -77,4 +78,18 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 /// `state.config` already holds the new value. Save it.
 pub(super) fn changed(state: &State, setting: Setting) -> Vec<Cmd> {
     vec![Cmd::Job(Job::Write(WriteJob::SaveConfig { setting, config: state.config.clone() }))]
+}
+
+/// A click on a settings row selects it. A click on the selected row is
+/// enter, so a double click changes the setting.
+pub(super) fn click_setting(state: &mut State, setting: Setting) -> Vec<Cmd> {
+    let Focus::Settings(menu) = &mut state.focus else { return Vec::new() };
+    if menu.edit.is_some() {
+        return Vec::new();
+    }
+    if menu.at == setting {
+        return press_key(state, Key::Code(KeyCode::Enter));
+    }
+    menu.at = setting;
+    Vec::new()
 }

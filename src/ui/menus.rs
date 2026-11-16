@@ -1,28 +1,33 @@
 use super::palette;
 use super::text::{cells, fit, span};
+use crate::app::keys::{Action, Key};
+use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::config::Config;
 use crate::config::settings::SETTINGS;
+use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 /// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
-pub(super) fn keybinds_lines() -> Vec<Line<'static>> {
+/// An entry line carries its binding's action; headings and blanks carry none.
+pub(super) fn keybinds_lines() -> Vec<(Line<'static>, Option<Action>)> {
     let keys = |b: &app::keys::Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
     let key_width = app::keys::BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
     let mut lines = Vec::new();
     for group in app::keys::KeyGroup::ALL {
         if !lines.is_empty() {
-            lines.push(Line::raw(""));
+            lines.push((Line::raw(""), None));
         }
-        lines.push(Line::from(span(group.title(), palette::HEADING)));
+        lines.push((Line::from(span(group.title(), palette::HEADING)), None));
         for b in app::keys::BINDINGS.iter().filter(|b| b.group == group) {
-            lines.push(Line::from(vec![
+            let line = Line::from(vec![
                 span(format!("  {:key_width$}  ", keys(b)), palette::ACCENT),
                 span(b.desc, palette::PLAIN),
-            ]));
+            ]);
+            lines.push((line, Some(b.action)));
         }
     }
     lines
@@ -30,9 +35,9 @@ pub(super) fn keybinds_lines() -> Vec<Line<'static>> {
 
 /// Draws the menu scrolled down by `scroll` lines, and returns how far it
 /// can scroll at this size.
-pub(super) fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
-    let lines = keybinds_lines();
-    let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
+pub(super) fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap) -> u16 {
+    let entries = keybinds_lines();
+    let wanted: u16 = entries.len().try_into().unwrap_or(u16::MAX);
     let width = screen.width.min(64);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
@@ -46,12 +51,28 @@ pub(super) fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    draw_close(frame, area, hits);
     let max_scroll = wanted.saturating_sub(inner.height);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
+    let scroll = scroll.min(max_scroll);
+    for (row, (_, action)) in (0..).zip(&entries) {
+        let Some(action) = action else { continue };
+        let line = Rect::new(inner.x, (inner.y + row).saturating_sub(scroll), inner.width, 1).intersection(inner);
+        if row >= scroll && !line.is_empty() {
+            hits.targets.push((line, HitTarget::Binding(*action)));
+        }
+    }
+    let lines: Vec<Line<'static>> = entries.into_iter().map(|(line, _)| line).collect();
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
     max_scroll
 }
 
-pub(super) fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &app::menus::SettingsMenu) {
+pub(super) fn draw_settings(
+    frame: &mut Frame,
+    screen: Rect,
+    state: &State,
+    menu: &app::menus::SettingsMenu,
+    hits: &mut HitMap,
+) {
     let width = screen.width.min(76);
     let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
     let area = Rect::new(
@@ -69,11 +90,14 @@ pub(super) fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    draw_close(frame, area, hits);
     let default = Config::default();
     let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    for setting in SETTINGS {
+    for (row, setting) in (0..).zip(SETTINGS) {
         let on = setting == menu.at;
+        let line = Rect::new(inner.x, inner.y.saturating_add(row), inner.width, 1).intersection(inner);
+        hits.targets.push((line, HitTarget::Setting(setting)));
         let room = usize::from(inner.width).saturating_sub(4 + name_width);
         let mut spans = vec![
             span(if on { "› " } else { "  " }, palette::ACCENT),
@@ -103,4 +127,17 @@ pub(super) fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu
     )));
     lines.push(Line::from(span("Saved to config.json", palette::DIM)));
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+const CLOSE: &str = " esc ✕ ";
+
+/// A close control in the top-right of an overlay's border: it presses esc.
+fn draw_close(frame: &mut Frame, area: Rect, hits: &mut HitMap) {
+    let w = u16::try_from(cells(CLOSE)).unwrap_or(u16::MAX);
+    if area.width < w + 4 {
+        return;
+    }
+    let rect = Rect::new(area.right() - w - 2, area.y, w, 1);
+    frame.render_widget(Paragraph::new(span(CLOSE, palette::DIM)), rect);
+    hits.targets.push((rect, HitTarget::Key(Key::Code(KeyCode::Esc))));
 }

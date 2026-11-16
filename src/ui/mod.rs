@@ -56,8 +56,12 @@ pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
     let rule = || Paragraph::new(span("─".repeat(usize::from(screen.width)), palette::DIM));
     frame.render_widget(rule(), rule1);
     frame.render_widget(rule(), rule2);
-    draw_prompt(frame, prompt, state);
-    draw_footer(frame, footer, state);
+    draw_prompt(frame, prompt, state, &mut hits);
+    if !matches!(state.focus, Focus::List | Focus::Filter) {
+        // An overlay owns the mouse: only its own targets and the footer stay live.
+        hits.targets.clear();
+    }
+    draw_footer(frame, footer, state, &mut hits);
     draw_overlay(frame, state, &mut hits);
     hits
 }
@@ -65,9 +69,9 @@ pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
 /// The dialog or a menu, over the screen of either view.
 fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
     match &state.focus {
-        Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog),
-        Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu),
-        Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll),
+        Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog, hits),
+        Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu, hits),
+        Focus::Keybinds { scroll } => hits.keybinds_max_scroll = draw_keybinds(frame, frame.area(), *scroll, hits),
         Focus::List | Focus::Filter => {}
     }
 }

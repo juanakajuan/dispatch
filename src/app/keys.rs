@@ -93,6 +93,15 @@ pub struct Binding {
 }
 
 impl Key {
+    /// The key press that `key_of` reads back as this key.
+    pub fn event(self) -> KeyEvent {
+        match self {
+            Self::Char(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            Self::Ctrl(c) => KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL),
+            Self::Code(code) => KeyEvent::new(code, KeyModifiers::NONE),
+        }
+    }
+
     /// How the keybinds menu writes the key: `j`, `down`, `ctrl+c`.
     pub fn label(self) -> String {
         match self {
@@ -242,20 +251,39 @@ pub static BINDINGS: &[Binding] = &[
     },
 ];
 
-/// The hints the footer shows for the focus: (keys, what they do).
-pub fn footer_hints(state: &State) -> Vec<(&'static str, &'static str)> {
+/// One footer hint: what it shows, and the key a click on it presses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hint {
+    pub keys: &'static str,
+    pub desc: &'static str,
+    pub key: Key,
+}
+
+const fn hint(keys: &'static str, desc: &'static str, key: Key) -> Hint {
+    Hint { keys, desc, key }
+}
+
+/// The hints the footer shows for the focus.
+pub fn footer_hints(state: &State) -> Vec<Hint> {
+    let (enter, esc) = (Key::Code(KeyCode::Enter), Key::Code(KeyCode::Esc));
     match &state.focus {
-        Focus::Filter => vec![("enter", "keep"), ("esc", "clear")],
-        Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
-        Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
-        Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
-        Focus::Keybinds { .. } => vec![("j/k", "scroll"), ("esc", "close")],
+        Focus::Filter => vec![hint("enter", "keep", enter), hint("esc", "clear", esc)],
+        Focus::Dialog(_) => vec![
+            hint("ctrl-s", "start", Key::Ctrl('s')),
+            hint("tab", "next field", Key::Code(KeyCode::Tab)),
+            hint("esc", "cancel", esc),
+        ],
+        Focus::Settings(menu) if menu.edit.is_some() => vec![hint("enter", "save", enter), hint("esc", "cancel", esc)],
+        Focus::Settings(_) => {
+            vec![hint("j/k", "move", Key::Char('j')), hint("enter", "change", enter), hint("esc", "close", esc)]
+        }
+        Focus::Keybinds { .. } => vec![hint("j/k", "scroll", Key::Char('j')), hint("esc", "close", esc)],
         Focus::List => key_bar(state),
     }
 }
 
-/// The key bar for the list: (keys, description).
-pub(super) fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
+/// The key bar for the list. A click on an entry presses its binding's first key.
+pub(super) fn key_bar(state: &State) -> Vec<Hint> {
     let session = current_session(state).map(|s| s.state);
     let shown = |when: When| match when {
         When::Always => true,
@@ -267,7 +295,13 @@ pub(super) fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,
     };
-    BINDINGS.iter().flat_map(|b| b.bar).filter(|e| shown(e.when)).map(|e| (e.keys, e.desc)).collect()
+    BINDINGS
+        .iter()
+        .filter_map(|b| Some((b, *b.keys.first()?)))
+        .flat_map(|(b, key)| b.bar.iter().map(move |e| (e, key)))
+        .filter(|(e, _)| shown(e.when))
+        .map(|(e, key)| hint(e.keys, e.desc, key))
+        .collect()
 }
 
 pub(super) fn key_of(ev: &KeyEvent) -> Option<Key> {

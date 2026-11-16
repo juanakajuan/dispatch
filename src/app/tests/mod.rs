@@ -125,3 +125,18 @@ fn gh_error(stderr: &str) -> GhError {
 fn git_error(stderr: &str) -> SessionError {
     SessionError::Git(crate::proc::fake::fail("git", 128, stderr))
 }
+
+pub(super) fn shows(state: &State, keys: &str, desc: &str) -> bool {
+    key_bar(state).iter().any(|b| b.keys == keys && b.desc == desc)
+}
+
+/// A state whose hit map holds one target at (0,0).
+pub(super) fn with_target(target: HitTarget) -> (State, Instant) {
+    let (mut state, now) = app();
+    state.hits.targets = vec![(Rect::new(0, 0, 10, 1), target)];
+    (state, now)
+}
+
+pub(super) fn wheel(kind: MouseEventKind, now: Instant) -> Msg {
+    Msg::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }, now)
+}

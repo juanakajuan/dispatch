@@ -3,7 +3,9 @@ use super::header::since;
 use super::text::{age, cells, wrap};
 use super::*;
 use crate::app::feed::LastFetch;
+use crate::app::keys::Key;
 use crate::app::list::{RowKey, Tab};
+use crate::app::mouse::HitMap;
 use crate::app::mouse::HitTarget;
 use crate::app::{self};
 use crate::app::{Context, msg::Msg};
@@ -14,7 +16,7 @@ use crate::glyphs::IconSet;
 use crate::session::Session;
 use crate::session::{SessionState, StartPreview};
 use crate::testutil::{issue, pr};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
@@ -65,6 +67,49 @@ pub(super) fn render(state: &State, w: u16, h: u16) -> Buffer {
         })
         .expect("draw");
     terminal.backend().buffer().clone()
+}
+
+/// Draws like the shell does: the frame's hits go back into `state`, so the
+/// reducer sees this frame's targets and size.
+pub(super) fn frame(state: &mut State, w: u16, h: u16) -> Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
+    let mut hits = HitMap::default();
+    terminal.draw(|f| hits = draw(f, state)).expect("draw");
+    state.hits = hits;
+    terminal.backend().buffer().clone()
+}
+
+pub(super) fn draw_into(state: &mut State, w: u16, h: u16) -> String {
+    text(&frame(state, w, h))
+}
+
+/// The (x, y) of the first cell of `needle` on the drawn screen.
+pub(super) fn find(screen: &str, needle: &str) -> (u16, u16) {
+    let (y, line) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, l)| l.contains(needle))
+        .unwrap_or_else(|| panic!("no {needle:?} in\n{screen}"));
+    let x = cells(&line[..line.find(needle).expect("found")]);
+    (u16::try_from(x).expect("x"), u16::try_from(y).expect("y"))
+}
+
+/// The target under the first cell of `needle`, and under its last cell.
+fn targets_of(state: &State, screen: &str, needle: &str) -> (Option<HitTarget>, Option<HitTarget>) {
+    let (x, y) = find(screen, needle);
+    let last = x + u16::try_from(cells(needle)).expect("w") - 1;
+    let at = |x: u16| state.hits.at(x, y).map(|(_, t)| t);
+    (at(x), at(last))
+}
+
+pub(super) fn assert_clickable(state: &State, screen: &str, needle: &str, want: HitTarget) {
+    assert_eq!(targets_of(state, screen, needle), (Some(want), Some(want)), "{needle:?} in\n{screen}");
+}
+
+pub(super) fn click_at(state: &mut State, x: u16, y: u16) {
+    let ev =
+        MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE };
+    let _ = app::update(state, Msg::Mouse(ev, Instant::now()));
 }
 
 pub(super) fn text(buf: &Buffer) -> String {

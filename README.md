@@ -96,7 +96,7 @@ A burst of events makes one load, at most one each 5 seconds.
 
 In the dialog: Tab and Shift-Tab change the field, Left and Right change the mode, Esc cancels.
 
-Mouse: a click selects a row or a tab. A double-click on an issue opens the start dialog. The wheel moves the selection.
+Mouse: every action works with a click. A click selects a row or a tab, and a double-click acts like Enter on the row. A click on a key bar entry, the `S sort` footer, or the filter prompt presses that key. In the start dialog, click a field to focus it, a mode to pick it, a text input to place the cursor, and `Start` or `Cancel`. In the settings menu, click a row to select it and click it again to change it. `esc ✕` closes a menu. In the keys menu (`?`), click an entry to close it and run that binding, which reaches settings, refresh and the rest. The wheel moves the selection and scrolls the menus. Keyboard bindings are unchanged.
 
 A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
 

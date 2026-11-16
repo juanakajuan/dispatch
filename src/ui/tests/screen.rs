@@ -141,7 +141,7 @@ fn draw_returns_hits_for_tabs_and_visible_rows() {
         .iter()
         .filter_map(|(r, t)| match t {
             HitTarget::Row(k) => Some((r.y, *k)),
-            HitTarget::Tab(_) => None,
+            _ => None,
         })
         .collect();
     assert_eq!(tabs, 3);
@@ -175,15 +175,6 @@ fn tab_keys_look_like_key_hints_and_counts_like_counts() {
         assert_eq!(hit(last), Some(HitTarget::Tab(tab)), "{label}: a click on the count selects the tab");
         assert_eq!(hit(last + 1), None, "{label}: the hit area ends at the label");
     }
-}
-
-/// Draws like the shell does: the frame's hits go back into `state`.
-fn frame(state: &mut State, w: u16, h: u16) -> Buffer {
-    let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
-    let mut hits = HitMap::default();
-    terminal.draw(|f| hits = draw(f, state)).expect("draw");
-    state.hits = hits;
-    terminal.backend().buffer().clone()
 }
 
 #[test]

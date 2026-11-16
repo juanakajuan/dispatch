@@ -50,7 +50,7 @@ fn m_twice_starts_a_merge_job_for_the_session_pr() {
     let (mut state, _) = app();
     state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
     press(&mut state, key('3'));
-    assert!(key_bar(&state).contains(&("m", "merge")));
+    assert!(shows(&state, "m", "merge"));
     assert!(press(&mut state, key('m')).is_empty(), "the first press only arms");
     assert_eq!(toast(&state), "Press m again to merge PR #10");
     let cmds = press(&mut state, key('m'));
@@ -63,7 +63,7 @@ fn m_twice_starts_a_merge_job_for_the_session_pr() {
 #[test]
 fn m_merges_without_a_session_from_the_pr_or_the_issue() {
     let (mut state, _) = app();
-    assert!(key_bar(&state).contains(&("m", "merge")), "issue #3 has PR #10");
+    assert!(shows(&state, "m", "merge"), "issue #3 has PR #10");
     press(&mut state, key('m'));
     assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
 
@@ -293,7 +293,7 @@ const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MarkR
 fn m_on_a_draft_says_it_marks_it_ready_then_the_second_m_merges_with_consent() {
     let (mut state, _) = app();
     state.prs.items[0].state = PrState::Draft;
-    assert!(key_bar(&state).contains(&("m", "merge")));
+    assert!(shows(&state, "m", "merge"));
     assert!(press(&mut state, key('m')).is_empty());
     assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
     let cmds = press(&mut state, key('m'));
@@ -365,7 +365,7 @@ fn m_explains_why_it_can_not_merge() {
     state.prs.items[0].state = PrState::Draft;
     press(&mut state, key('m'));
     assert_eq!(toast(&state), "PR #10 is a draft. Press m again to mark it ready and merge it.");
-    assert!(key_bar(&state).contains(&("m", "merge")));
+    assert!(shows(&state, "m", "merge"));
 
     state.prs.items.remove(0);
     for _ in 0..2 {

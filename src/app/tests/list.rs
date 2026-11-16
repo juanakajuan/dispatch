@@ -156,3 +156,50 @@ fn filter_is_case_insensitive_over_all_parts() {
     assert!(matches_filter(&parts, "bug fix"));
     assert!(!matches_filter(&parts, "docs"));
 }
+
+#[test]
+fn clicking_the_filter_prompt_opens_the_filter_and_clicking_clear_removes_it() {
+    let (mut state, now) = with_target(HitTarget::Key(Key::Char('/')));
+    press(&mut state, click(0, 0, now));
+    assert!(matches!(state.focus, Focus::Filter));
+
+    let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
+    state.filter = "json".to_string();
+    press(&mut state, click(0, 0, now));
+    assert!(state.filter.is_empty());
+
+    let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
+    state.filter = "json".to_string();
+    state.focus = Focus::Filter;
+    press(&mut state, click(0, 0, now));
+    assert!(state.filter.is_empty() && matches!(state.focus, Focus::List), "in the filter, clear also closes it");
+}
+
+#[test]
+fn tabs_and_rows_ignore_clicks_while_something_else_has_focus() {
+    let (mut state, now) = hit_state();
+    state.focus = Focus::Filter;
+    press(&mut state, click(12, 0, now));
+    press(&mut state, click(5, 3, now));
+    assert_eq!(state.tab, Tab::Issues);
+    assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
+}
+
+#[test]
+fn double_click_on_a_pr_row_goes_to_its_issue() {
+    let (mut state, now) = with_target(HitTarget::Row(RowKey::Pr(PrNumber(10))));
+    state.tab = Tab::Prs;
+    press(&mut state, click(0, 0, now));
+    press(&mut state, click(0, 0, now + Duration::from_millis(100)));
+    assert_eq!((state.tab, state.tabs.issues.selected), (Tab::Issues, Some(IssueNumber(3))));
+}
+
+#[test]
+fn double_click_on_a_session_row_attaches_to_it() {
+    let (mut state, now) = with_target(HitTarget::Row(RowKey::Session(IssueNumber(3))));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.tab = Tab::Sessions;
+    assert!(press(&mut state, click(0, 0, now)).is_empty(), "one click only selects");
+    let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
+}

@@ -61,7 +61,7 @@ fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
     let cmds = press(&mut state, key('o'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::FetchPageUrl(GithubRef::Issue(IssueNumber(2)))))]));
     assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Copying the issue #2 URL"));
-    let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
+    let bar: Vec<_> = key_bar(&state).into_iter().filter(|b| b.keys == "o").map(|b| (b.keys, b.desc)).collect();
     assert_eq!(bar, [("o", "copy URL")]);
 
     let target = GithubRef::Issue(IssueNumber(2));

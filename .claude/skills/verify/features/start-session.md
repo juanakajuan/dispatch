@@ -11,6 +11,7 @@ A user selects an open issue and starts a Claude session for it. A dialog shows 
 - `start-plan-mode` adds `--permission-mode plan` to the argv when the mode is plan first.
 - `start-idempotent` goes to the existing session instead of making a second worktree. While a start is still running, `s` shows `#N is already starting`.
 - `start-cancel` closes the dialog with Esc and changes nothing.
+- `start-mouse`: a click on a field label focuses it, a click on a mode option picks it, a click in a text input puts the cursor there, and the `[ Start ]` and `[ Cancel ]` buttons on the last dialog row act as Ctrl-S and Esc.
 
 ## How to get to it (user POV)
 
@@ -26,7 +27,7 @@ Preconditions:
 - The Issues tab lists at least one open issue `#N` that has no session.
 
 - **Pick the issue.** Press `1`. Run `$V keys "$RUN" 1`, then `$V screen "$RUN"`, and pick the `#N` of a row. Move to it with `j`/`k`. The row starts with `❯`. Run `$V shot "$RUN" issues-before`.
-- **Open the dialog.** Press `s`. Run `$V keys "$RUN" s` and `$V wait "$RUN" 'Start session for #N '`. The dialog shows `› Branch`, `Mode` with `● Implement directly`, `Prompt` starting `Implement GitHub issue #N:`, and under `Runs` the lines `$ git worktree add .claude/worktrees/N -b <branch> origin/<default>` and `$ $RUN/bin/fake-claude "Implement GitHub issue #N: …"`. The key bar is `ctrl-s to start · tab to next field · esc to cancel`. Run `$V shot "$RUN" start-dialog`.
+- **Open the dialog.** Press `s`. Run `$V keys "$RUN" s` and `$V wait "$RUN" 'Start session for #N '`. The dialog shows `› Branch`, `Mode` with `● Implement directly`, `Prompt` starting `Implement GitHub issue #N:`, and under `Runs` the lines `$ git worktree add .claude/worktrees/N -b <branch> origin/<default>` and `$ $RUN/bin/fake-claude "Implement GitHub issue #N: …"`. The last dialog row is `[ Start ]  [ Cancel ]`. The key bar is `ctrl-s to start · tab to next field · esc to cancel`. Run `$V shot "$RUN" start-dialog`.
 - **Cancel.** Press Esc. Run `$V keys "$RUN" Escape`. The dialog closes. `$V state "$RUN" after-cancel` shows only the main worktree and `(none)` under markers.
 - **Plan mode (optional).** Reopen with `s`, press `Tab` to focus `Mode`, then `Left`. Run `$V keys "$RUN" s Tab Left`. The radio shows `● Plan first, then wait for approval`, the field shows `› Mode`, and the second `Runs` line has `--permission-mode plan`. Space also changes the mode.
 - **Start.** Press Ctrl-S. Run `$V keys "$RUN" C-s`, `$V wait "$RUN" 'Starting #N|Started #N'`, and `$V wait "$RUN" '▲ 1 needs you' 20`. dispatch moves to the Sessions tab. The `#N` row shows `❯ ▲ #N` (the fake claude runs dispatch's `Stop` hook after 2 s), the tab row shows `3  Sessions 1`, and header line 6 shows `▲ 1 needs you   ● 0 working   ○ 0 exited`. Do not wait for `needs you` alone: the header always shows it, also as `▲ 0 needs you`. Run `$V shot "$RUN" after-start`. A failed start shows `Start #N failed: <error>` for 5 s.
