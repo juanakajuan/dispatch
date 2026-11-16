@@ -11,13 +11,13 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use dialog::{StartDialog, dialog_key};
-use feed::{Due, Feed, FeedStatus, Inflight, apply_feed, observed, tick};
+use feed::{Due, Feed, Poll, observed, tick};
 use keys::{act, action_for};
 use list::{Selected, Sorts, Tab, filter_key};
 use menus::{SettingsMenu, keybinds_key, settings_key};
 use merge::{Armed, merged};
 use mouse::{HitMap, HitTarget, on_mouse};
-use msg::{Cmd, Job, Msg, ReadJob, SESSIONS_EVERY};
+use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
 use sessions::{attached, resumed, sent, started, stopped};
 use toast::{Toast, say};
@@ -79,6 +79,7 @@ pub struct State {
     /// observation. A finished start adds its own session at once, so the row
     /// does not blink out until the next observation.
     pub sessions: Sessions,
+    pub observe: Poll,
     /// Issues with a `WriteJob::Start` in flight. The only session-ish state the
     /// app owns; it covers the gap before the next observation shows the window.
     pub starting: BTreeSet<IssueNumber>,
@@ -87,7 +88,6 @@ pub struct State {
     pub filter: String,
     pub focus: Focus,
     pub toast: Option<Toast>,
-    pub inflight: Inflight,
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
@@ -98,19 +98,19 @@ pub struct State {
 }
 
 pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>) {
-    let state = State {
+    let mut state = State {
         context,
         tab: Tab::Issues,
-        issues: Feed { items: Vec::new(), status: FeedStatus::Loading },
-        prs: Feed { items: Vec::new(), status: FeedStatus::Loading },
+        issues: Feed::new(),
+        prs: Feed::new(),
         sessions: Sessions::new(),
+        observe: Poll::default(),
         starting: BTreeSet::new(),
         selected: Selected::default(),
         sort: Sorts::default(),
         filter: String::new(),
         focus: Focus::List,
         toast: None,
-        inflight: Inflight { issues: true, prs: true, sessions: true },
         due: Due {
             github: now + config.github_refresh,
             github_soon: false,
@@ -123,14 +123,12 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         summaries: std::collections::BTreeMap::new(),
         config,
     };
-    (
-        state,
-        vec![
-            Cmd::Job(Job::Read(ReadJob::FetchIssues)),
-            Cmd::Job(Job::Read(ReadJob::FetchPrs)),
-            Cmd::Job(Job::Read(ReadJob::ObserveSessions)),
-        ],
-    )
+    let cmds = [
+        state.issues.poll.request(ReadJob::FetchIssues),
+        state.prs.poll.request(ReadJob::FetchPrs),
+        state.observe.request(ReadJob::ObserveSessions),
+    ];
+    (state, cmds.into_iter().flatten().collect())
 }
 
 /// The reducer.
@@ -153,20 +151,14 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Mouse(ev, now) => on_mouse(state, ev, now),
         Msg::Tick(now) => tick(state, now),
         Msg::Issues { result, at } => {
-            state.inflight.issues = false;
-            apply_feed(&mut state.issues, result, at);
+            state.issues.landed(result, at);
             Vec::new()
         }
         Msg::Prs { result, at } => {
-            state.inflight.prs = false;
-            apply_feed(&mut state.prs, result, at);
+            state.prs.landed(result, at);
             Vec::new()
         }
-        Msg::Summaries(summaries) => {
-            state.summaries = summaries;
-            Vec::new()
-        }
-        Msg::Sessions(result) => observed(state, result),
+        Msg::Observed(result) => observed(state, result),
         Msg::Started { issue, result } => started(state, issue, result),
         Msg::Stopped { issue, result } => stopped(state, issue, result),
         Msg::Resumed { issue, result } => resumed(state, issue, result),

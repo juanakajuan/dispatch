@@ -5,14 +5,14 @@ fn init_asks_for_all_three_reads() {
     let (state, cmds) = init(Instant::now(), Config::default(), Context::default());
     let jobs: Vec<_> = cmds.iter().map(|c| matches!(c, Cmd::Job(_))).collect();
     assert_eq!(jobs, [true, true, true]);
-    assert!(state.inflight.issues && state.inflight.prs && state.inflight.sessions);
+    assert!(state.issues.poll.in_flight() && state.prs.poll.in_flight() && state.observe.in_flight());
 }
 
 #[test]
 fn tick_does_not_stack_a_second_fetch_while_one_is_inflight() {
     let (mut state, now) = app();
     state.due.github = now;
-    state.inflight.issues = true;
+    let _ = state.issues.poll.request(ReadJob::FetchIssues);
     let cmds = press(&mut state, Msg::Tick(now + Duration::from_millis(1)));
     assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchIssues)))));
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
@@ -33,18 +33,18 @@ fn tick_observes_sessions_every_two_seconds_once() {
 #[test]
 fn issues_error_keeps_the_old_items_and_stamps_the_failure() {
     let (mut state, now) = app();
-    state.inflight.issues = true;
+    let _ = state.issues.poll.request(ReadJob::FetchIssues);
     let failed = now + Duration::from_secs(5);
     press(&mut state, Msg::Issues { result: Err(gh_error("offline")), at: failed });
     assert_eq!(state.issues.items.len(), 3);
     assert!(
-        matches!(&state.issues.status, FeedStatus::Failed { error, at } if *error == gh_error("offline") && *at == failed)
+        matches!(&state.issues.last, LastFetch::Failed { error, at } if *error == gh_error("offline") && *at == failed)
     );
-    assert!(!state.inflight.issues);
+    assert!(!state.issues.poll.in_flight());
     let arrived = now + Duration::from_secs(9);
     press(&mut state, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
     assert_eq!(state.issues.items.len(), 1);
-    assert!(matches!(state.issues.status, FeedStatus::Fresh { at } if at == arrived));
+    assert!(matches!(state.issues.last, LastFetch::Fresh { at } if at == arrived));
 }
 
 #[test]
@@ -55,13 +55,13 @@ fn new_data_resets_the_refresh_time_on_the_timer_and_after_r() {
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     let first = due + Duration::from_secs(2);
     press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: first });
-    assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == first));
+    assert!(matches!(state.prs.last, LastFetch::Fresh { at } if at == first));
 
     let cmds = press(&mut state, key('r'));
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     let second = first + Duration::from_secs(30);
     press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: second });
-    assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
+    assert!(matches!(state.prs.last, LastFetch::Fresh { at } if at == second));
 }
 
 #[test]
@@ -115,7 +115,10 @@ fn a_start_or_a_stop_refreshes_github() {
 
 #[test]
 fn a_session_that_goes_idle_or_exits_refreshes_github() {
-    let observe = |sessions: Vec<Session>| Msg::Sessions(Ok(sessions.into_iter().map(|s| (s.issue, s)).collect()));
+    let observe = |sessions: Vec<Session>| {
+        let sessions = sessions.into_iter().map(|s| (s.issue, s)).collect();
+        Msg::Observed(Ok(Observation { sessions, summaries: BTreeMap::new() }))
+    };
     let running = || session(3, SessionState::Running);
     let needs_you = || session(3, SessionState::NeedsYou);
     let exited = || session(3, SessionState::Exited);
@@ -165,7 +168,7 @@ fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more(
 #[test]
 fn the_timer_firing_during_a_fetch_keeps_the_pending_event() {
     let (mut state, now) = app();
-    state.inflight.issues = true;
+    let _ = state.issues.poll.request(ReadJob::FetchIssues);
     press(&mut state, Msg::FocusGained);
     state.due.github = now + GITHUB_COOLDOWN;
     let cmds = press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN));

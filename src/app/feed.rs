@@ -1,32 +1,69 @@
 use super::State;
-use super::msg::{Cmd, GITHUB_COOLDOWN, Job, ReadJob, SESSIONS_EVERY, TOAST_FOR};
+use super::msg::{Cmd, GITHUB_COOLDOWN, Job, Observation, ReadJob, SESSIONS_EVERY, TOAST_FOR};
 use super::toast::say;
 use crate::github::GhError;
+use crate::session::SessionState;
 use crate::session::error::SessionError;
-use crate::session::{SessionState, Sessions};
 use std::time::Instant;
 
-/// Remote data plus its load status. `items` keeps the last good data when a
+/// Remote data plus its last fetch. `items` keeps the last good data when a
 /// refresh fails, so a network error does not blank the list.
 pub struct Feed<T> {
     pub items: Vec<T>,
-    pub status: FeedStatus,
+    pub last: LastFetch,
+    pub poll: Poll,
+}
+
+impl<T> Feed<T> {
+    pub fn new() -> Self {
+        Feed { items: Vec::new(), last: LastFetch::Never, poll: Poll::default() }
+    }
+
+    /// Records a fetch result and ends the poll that asked for it.
+    pub(super) fn landed(&mut self, result: Result<Vec<T>, GhError>, at: Instant) {
+        self.poll.done();
+        match result {
+            Ok(items) => {
+                self.items = items;
+                self.last = LastFetch::Fresh { at };
+            }
+            Err(error) => self.last = LastFetch::Failed { error, at },
+        }
+    }
 }
 
 /// `at` is when the response arrived, not when the request was sent.
-pub enum FeedStatus {
-    Loading,
+/// `Never` is what the view shows as loading.
+pub enum LastFetch {
+    Never,
     Fresh { at: Instant },
     Failed { error: GhError, at: Instant },
 }
 
-/// One flag per job kind. The tick only schedules a job whose flag is clear,
-/// so a slow `gh` never stacks up a second call.
+/// At most one job of a kind in flight, so a slow `gh` never stacks up a
+/// second call. `request` is the only way to send a poll job.
 #[derive(Default)]
-pub struct Inflight {
-    pub issues: bool,
-    pub prs: bool,
-    pub sessions: bool,
+pub struct Poll {
+    in_flight: bool,
+}
+
+impl Poll {
+    /// The job to send, or `None` while one is already in flight.
+    pub fn request(&mut self, job: ReadJob) -> Option<Cmd> {
+        if self.in_flight {
+            return None;
+        }
+        self.in_flight = true;
+        Some(Cmd::Job(Job::Read(job)))
+    }
+
+    pub fn done(&mut self) {
+        self.in_flight = false;
+    }
+
+    pub fn in_flight(&self) -> bool {
+        self.in_flight
+    }
 }
 
 pub struct Due {
@@ -51,21 +88,7 @@ pub(super) fn went_idle(before: SessionState, after: Option<SessionState>) -> bo
 }
 
 pub(super) fn observe_now(state: &mut State) -> Vec<Cmd> {
-    if state.inflight.sessions {
-        return Vec::new();
-    }
-    state.inflight.sessions = true;
-    vec![Cmd::Job(Job::Read(ReadJob::ObserveSessions))]
-}
-
-pub(super) fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, GhError>, at: Instant) {
-    match result {
-        Ok(items) => {
-            feed.items = items;
-            feed.status = FeedStatus::Fresh { at };
-        }
-        Err(error) => feed.status = FeedStatus::Failed { error, at },
-    }
+    state.observe.request(ReadJob::ObserveSessions).into_iter().collect()
 }
 
 pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
@@ -77,7 +100,7 @@ pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
         }
     }
     let mut cmds = Vec::new();
-    let idle = !state.inflight.issues && !state.inflight.prs;
+    let idle = !state.issues.poll.in_flight() && !state.prs.poll.in_flight();
     let soon = state.due.github_soon && idle && now >= state.due.github_sent + GITHUB_COOLDOWN;
     if soon || now >= state.due.github {
         // A fetch already in flight may predate the event, so `soon` waits for it.
@@ -96,24 +119,19 @@ pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
 }
 
 pub(super) fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
-    if !state.inflight.issues {
-        state.inflight.issues = true;
-        cmds.push(Cmd::Job(Job::Read(ReadJob::FetchIssues)));
-    }
-    if !state.inflight.prs {
-        state.inflight.prs = true;
-        cmds.push(Cmd::Job(Job::Read(ReadJob::FetchPrs)));
-    }
+    cmds.extend(state.issues.poll.request(ReadJob::FetchIssues));
+    cmds.extend(state.prs.poll.request(ReadJob::FetchPrs));
 }
 
-pub(super) fn observed(state: &mut State, result: Result<Sessions, SessionError>) -> Vec<Cmd> {
-    state.inflight.sessions = false;
+pub(super) fn observed(state: &mut State, result: Result<Observation, SessionError>) -> Vec<Cmd> {
+    state.observe.done();
     match result {
-        Ok(sessions) => {
+        Ok(Observation { sessions, summaries }) => {
             if state.sessions.iter().any(|(n, s)| went_idle(s.state, sessions.get(n).map(|s| s.state))) {
                 state.due.github_soon = true;
             }
             state.sessions = sessions;
+            state.summaries = summaries;
         }
         Err(e) => say(state, format!("sessions: {e}")),
     }

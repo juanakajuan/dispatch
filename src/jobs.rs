@@ -2,7 +2,7 @@
 //! owned clone of the immutable `Workspace`; each `WriteJob` runs in order on
 //! the one writer thread. Every job sends exactly one `Msg` back.
 
-use crate::app::msg::{Job, Msg, ReadJob, WriteJob};
+use crate::app::msg::{Job, Msg, Observation, ReadJob, WriteJob};
 use crate::session::Workspace;
 use crate::{config, github, merge, transcript};
 use std::sync::mpsc::{self, Sender};
@@ -44,15 +44,11 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, job: ReadJob) {
             let result = github::fetch_prs(ws.repo_root());
             Msg::Prs { result, at: Instant::now() }
         }
-        ReadJob::ObserveSessions => {
-            let result = ws.observe();
-            let summaries = result.as_ref().ok().map(|sessions| {
-                sessions.values().filter_map(|s| Some((s.issue, transcript::latest(s.worktree.as_path())?))).collect()
-            });
-            let _ = tx.send(Msg::Sessions(result));
-            let Some(summaries) = summaries else { return };
-            Msg::Summaries(summaries)
-        }
+        ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
+            let summaries =
+                sessions.values().filter_map(|s| Some((s.issue, transcript::latest(s.worktree.as_path())?))).collect();
+            Observation { sessions, summaries }
+        })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
         ReadJob::FetchPageUrl(target) => Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) },
     };

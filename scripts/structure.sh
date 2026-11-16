@@ -41,6 +41,10 @@ if grep -rnE 'Result<.*,[[:space:]]*String[[:space:]]*>|impl[[:space:]<].*From<S
   echo "A String error loses which failure happened, so no caller can match on it. Return a typed error enum with a Display impl instead."; fail=1
 fi
 
+if grep -rnE 'Job::Read\(ReadJob::(FetchIssues|FetchPrs|ObserveSessions)' src --exclude-dir=tests; then
+  echo "A poll job sent around its Poll can stack a second gh call. Send it with feed.poll.request(ReadJob::...) or state.observe.request(...)."; fail=1
+fi
+
 awk '$1 != "banners" { print $1 }' "$allow" | while read -r f; do
   [ -f "$f" ] || { echo "$allow lists $f, which does not exist. Delete its line."; exit 1; }
 done || fail=1

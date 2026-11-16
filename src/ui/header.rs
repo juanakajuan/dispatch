@@ -1,6 +1,6 @@
 use super::palette;
 use super::text::{centered, one_line, row_line, span, spans_width};
-use crate::app::feed::FeedStatus;
+use crate::app::feed::LastFetch;
 use crate::app::list::Tab;
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
@@ -19,16 +19,16 @@ pub(super) const LOGO: [&str; 3] = [" ▄██▄ ", "██▀▀██", "▀
 /// response arrived. A failed fetch keeps the old items, so it gets its own
 /// warning text: stale data never reads as fresh.
 pub(super) fn freshness(state: &State, now: Instant) -> Option<(String, Style)> {
-    let (status, refreshing) = match state.tab {
-        Tab::Issues => (&state.issues.status, state.inflight.issues),
-        Tab::Prs => (&state.prs.status, state.inflight.prs),
+    let (last, refreshing) = match state.tab {
+        Tab::Issues => (&state.issues.last, state.issues.poll.in_flight()),
+        Tab::Prs => (&state.prs.last, state.prs.poll.in_flight()),
         Tab::Sessions => return None,
     };
-    Some(match status {
-        FeedStatus::Loading => ("loading…".to_string(), palette::DIM),
+    Some(match last {
+        LastFetch::Never => ("loading…".to_string(), palette::DIM),
         _ if refreshing => ("refreshing…".to_string(), palette::DIM),
-        FeedStatus::Fresh { at } => (format!("updated {} ago", since(*at, now)), palette::DIM),
-        FeedStatus::Failed { at, .. } => (format!("refresh failed {} ago", since(*at, now)), palette::WARN),
+        LastFetch::Fresh { at } => (format!("updated {} ago", since(*at, now)), palette::DIM),
+        LastFetch::Failed { at, .. } => (format!("refresh failed {} ago", since(*at, now)), palette::WARN),
     })
 }
 
@@ -43,7 +43,7 @@ pub(super) fn since(at: Instant, now: Instant) -> String {
 }
 
 pub(super) fn feed_failure<T>(feed: &app::feed::Feed<T>) -> Option<String> {
-    let FeedStatus::Failed { error, .. } = &feed.status else { return None };
+    let LastFetch::Failed { error, .. } = &feed.last else { return None };
     let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
     Some(format!("gh failed{kept}: {}", one_line(&error.to_string())))
 }

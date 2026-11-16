@@ -2,7 +2,7 @@ use super::dialog::PROMPT_MIN_ROWS;
 use super::header::since;
 use super::text::{age, cells, wrap};
 use super::*;
-use crate::app::feed::FeedStatus;
+use crate::app::feed::LastFetch;
 use crate::app::list::{RowKey, Tab};
 use crate::app::mouse::HitTarget;
 use crate::app::{self};
@@ -40,11 +40,11 @@ pub(super) fn full_state() -> State {
         ),
         issue(2, "Docs", &["docs"]),
     ];
-    state.issues.status = FeedStatus::Fresh { at: Instant::now() };
+    state.issues.last = LastFetch::Fresh { at: Instant::now() };
     state.prs.items = vec![pr(10, "fix/3-x", &[3])];
-    state.prs.status = FeedStatus::Fresh { at: Instant::now() };
-    state.inflight.issues = false;
-    state.inflight.prs = false;
+    state.prs.last = LastFetch::Fresh { at: Instant::now() };
+    state.issues.poll.done();
+    state.prs.poll.done();
     state.sessions.insert(
         IssueNumber(3),
         Session {

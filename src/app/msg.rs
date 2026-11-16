@@ -8,12 +8,12 @@ use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
 use crate::session::{Sessions, StartOutcome};
+use crate::transcript::Summary;
 use crossterm::event::{KeyEvent, MouseEvent};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 pub enum Msg {
-    /// PROTOTYPE: what each session's Claude last said.
-    Summaries(std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>),
     Key(KeyEvent),
     Mouse(MouseEvent, Instant),
     Tick(Instant),
@@ -26,7 +26,7 @@ pub enum Msg {
         result: Result<Vec<PullRequest>, GhError>,
         at: Instant,
     },
-    Sessions(Result<Sessions, SessionError>),
+    Observed(Result<Observation, SessionError>),
     Started {
         issue: IssueNumber,
         result: Result<StartOutcome, SessionError>,
@@ -64,6 +64,13 @@ pub enum Msg {
     Saved(Result<(), ConfigError>),
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
+}
+
+/// One look at the sessions, with what each one's Claude last said.
+pub struct Observation {
+    pub sessions: Sessions,
+    /// PROTOTYPE: what each session's Claude last said.
+    pub summaries: BTreeMap<IssueNumber, Summary>,
 }
 
 /// Work for the shell.

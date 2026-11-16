@@ -7,8 +7,8 @@
 //!   blocked in `event::read` would steal keys from `tmux attach` while the
 //!   TUI is suspended.
 //! - `jobs` runs each read on a short thread and each write on one serial
-//!   writer thread; results come back as `Msg`s on an mpsc channel. `Inflight`
-//!   caps reads at one job per kind. No `Mutex`, no `Arc<State>`.
+//!   writer thread; results come back as `Msg`s on an mpsc channel. Each feed's
+//!   `Poll` caps its reads at one job in flight. No `Mutex`, no `Arc<State>`.
 //! - The loop: drain the channel, poll input for up to 100 ms, emit a `Tick`,
 //!   update, draw. gh latency never blocks a frame.
 

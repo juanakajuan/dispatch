@@ -1,6 +1,6 @@
 use super::palette;
 use super::text::{age, cells, fit, one_line, span};
-use crate::app::feed::FeedStatus;
+use crate::app::feed::LastFetch;
 use crate::app::list::RowKey;
 use crate::app::list::Tab;
 use crate::app::mouse::{HitMap, HitTarget};
@@ -60,8 +60,8 @@ pub(super) fn issue_of(state: &State, n: IssueNumber) -> Option<&Issue> {
 
 pub(super) fn empty_text(state: &State) -> String {
     let (name, loading) = match state.tab {
-        Tab::Issues => ("issues", matches!(state.issues.status, FeedStatus::Loading)),
-        Tab::Prs => ("pull requests", matches!(state.prs.status, FeedStatus::Loading)),
+        Tab::Issues => ("issues", matches!(state.issues.last, LastFetch::Never)),
+        Tab::Prs => ("pull requests", matches!(state.prs.last, LastFetch::Never)),
         Tab::Sessions => return "No sessions. Press s on an issue to start one.".to_string(),
     };
     match (loading, state.filter.is_empty()) {

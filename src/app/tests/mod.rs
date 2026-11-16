@@ -22,6 +22,7 @@ use crate::sort::{Cycle, IssueSort};
 use crate::testutil::{issue, pr};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -68,18 +69,19 @@ pub(super) fn session(n: u32, state: SessionState) -> Session {
 pub(super) fn app() -> (State, Instant) {
     let now = Instant::now();
     let (mut state, _) = init(now, Config::default(), Context::default());
-    state.issues = Feed {
-        items: vec![
-            issue(3, "Retry queue drops jobs", &["bug"]),
-            issue(2, "Docs for plugins", &["docs"]),
-            issue(1, "Add json output", &["feature"]),
-        ],
-        status: FeedStatus::Fresh { at: now },
-    };
+    state.issues.items = vec![
+        issue(3, "Retry queue drops jobs", &["bug"]),
+        issue(2, "Docs for plugins", &["docs"]),
+        issue(1, "Add json output", &["feature"]),
+    ];
+    state.issues.last = LastFetch::Fresh { at: now };
     let newer = jiff::Timestamp::from_second(60).expect("in range");
     let items = vec![PullRequest { created_at: newer, ..pr(10, "fix/3-x", &[3]) }, pr(11, "other", &[])];
-    state.prs = Feed { items, status: FeedStatus::Fresh { at: now } };
-    state.inflight = Inflight::default();
+    state.prs.items = items;
+    state.prs.last = LastFetch::Fresh { at: now };
+    state.issues.poll.done();
+    state.prs.poll.done();
+    state.observe.done();
     (state, now)
 }
 
