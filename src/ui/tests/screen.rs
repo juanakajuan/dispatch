@@ -252,3 +252,40 @@ fn empty_and_loading_lists_say_so() {
     let (state, _) = app::init(Instant::now(), Config::default(), Context::default());
     assert!(text(&render(&state, 80, 10)).contains("Loading issues…"));
 }
+
+/// Issue rows with no session or PR, so each summary is author and labels.
+fn plain_issues() -> State {
+    let mut state = full_state();
+    state.sessions.clear();
+    state.prs.items.clear();
+    state
+}
+
+#[test]
+fn a_wide_terminal_shows_the_whole_issue_title_with_author_labels_and_age() {
+    let state = plain_issues();
+    let title = "Retry queue drops jobs when Redis reconnects after a very long title that must be cut";
+    let screen = text(&render(&state, 160, 20));
+    let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
+    assert!(row.contains(title), "the title is cut: {row:?}");
+    assert!(!row.contains('…'), "the row truncates: {row:?}");
+    assert!(row.contains("bug, p1"), "labels are missing: {row:?}");
+    let age_end = |n: &str| {
+        let line = screen.lines().find(|l| l.contains(n)).expect("row");
+        cells(line.trim_end())
+    };
+    assert_eq!(age_end("#3 "), 158, "the age is right-aligned: {row:?}");
+    assert_eq!(age_end("#2 "), 158, "the age is right-aligned");
+    assert_eq!(column_of(&screen, "#3 ", "octo"), column_of(&screen, "#2 ", "octo"), "summaries stay in one column");
+}
+
+#[test]
+fn a_narrow_terminal_cuts_the_issue_title_and_keeps_the_summary() {
+    let state = plain_issues();
+    let screen = text(&render(&state, 80, 20));
+    let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
+    assert!(row.contains("#3 Retry queue"), "the title start is missing: {row:?}");
+    assert!(row.contains('…'), "the title is not cut: {row:?}");
+    assert!(row.contains("bug, p1"), "labels are missing: {row:?}");
+    assert!(screen.contains("q to quit"), "the key bar is cut\n{screen}");
+}

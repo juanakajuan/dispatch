@@ -11,6 +11,7 @@ dispatch shows three tabs: Issues, Pull requests, and Sessions. Each tab is a li
 - `lists-filter` keeps the rows that match the `/` text, without case. Issues match on number, title, and labels. PRs match on number, title, and head branch. Sessions match on number, issue title, and branch. Enter keeps the filter. Esc clears it, in the filter input and also from the list.
 - `lists-sort` cycles the order of the current tab with `S`, shown as `S sort: <order>` at the right end of the key bar. Rows are sorted inside each group.
 - `lists-mouse` selects a row on a click. A double-click acts like Enter on the row: it opens the start dialog on an issue, goes to the issue of a PR, and attaches to a session. A click on the prompt opens the filter, and `esc to clear` at its right end clears a kept filter. The wheel moves the selection.
+- `lists-columns` sizes the title column to the longest title in the list, so on a wide terminal titles show in full. When titles and summaries do not both fit, the summary keeps up to 40% of the row and titles end in `…`. The age stays right-aligned. To see it, run `$V tmux "$RUN" resize-window -t drive -x 90 -y 30` and compare the rows with the 160-column screen.
 - `lists-pr-icon` shows the state of the lead PR of each issue in the glyph column before `#N`, and `PR #P open · <checks>` in the row summary.
 
 ## How to get to it (user POV)
