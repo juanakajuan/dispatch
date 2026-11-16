@@ -1,8 +1,9 @@
 use super::*;
 use crate::domain::{PrBranch, Unusable};
 use crate::github::GhError;
-use crate::merge::MergeError;
+use crate::merge::job::DraftStep;
 use crate::merge::plan::MergeRefusal;
+use crate::merge::{Consent, MergeAsk, MergeError};
 
 fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
     cmds.iter()
@@ -13,19 +14,19 @@ fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
         .collect()
 }
 
-const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: false };
-const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: true, ready_ok: false };
+const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
+const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::StartFixSession };
 
 fn gh_failed(stderr: &str) -> MergeError {
     MergeError::Gh(GhError::Run(crate::proc::fake::fail("gh", 1, stderr)))
 }
 
 fn ran(result: Result<MergeOutcome, MergeError>) -> MergeRun {
-    MergeRun { marked_ready: false, result }
+    MergeRun { draft: DraftStep::WasReady, result }
 }
 
 fn ran_after_ready(result: Result<MergeOutcome, MergeError>) -> MergeRun {
-    MergeRun { marked_ready: true, result }
+    MergeRun { draft: DraftStep::MarkedReady, result }
 }
 
 fn handoff(problem: MergeProblem) -> Msg {
@@ -70,10 +71,7 @@ fn m_merges_without_a_session_from_the_pr_or_the_issue() {
     press(&mut state, key('j'));
     press(&mut state, key('m'));
     assert_eq!(toast(&state), "Press m again to merge PR #11");
-    assert_eq!(
-        merges(&press(&mut state, key('m'))),
-        [MergeAsk { pr: PrNumber(11), new_session_ok: false, ready_ok: false }]
-    );
+    assert_eq!(merges(&press(&mut state, key('m'))), [MergeAsk { pr: PrNumber(11), consent: Consent::MergeOnly }]);
 }
 
 #[test]
@@ -289,7 +287,7 @@ fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast()
     assert_eq!(toast(&state), "Merge PR #10 failed: gh failed with code 1: not allowed");
 }
 
-const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), new_session_ok: false, ready_ok: true };
+const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MarkReadyThenMerge };
 
 #[test]
 fn m_on_a_draft_says_it_marks_it_ready_then_the_second_m_merges_with_consent() {

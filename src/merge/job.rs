@@ -1,8 +1,8 @@
 //! The second `m`: look at the PR again, because the list can be a minute
 //! old, then merge it here or hand it to the session's agent.
 
-use super::MergeError;
 use super::plan::{self, MergePlan, MergeProblem, MergeRefusal};
+use super::{Consent, MergeAsk, MergeError};
 use crate::domain::{MergeMethod, PrNumber, PrState, PullRequest};
 use crate::{github, proc};
 use std::path::Path;
@@ -25,35 +25,44 @@ pub enum MergeOutcome {
     Refused(MergeRefusal),
 }
 
-/// What the job did. `marked_ready` stays true even when `result` is not a
-/// merge, because dispatch does not undo `gh pr ready`.
+/// What the job did. `draft` stays `MarkedReady` even when `result` is not
+/// a merge, because dispatch does not undo `gh pr ready`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MergeRun {
-    pub marked_ready: bool,
+    pub draft: DraftStep,
     pub result: Result<MergeOutcome, MergeError>,
 }
 
-/// `ready_ok` is true when the first `m` told the user that dispatch marks a
-/// draft ready.
-pub fn merge(repo_root: &Path, pr: PrNumber, ready_ok: bool) -> MergeRun {
-    let mut marked_ready = false;
-    let result = run(repo_root, pr, ready_ok, &mut marked_ready);
-    MergeRun { marked_ready, result }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftStep {
+    /// The job did not run `gh pr ready`.
+    WasReady,
+    MarkedReady,
 }
 
-fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) -> Result<MergeOutcome, MergeError> {
-    let mut fresh = github::view_pr(repo_root, pr)?;
-    let mut plan = plan::merge_plan(&fresh);
-    if plan == MergePlan::MarkReady {
-        if !ready_ok {
-            return Ok(MergeOutcome::Refused(MergeRefusal::DraftNow(pr)));
-        }
-        github::mark_ready(repo_root, pr)?;
-        *marked_ready = true;
-        fresh = github::view_pr(repo_root, pr)?;
-        plan = plan::merge_plan(&fresh);
+pub fn merge(repo_root: &Path, ask: MergeAsk) -> MergeRun {
+    let pr = ask.pr;
+    let was_ready = |result| MergeRun { draft: DraftStep::WasReady, result };
+    let fresh = match github::view_pr(repo_root, pr) {
+        Ok(fresh) => fresh,
+        Err(e) => return was_ready(Err(e.into())),
+    };
+    if plan::merge_plan(&fresh) != MergePlan::MarkReady {
+        return was_ready(finish(repo_root, pr, &fresh));
     }
-    let problem = match plan {
+    if ask.consent != Consent::MarkReadyThenMerge {
+        return was_ready(Ok(MergeOutcome::Refused(MergeRefusal::DraftNow(pr))));
+    }
+    if let Err(e) = github::mark_ready(repo_root, pr) {
+        return was_ready(Err(e.into()));
+    }
+    let result = github::view_pr(repo_root, pr).map_err(MergeError::from).and_then(|f| finish(repo_root, pr, &f));
+    MergeRun { draft: DraftStep::MarkedReady, result }
+}
+
+/// Merges `fresh`, the PR as GitHub shows it now, or says who must fix it.
+fn finish(repo_root: &Path, pr: PrNumber, fresh: &PullRequest) -> Result<MergeOutcome, MergeError> {
+    let problem = match plan::merge_plan(fresh) {
         MergePlan::Refuse(why) => return Ok(MergeOutcome::Refused(why)),
         MergePlan::MarkReady => return Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(pr))),
         MergePlan::Direct => None,
@@ -63,11 +72,11 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
     let method = plan::merge_method(configured_method(repo_root)?, &allowed).map_err(MergeError::Method)?;
     match problem {
         None => {
-            github::merge_pr(repo_root, &fresh, method)?;
+            github::merge_pr(repo_root, fresh, method)?;
             let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
             Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
         }
-        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: Box::new(fresh) }),
+        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: Box::new(fresh.clone()) }),
     }
 }
 
@@ -133,8 +142,12 @@ mod tests {
         });
     }
 
+    fn ask(consent: Consent) -> MergeAsk {
+        MergeAsk { pr: PrNumber(10), consent }
+    }
+
     fn outcome() -> Result<MergeOutcome, MergeError> {
-        merge(Path::new("/r"), PrNumber(10), false).result
+        merge(Path::new("/r"), ask(Consent::MergeOnly)).result
     }
 
     /// The PR is a draft until `gh pr ready` runs, then it is `after`, and a
@@ -177,8 +190,11 @@ mod tests {
     #[test]
     fn a_draft_is_marked_ready_looked_at_again_and_merged_when_clean() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert_eq!(run, MergeRun { marked_ready: true, result: Ok(MergeOutcome::Merged(MergeMethod::Merge)) });
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(
+            run,
+            MergeRun { draft: DraftStep::MarkedReady, result: Ok(MergeOutcome::Merged(MergeMethod::Merge)) }
+        );
         assert_eq!(readies(), ["gh pr ready 10"]);
         assert_eq!(merges(), ["gh pr merge 10 --merge --match-head-commit abc"]);
         assert_eq!(views(), 3, "before ready, after ready, after the merge");
@@ -188,8 +204,8 @@ mod tests {
     fn a_draft_with_pending_checks_after_ready_is_refused_and_stays_ready() {
         let running = r#"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#;
         draft_world(view("MERGEABLE", "BLOCKED", running), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(run.marked_ready);
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::MarkedReady);
         assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::ChecksRunning(PrNumber(10)))));
         assert!(merges().is_empty());
     }
@@ -197,8 +213,8 @@ mod tests {
     #[test]
     fn a_draft_that_is_still_a_draft_after_ready_is_refused() {
         draft_world(view_in("OPEN", true, "MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(run.marked_ready);
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::MarkedReady);
         assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(PrNumber(10)))));
         assert!(merges().is_empty());
     }
@@ -206,8 +222,8 @@ mod tests {
     #[test]
     fn a_draft_without_consent_is_refused_and_gh_pr_ready_does_not_run() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), false);
-        assert!(!run.marked_ready);
+        let run = merge(Path::new("/r"), ask(Consent::MergeOnly));
+        assert_eq!(run.draft, DraftStep::WasReady);
         assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::DraftNow(PrNumber(10)))));
         assert!(readies().is_empty() && merges().is_empty());
         assert_eq!(fake::calls().len(), 1, "only the fresh view");
@@ -216,8 +232,8 @@ mod tests {
     #[test]
     fn a_failing_gh_pr_ready_is_an_error_and_nothing_merges() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Err("not allowed"));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(!run.marked_ready);
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::WasReady);
         assert_eq!(run.result, Err(MergeError::Gh(GhError::Run(fake::fail("gh", 1, "not allowed")))));
         assert!(merges().is_empty());
     }

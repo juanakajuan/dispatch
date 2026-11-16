@@ -3,7 +3,6 @@ use super::feed::*;
 use super::keys::*;
 use super::list::*;
 use super::menus::*;
-use super::merge::*;
 use super::mouse::*;
 use super::msg::*;
 use super::toast::*;

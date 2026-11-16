@@ -5,9 +5,9 @@ use super::msg::{Cmd, Job};
 use super::sessions::goto_session;
 use super::toast::say;
 use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest};
-use crate::merge::MergeError;
-use crate::merge::job::{MergeOutcome, MergeRun};
+use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
+use crate::merge::{Consent, MergeAsk, MergeError};
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use std::fmt::Write as _;
 
@@ -18,17 +18,6 @@ pub enum Armed {
     /// The check found a problem and no running session is on the PR's
     /// branch. The next `m` starts `req`, a session that fixes it.
     Fix { pr: PrNumber, req: StartRequest },
-}
-
-/// Merge `pr`. If it has a problem, a running session on its branch fixes it.
-/// Without one, a new session fixes it only when `new_session_ok`, because
-/// the first `m` told the user so. Otherwise one more `m` must agree. A draft
-/// is marked ready only when `ready_ok`, for the same reason.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MergeAsk {
-    pub pr: PrNumber,
-    pub new_session_ok: bool,
-    pub ready_ok: bool,
 }
 
 /// Who fixes a PR that can not merge.
@@ -96,16 +85,17 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     {
         return start_fix(state, req.clone());
     }
-    let (new_session_ok, ready_ok, expect) = match (plan::merge_plan(pr), fixer(state, pr)) {
+    let (consent, expect) = match (plan::merge_plan(pr), fixer(state, pr)) {
         (MergePlan::Handoff(problem), fix) => {
             let sentence = plan::problem_sentence(n, pr.base.display(), problem);
             match fix {
                 Ok(Fixer::Agent(i)) => {
-                    (false, false, format!("{sentence} Press m again to ask {i}'s agent to fix and merge it."))
+                    (Consent::MergeOnly, format!("{sentence} Press m again to ask {i}'s agent to fix and merge it."))
                 }
-                Ok(Fixer::NewSession(i)) => {
-                    (true, false, format!("{sentence} Press m again to start a session for {i} that fixes it."))
-                }
+                Ok(Fixer::NewSession(i)) => (
+                    Consent::StartFixSession,
+                    format!("{sentence} Press m again to start a session for {i} that fixes it."),
+                ),
                 Err(why) => {
                     say(state, format!("{sentence} {why}"));
                     return Vec::new();
@@ -114,12 +104,12 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         }
         // A cached refusal still arms, because the list can be stale and the
         // job asks GitHub again.
-        (MergePlan::Direct | MergePlan::Refuse(_), _) => (false, false, format!("Press m again to merge PR {n}")),
+        (MergePlan::Direct | MergePlan::Refuse(_), _) => (Consent::MergeOnly, format!("Press m again to merge PR {n}")),
         (MergePlan::MarkReady, _) => {
-            (false, true, format!("PR {n} is a draft. Press m again to mark it ready and merge it."))
+            (Consent::MarkReadyThenMerge, format!("PR {n} is a draft. Press m again to mark it ready and merge it."))
         }
     };
-    let ask = MergeAsk { pr: n, new_session_ok, ready_ok };
+    let ask = MergeAsk { pr: n, consent };
     if armed != Some(&Armed::Merge(ask)) {
         state.armed = Some(Armed::Merge(ask));
         say(state, expect);
@@ -158,7 +148,8 @@ pub(super) fn fix_request(
 }
 
 pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd> {
-    let ended_ready = run.marked_ready && !matches!(run.result, Ok(MergeOutcome::Merged(_) | MergeOutcome::Queued));
+    let ended_ready = run.draft == DraftStep::MarkedReady
+        && !matches!(run.result, Ok(MergeOutcome::Merged(_) | MergeOutcome::Queued));
     let refused = matches!(run.result, Ok(MergeOutcome::Refused(_)));
     let mut cmds = merge_result(state, ask, run.result);
     if ended_ready {
@@ -242,7 +233,7 @@ pub(super) fn handoff(
             return Vec::new();
         }
     };
-    if ask.new_session_ok {
+    if ask.consent == Consent::StartFixSession {
         say(state, format!("{sentence} Starting a session for {issue} to fix it."));
         return start_fix(state, req);
     }
