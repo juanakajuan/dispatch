@@ -68,6 +68,8 @@ pub enum Msg {
     Saved(Result<(), ConfigError>),
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
+    /// The terminal lost focus, so the pointer is no longer over dispatch.
+    FocusLost,
 }
 
 /// One look at the sessions, with what each one's Claude last said.

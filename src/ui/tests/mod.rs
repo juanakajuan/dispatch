@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 mod dialog;
 mod footer;
+mod hover;
 mod menus;
 mod screen;
 mod text;

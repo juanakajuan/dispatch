@@ -7,7 +7,7 @@ use super::{Focus, State, update};
 use crate::config::settings::Setting;
 use crate::domain::Mode;
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use std::time::Instant;
 
 /// Clickable regions from the last frame. Written by the shell after each
@@ -23,7 +23,7 @@ impl HitMap {
     /// The target under a cell, with its rect. Later targets are drawn on top
     /// of earlier ones, so the last match wins.
     pub fn at(&self, column: u16, row: u16) -> Option<(Rect, HitTarget)> {
-        let pos = ratatui::layout::Position { x: column, y: row };
+        let pos = Position { x: column, y: row };
         self.targets.iter().rev().find(|(rect, _)| rect.contains(pos)).copied()
     }
 }
@@ -54,6 +54,7 @@ pub enum HitTarget {
 }
 
 pub(super) fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<Cmd> {
+    state.pointer = Some(Position { x: ev.column, y: ev.row });
     match ev.kind {
         MouseEventKind::ScrollDown => wheel(state, Move::Down),
         MouseEventKind::ScrollUp => wheel(state, Move::Up),

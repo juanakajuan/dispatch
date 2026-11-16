@@ -186,6 +186,7 @@ fn poll_input(timeout: Duration) -> std::io::Result<Vec<Msg>> {
             Event::Key(key) => msgs.push(Msg::Key(key)),
             Event::Mouse(mouse) => msgs.push(Msg::Mouse(mouse, Instant::now())),
             Event::FocusGained => msgs.push(Msg::FocusGained),
+            Event::FocusLost => msgs.push(Msg::FocusLost),
             _ => {}
         }
         wait = Duration::ZERO;

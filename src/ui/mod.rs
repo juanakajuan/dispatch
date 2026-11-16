@@ -12,14 +12,15 @@ mod palette;
 mod rows;
 pub(crate) mod text;
 
-use crate::app::mouse::HitMap;
+use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{Focus, State};
 use dialog::draw_dialog;
 use footer::{draw_footer, draw_prompt, message};
 use header::draw_header;
 use menus::{draw_keybinds, draw_settings};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
+use ratatui::style::Color;
 use ratatui::widgets::Paragraph;
 use rows::draw_rows;
 use text::{fit, span};
@@ -63,7 +64,24 @@ pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
     }
     draw_footer(frame, footer, state, &mut hits);
     draw_overlay(frame, state, &mut hits);
+    draw_hover(frame, &hits, state.pointer);
     hits
+}
+
+/// Tint the target under the pointer, so the user sees what a click hits.
+/// A text input shows its own cursor instead, and a tab badge keeps its color.
+fn draw_hover(frame: &mut Frame, hits: &HitMap, pointer: Option<Position>) {
+    let Some((rect, target)) = pointer.and_then(|p| hits.at(p.x, p.y)) else { return };
+    if matches!(target, HitTarget::Text { .. }) {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    for pos in rect.intersection(buf.area).positions() {
+        let cell = &mut buf[pos];
+        if cell.bg == Color::Reset {
+            cell.set_style(palette::HOVER);
+        }
+    }
 }
 
 /// The dialog or a menu, over the screen of either view.

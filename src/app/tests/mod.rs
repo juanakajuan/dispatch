@@ -27,6 +27,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod dialog;
+mod hover;
 mod keys;
 mod list;
 mod menus;
