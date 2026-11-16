@@ -2,6 +2,7 @@
 //! of one multiplexer and one shared fake git world.
 
 mod detect;
+mod error;
 mod hc;
 mod herdr;
 mod join;

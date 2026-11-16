@@ -9,6 +9,7 @@
 //! case to map to an empty list.
 
 use super::AttachPlan;
+use super::error::MuxError;
 use super::mux::{Liveness, Mux, Observed, Repo};
 use crate::domain::{IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
@@ -54,11 +55,11 @@ pub enum Place {
 impl Mux for Place {
     type Window = Pane;
 
-    fn list(&self, repo: Repo<'_>) -> Result<Vec<Observed<Pane>>, String> {
+    fn list(&self, repo: Repo<'_>) -> Result<Vec<Observed<Pane>>, MuxError> {
         list_windows(repo.root)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
         open_window(repo.root, dir, issue, argv).map(|_| ())
     }
 
@@ -70,18 +71,19 @@ impl Mux for Place {
         dir: &WorktreePath,
         issue: IssueNumber,
         argv: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<(), MuxError> {
         remove(&window.address)?;
         self.open(repo, dir, issue, argv)
     }
 
-    fn stop(&self, window: &Pane) -> Result<(), String> {
+    fn stop(&self, window: &Pane) -> Result<(), MuxError> {
         stop(&window.address)
     }
 
     /// `--force` types even when Claude waits on a dialog.
-    fn send_line(&self, window: &Pane, text: &str) -> Result<(), String> {
-        hc(["send", "--force", window.address.as_str(), text]).map(|_| ())
+    fn send_line(&self, window: &Pane, text: &str) -> Result<(), MuxError> {
+        hc(["send", "--force", window.address.as_str(), text])?;
+        Ok(())
     }
 
     fn attach(&self, window: &Pane) -> AttachPlan {
@@ -138,7 +140,7 @@ struct Started {
     address: Address,
 }
 
-fn hc_raw<I, S>(args: I) -> Result<String, ProcError>
+fn hc<I, S>(args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
@@ -146,27 +148,30 @@ where
     proc::run("hc", args, Path::new("."))
 }
 
-fn hc<I, S>(args: I) -> Result<String, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    hc_raw(args).map_err(|e| e.to_string())
+/// What a failed call says about its terminal, read once from hc's exit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gone {
+    /// hc prints `{"error":{"kind":"not_found",..}}` on stderr and exits 3.
+    NotFound,
+    Finished,
 }
 
-/// hc prints `{"error":{"kind":"not_found",..}}` on stderr and exits 3.
-fn is_not_found(e: &ProcError) -> bool {
-    e.exit_code() == Some(3) && e.stderr().contains("\"not_found\"")
+fn classify(e: &ProcError) -> Option<Gone> {
+    match e.exit_code() {
+        Some(3) if e.stderr().contains("\"not_found\"") => Some(Gone::NotFound),
+        Some(11) => Some(Gone::Finished),
+        _ => None,
+    }
 }
 
-fn is_finished(e: &ProcError) -> bool {
-    e.exit_code() == Some(11)
+fn unexpected_json(e: &serde_json::Error) -> MuxError {
+    MuxError::Reply { program: "hc", detail: e.to_string() }
 }
 
-fn list_windows(repo_root: &Path) -> Result<Vec<Observed<Pane>>, String> {
+fn list_windows(repo_root: &Path) -> Result<Vec<Observed<Pane>>, MuxError> {
     let repo = format!("dispatch.repo={}", repo_root.display());
     let text = hc(["ls", "--all", "--json", "--label", repo.as_str()])?;
-    let list: TerminalList = serde_json::from_str(&text).map_err(|e| format!("hc printed unexpected JSON: {e}"))?;
+    let list: TerminalList = serde_json::from_str(&text).map_err(|e| unexpected_json(&e))?;
     Ok(window_obs(&list))
 }
 
@@ -203,7 +208,7 @@ pub(super) fn space_id(worktree: &Path) -> Space {
 }
 
 /// `--no-parent` keeps the terminal alive when dispatch exits.
-fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, String> {
+fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, MuxError> {
     let cwd = dir.as_path().to_string_lossy().into_owned();
     let labels = [
         format!("herdr.space={}", space_id(dir.as_path())),
@@ -217,23 +222,25 @@ fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &
     run.push("--");
     run.extend(argv.iter().map(String::as_str));
     let text = hc(run)?;
-    serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| format!("hc printed unexpected JSON: {e}"))
+    serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| unexpected_json(&e))
 }
 
-fn remove(address: &Address) -> Result<(), String> {
-    match hc_raw(["rm", address.as_str()]) {
+fn remove(address: &Address) -> Result<(), MuxError> {
+    match hc(["rm", address.as_str()]) {
         Ok(_) => Ok(()),
-        Err(e) if is_not_found(&e) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) if classify(&e) == Some(Gone::NotFound) => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
-fn stop(address: &Address) -> Result<(), String> {
-    match hc_raw(["kill", address.as_str()]) {
+fn stop(address: &Address) -> Result<(), MuxError> {
+    match hc(["kill", address.as_str()]) {
         Ok(_) => {}
-        Err(e) if is_not_found(&e) => return Ok(()),
-        Err(e) if is_finished(&e) => {}
-        Err(e) => return Err(e.to_string()),
+        Err(e) => match classify(&e) {
+            Some(Gone::NotFound) => return Ok(()),
+            Some(Gone::Finished) => {}
+            None => return Err(e.into()),
+        },
     }
     remove(address)
 }

@@ -1,5 +1,6 @@
 use super::{PaneId, PaneRef, WorkspaceId};
 use crate::domain::WorktreePath;
+use crate::session::error::MuxError;
 use crate::session::mux::{Liveness, Observed};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -89,8 +90,10 @@ pub(super) struct PaneAgent {
     pub(super) agent: Option<String>,
 }
 
-pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<T, String> {
-    serde_json::from_str::<Reply<T>>(text).map(|r| r.result).map_err(|e| format!("herdr printed unexpected JSON: {e}"))
+pub(super) fn parse<T: DeserializeOwned>(text: &str) -> Result<T, MuxError> {
+    serde_json::from_str::<Reply<T>>(text)
+        .map(|r| r.result)
+        .map_err(|e| MuxError::Reply { program: "herdr", detail: e.to_string() })
 }
 
 pub(super) fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<Observed<PaneRef>> {

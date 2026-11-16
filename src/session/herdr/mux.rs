@@ -3,13 +3,14 @@ use super::{
 };
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::session::AttachPlan;
+use crate::session::error::MuxError;
 use crate::session::mux::{Mux, Observed, Repo};
 use std::path::Path;
 
 impl Mux for Place {
     type Window = PaneRef;
 
-    fn list(&self, _repo: Repo<'_>) -> Result<Vec<Observed<PaneRef>>, String> {
+    fn list(&self, _repo: Repo<'_>) -> Result<Vec<Observed<PaneRef>>, MuxError> {
         list_windows()
     }
 
@@ -22,11 +23,11 @@ impl Mux for Place {
         branch: &BranchName,
         from: Option<&OriginRef>,
         issue: IssueNumber,
-    ) -> Result<(), String> {
+    ) -> Result<(), MuxError> {
         create_worktree(self, repo.root, dir, branch, from, issue)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
         open_window(self, repo.root, dir, issue, argv, &script_file(repo.git_common_dir, issue))
     }
 
@@ -37,15 +38,15 @@ impl Mux for Place {
         _dir: &WorktreePath,
         issue: IssueNumber,
         argv: &[String],
-    ) -> Result<(), String> {
+    ) -> Result<(), MuxError> {
         launch(window, argv, &script_file(repo.git_common_dir, issue))
     }
 
-    fn stop(&self, window: &PaneRef) -> Result<(), String> {
+    fn stop(&self, window: &PaneRef) -> Result<(), MuxError> {
         close_workspace(&window.workspace)
     }
 
-    fn send_line(&self, window: &PaneRef, text: &str) -> Result<(), String> {
+    fn send_line(&self, window: &PaneRef, text: &str) -> Result<(), MuxError> {
         send_line(window, text)
     }
 

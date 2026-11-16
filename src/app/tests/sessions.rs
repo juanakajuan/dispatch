@@ -1,4 +1,6 @@
 use super::*;
+use crate::domain::OriginRef;
+use crate::session::error::StartWarning;
 
 #[test]
 fn a_attaches_a_live_session_and_resumes_an_exited_one() {
@@ -47,11 +49,16 @@ fn results_of_writes_clear_starting_toast_and_ask_for_an_observation() {
 fn a_finished_start_shows_its_session_at_once_with_its_warning() {
     let (mut state, _) = app();
     state.starting.insert(IssueNumber(3));
-    let outcome =
-        StartOutcome { session: session(3, SessionState::Running), warnings: vec!["fetch failed".to_string()] };
+    let error = crate::proc::fake::fail("git", 128, "no network");
+    let warning = StartWarning::FetchFailed { base: OriginRef::parse("origin/main").expect("ref"), error };
+    let outcome = StartOutcome { session: session(3, SessionState::Running), warnings: vec![warning] };
     press(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
     assert!(state.sessions.contains_key(&IssueNumber(3)));
-    assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("fetch failed")));
+    let toast = state.toast.as_ref().map(|t| t.text.as_str());
+    assert_eq!(
+        toast,
+        Some("Started #3 (warning: fetch failed, using the local origin/main: git failed with code 128: no network)")
+    );
 }
 
 #[test]

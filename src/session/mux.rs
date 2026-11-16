@@ -1,4 +1,4 @@
-use super::error::SetupError;
+use super::error::{MuxError, SetupError};
 use super::request::Launch;
 use super::{AttachPlan, git, hc, herdr, tmux};
 use crate::config::Multiplexer;
@@ -11,7 +11,7 @@ pub(super) trait Mux {
     type Window: Clone + Eq + std::fmt::Debug;
 
     /// Every window dispatch opened, dead ones too. No server is an empty list.
-    fn list(&self, repo: Repo<'_>) -> Result<Vec<Observed<Self::Window>>, String>;
+    fn list(&self, repo: Repo<'_>) -> Result<Vec<Observed<Self::Window>>, MuxError>;
 
     fn add_worktree(
         &self,
@@ -20,12 +20,12 @@ pub(super) trait Mux {
         branch: &BranchName,
         from: Option<&OriginRef>,
         _issue: IssueNumber,
-    ) -> Result<(), String> {
-        git::add_worktree(repo.root, dir, branch, from)
+    ) -> Result<(), MuxError> {
+        git::add_worktree(repo.root, dir, branch, from).map_err(MuxError::Run)
     }
 
     /// Opens a window on `dir` and runs `argv` in it.
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), String>;
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError>;
 
     /// Runs `argv` for a session whose window is dead.
     fn relaunch(
@@ -35,12 +35,12 @@ pub(super) trait Mux {
         dir: &WorktreePath,
         issue: IssueNumber,
         argv: &[String],
-    ) -> Result<(), String>;
+    ) -> Result<(), MuxError>;
 
     /// A window that is already gone counts as success.
-    fn stop(&self, window: &Self::Window) -> Result<(), String>;
+    fn stop(&self, window: &Self::Window) -> Result<(), MuxError>;
 
-    fn send_line(&self, window: &Self::Window, text: &str) -> Result<(), String>;
+    fn send_line(&self, window: &Self::Window, text: &str) -> Result<(), MuxError>;
 
     fn attach(&self, window: &Self::Window) -> AttachPlan;
 
@@ -125,7 +125,7 @@ pub(super) const WAITING_HOOKS: &str = r#"{"hooks":{
 fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> Result<(), SetupError> {
     crate::proc::run(program, [version_flag], cwd).map(|_| ()).map_err(|e| match e {
         crate::proc::ProcError::Spawn { .. } => SetupError::ProgramMissing(program),
-        other => SetupError::Command(other.to_string()),
+        other => SetupError::Mux(MuxError::Run(other)),
     })
 }
 
@@ -164,10 +164,10 @@ pub(super) fn detect_mux(
     if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
         require("herdr", "--version", repo_root)?;
         let place = herdr::Place::detect(env.herdr_env.as_deref(), env.herdr_workspace.as_deref(), &dir_name)
-            .map_err(SetupError::Command)?;
+            .map_err(SetupError::Mux)?;
         return Ok(Backend::Herdr(place));
     }
     require("tmux", "-V", repo_root)?;
-    let place = tmux::Place::detect(env.tmux.as_deref(), &dir_name).map_err(SetupError::Command)?;
+    let place = tmux::Place::detect(env.tmux.as_deref(), &dir_name).map_err(SetupError::Mux)?;
     Ok(Backend::Tmux(place))
 }

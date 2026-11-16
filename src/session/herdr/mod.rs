@@ -4,6 +4,7 @@
 mod mux;
 mod wire;
 
+use super::error::{FsAction, FsError, MuxError};
 use super::mux::Observed;
 use super::start_argv::herdr_worktree_create_args;
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
@@ -56,18 +57,18 @@ impl Place {
         herdr_env: Option<&str>,
         workspace_id: Option<&str>,
         repo_dir_name: &str,
-    ) -> Result<Place, String> {
+    ) -> Result<Place, MuxError> {
         if herdr_env != Some("1") {
             return Ok(Place::Detached { label: format!("dispatch-{repo_dir_name}") });
         }
         match workspace_id.filter(|id| !id.is_empty()) {
             Some(id) => Ok(Place::Inside { source: WorkspaceId(id.to_string()) }),
-            None => Err("HERDR_ENV is set but HERDR_WORKSPACE_ID is not".to_string()),
+            None => Err(MuxError::NoHerdrWorkspace),
         }
     }
 }
 
-fn herdr_raw<I, S>(args: I) -> Result<String, ProcError>
+fn herdr<I, S>(args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
@@ -75,31 +76,31 @@ where
     proc::run("herdr", args, Path::new("."))
 }
 
-fn herdr<I, S>(args: I) -> Result<String, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    herdr_raw(args).map_err(|e| e.to_string())
-}
-
-fn call<T: DeserializeOwned>(args: &[&str]) -> Result<T, String> {
+fn call<T: DeserializeOwned>(args: &[&str]) -> Result<T, MuxError> {
     parse(&herdr(args)?)
 }
 
-fn is_no_server(stderr: &str) -> bool {
-    stderr.contains("server_not_running")
+/// What a failed call says is missing, read once from herdr's error code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gone {
+    Server,
+    Workspace,
 }
 
-fn query<T: DeserializeOwned + Default>(args: &[&str]) -> Result<T, String> {
-    match herdr_raw(args) {
+fn classify(e: &ProcError) -> Option<Gone> {
+    let codes = [("server_not_running", Gone::Server), ("workspace_not_found", Gone::Workspace)];
+    codes.into_iter().find_map(|(code, gone)| e.stderr().contains(code).then_some(gone))
+}
+
+fn query<T: DeserializeOwned + Default>(args: &[&str]) -> Result<T, MuxError> {
+    match herdr(args) {
         Ok(text) => parse(&text),
-        Err(e) if is_no_server(e.stderr()) => Ok(T::default()),
-        Err(e) => Err(e.to_string()),
+        Err(e) if classify(&e) == Some(Gone::Server) => Ok(T::default()),
+        Err(e) => Err(e.into()),
     }
 }
 
-fn list_windows() -> Result<Vec<Observed<PaneRef>>, String> {
+fn list_windows() -> Result<Vec<Observed<PaneRef>>, MuxError> {
     let workspaces: WorkspaceList = query(&["workspace", "list"])?;
     let panes: PaneList = query(&["pane", "list"])?;
     Ok(window_obs(&workspaces, &panes))
@@ -112,33 +113,33 @@ pub(super) fn label(issue: IssueNumber) -> String {
 const SERVER_WAIT: Duration = Duration::from_secs(5);
 const SERVER_POLL: Duration = Duration::from_millis(100);
 
-fn workspaces_with_server(budget: Duration) -> Result<WorkspaceList, String> {
-    let list = || herdr_raw(["workspace", "list"]);
+fn workspaces_with_server(budget: Duration) -> Result<WorkspaceList, MuxError> {
+    let list = || herdr(["workspace", "list"]);
     match list() {
         Ok(text) => return parse(&text),
-        Err(e) if is_no_server(e.stderr()) => {}
-        Err(e) => return Err(e.to_string()),
+        Err(e) if classify(&e) == Some(Gone::Server) => {}
+        Err(e) => return Err(e.into()),
     }
-    proc::spawn_detached("herdr", ["server"], Path::new(".")).map_err(|e| e.to_string())?;
+    proc::spawn_detached("herdr", ["server"], Path::new("."))?;
     let start = Instant::now();
     loop {
         std::thread::sleep(SERVER_POLL);
         match list() {
             Ok(text) => return parse(&text),
-            Err(e) if is_no_server(e.stderr()) => {}
-            Err(e) => return Err(e.to_string()),
+            Err(e) if classify(&e) == Some(Gone::Server) => {}
+            Err(e) => return Err(e.into()),
         }
         if start.elapsed() >= budget {
-            return Err(format!("herdr did not start within {budget:?}"));
+            return Err(MuxError::ServerTimeout { program: "herdr", waited: budget });
         }
     }
 }
 
-fn source(place: &Place, repo_root: &Path) -> Result<WorkspaceId, String> {
+fn source(place: &Place, repo_root: &Path) -> Result<WorkspaceId, MuxError> {
     source_within(place, repo_root, SERVER_WAIT)
 }
 
-fn source_within(place: &Place, repo_root: &Path, budget: Duration) -> Result<WorkspaceId, String> {
+fn source_within(place: &Place, repo_root: &Path, budget: Duration) -> Result<WorkspaceId, MuxError> {
     let label = match place {
         Place::Inside { source } => return Ok(source.clone()),
         Place::Detached { label } => label,
@@ -160,10 +161,10 @@ fn create_worktree(
     branch: &BranchName,
     from: Option<&OriginRef>,
     issue: IssueNumber,
-) -> Result<(), String> {
+) -> Result<(), MuxError> {
     let source = source(place, repo_root)?;
     let args = herdr_worktree_create_args(source.as_str(), &dir.to_string_lossy(), branch.as_str(), from, issue);
-    herdr(args).map(|_| ())
+    herdr(args).map(drop).map_err(MuxError::Run)
 }
 
 /// `herdr worktree create` already opens a workspace on the new checkout.
@@ -174,7 +175,7 @@ fn open_window(
     issue: IssueNumber,
     argv: &[String],
     script: &Path,
-) -> Result<(), String> {
+) -> Result<(), MuxError> {
     let pane = match list_windows()?.into_iter().find(|o| o.worktree == *dir) {
         Some(open) => open.window,
         None => open_worktree(&source(place, repo_root)?, dir, issue)?,
@@ -182,7 +183,7 @@ fn open_window(
     launch(&pane, argv, script)
 }
 
-fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, String> {
+fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, MuxError> {
     let (dir, label) = (dir.as_path().to_string_lossy(), label(issue));
     let args = [
         "worktree",
@@ -202,7 +203,7 @@ fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -
 const AGENT_WAIT: Duration = Duration::from_secs(10);
 const AGENT_POLL: Duration = Duration::from_millis(250);
 
-fn launch(pane: &PaneRef, argv: &[String], script: &Path) -> Result<(), String> {
+fn launch(pane: &PaneRef, argv: &[String], script: &Path) -> Result<(), MuxError> {
     write_script(argv, script)?;
     herdr(["pane", "run", pane.pane.as_str(), typed_path(script)?.as_str()])?;
     wait_for_agent(pane, AGENT_WAIT);
@@ -236,9 +237,9 @@ fn script_text(argv: &[String]) -> String {
     format!("#!/bin/sh\nexec {}\n", words.join(" "))
 }
 
-fn write_script(argv: &[String], file: &Path) -> Result<(), String> {
+fn write_script(argv: &[String], file: &Path) -> Result<(), MuxError> {
     use std::os::unix::fs::PermissionsExt;
-    let err = |e: std::io::Error| format!("cannot write {}: {e}", file.display());
+    let err = |e: std::io::Error| MuxError::Fs(FsError::new(FsAction::Write, file, &e));
     if let Some(parent) = file.parent() {
         std::fs::create_dir_all(parent).map_err(err)?;
     }
@@ -248,28 +249,28 @@ fn write_script(argv: &[String], file: &Path) -> Result<(), String> {
 
 /// Every shell reads a single-quoted word the same way unless it holds `'`,
 /// `\`, or a newline.
-fn typed_path(path: &Path) -> Result<String, String> {
+fn typed_path(path: &Path) -> Result<String, MuxError> {
     let text = path.to_string_lossy();
     if text.contains(['\'', '\\', '\n']) {
-        return Err(format!("cannot launch from {text}: the path has a quote, a backslash, or a newline"));
+        return Err(MuxError::UnsafeScriptPath(text.into_owned()));
     }
     Ok(format!("'{text}'"))
 }
 
 /// The checkout and the branch stay.
-fn close_workspace(workspace: &WorkspaceId) -> Result<(), String> {
-    match herdr_raw(["workspace", "close", workspace.as_str()]) {
+fn close_workspace(workspace: &WorkspaceId) -> Result<(), MuxError> {
+    match herdr(["workspace", "close", workspace.as_str()]) {
         Ok(_) => Ok(()),
-        Err(e) if e.stderr().contains("workspace_not_found") || is_no_server(e.stderr()) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) if classify(&e).is_some() => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
 /// Types `text` into the pane, then presses Enter: two calls, like tmux, so
 /// Claude reads the text as typing and Enter as a submit.
-fn send_line(pane: &PaneRef, text: &str) -> Result<(), String> {
+fn send_line(pane: &PaneRef, text: &str) -> Result<(), MuxError> {
     herdr(["pane", "send-text", pane.pane.as_str(), text])?;
-    herdr(["pane", "send-keys", pane.pane.as_str(), "enter"]).map(|_| ())
+    herdr(["pane", "send-keys", pane.pane.as_str(), "enter"]).map(drop).map_err(MuxError::Run)
 }
 
 #[cfg(test)]
@@ -383,7 +384,7 @@ mod tests {
             if call.starts_with("spawn") { Ok(String::new()) } else { Err(fake::fail("herdr", 1, NO_SERVER)) }
         });
         let err = source_within(&detached(), Path::new(ROOT), Duration::ZERO).expect_err("times out");
-        assert!(err.contains("herdr did not start"), "{err}");
+        assert_eq!(err.to_string(), "herdr did not start within 0ns");
         fake::install(|_| Err(fake::fail("herdr", 1, r#"{"error":{"code":"internal"}}"#)));
         assert!(source_within(&detached(), Path::new(ROOT), Duration::ZERO).is_err());
         assert_eq!(fake::calls(), ["herdr workspace list"], "another error does not start a server");

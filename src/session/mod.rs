@@ -14,7 +14,7 @@
 //! tmux server restart, and a reboot. `git branch -D` deletes the `branch.<b>`
 //! section, so a deleted branch leaves no stale marker.
 
-mod error;
+pub mod error;
 mod git;
 mod hc;
 mod herdr;
@@ -31,7 +31,7 @@ pub use start_argv::StartPreview;
 
 use crate::config::Multiplexer;
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
-use error::{SessionError, SetupError};
+use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
 use std::collections::BTreeMap;
@@ -69,7 +69,7 @@ pub type Sessions = BTreeMap<IssueNumber, Session>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartOutcome {
     pub session: Session,
-    pub warnings: Vec<String>,
+    pub warnings: Vec<StartWarning>,
 }
 
 /// How the shell attaches. Pure data, so the choice is unit tested.

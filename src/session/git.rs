@@ -1,6 +1,7 @@
 //! git adapter. Private to `session`. Parsers are pure and tested on text
 //! captured from git 2.56.
 
+use super::error::{FsAction, FsError, GitError};
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
@@ -24,14 +25,6 @@ where
     proc::run("git", args, root)
 }
 
-fn text<I, S>(root: &Path, args: I) -> Result<String, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    git(root, args).map_err(|e| e.to_string())
-}
-
 /// The repo's two fixed dirs, both canonical.
 pub(super) struct RepoDirs {
     /// The main worktree's root, even when `cwd` is inside a linked worktree,
@@ -41,24 +34,25 @@ pub(super) struct RepoDirs {
     pub common: PathBuf,
 }
 
-pub(super) fn repo_dirs(cwd: &Path) -> Result<RepoDirs, String> {
-    let top = text(cwd, ["rev-parse", "--show-toplevel"])?;
-    let common = text(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"])?;
+pub(super) fn repo_dirs(cwd: &Path) -> Result<RepoDirs, GitError> {
+    let top = git(cwd, ["rev-parse", "--show-toplevel"]).map_err(GitError::Run)?;
+    let common = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).map_err(GitError::Run)?;
     let common = PathBuf::from(common.trim());
     let root = match (common.file_name(), common.parent()) {
         (Some(name), Some(parent)) if name == ".git" => parent.to_path_buf(),
         _ => PathBuf::from(top.trim()),
     };
-    let canonical = |p: &Path| std::fs::canonicalize(p).map_err(|e| format!("cannot resolve {}: {e}", p.display()));
+    let canonical =
+        |p: &Path| std::fs::canonicalize(p).map_err(|e| GitError::Fs(FsError::new(FsAction::Resolve, p, &e)));
     Ok(RepoDirs { root: canonical(&root)?, common: canonical(&common)? })
 }
 
 /// Adds `pattern` as one line to `<common>/info/exclude`, unless a line equal
 /// to it is there. Idempotent. dispatch never edits the user's `.gitignore`.
-pub(super) fn ensure_excluded(common: &Path, pattern: &str) -> Result<(), String> {
+pub(super) fn ensure_excluded(common: &Path, pattern: &str) -> Result<(), FsError> {
     let info = common.join("info");
     let file = info.join("exclude");
-    let err = |e: std::io::Error| format!("cannot update {}: {e}", file.display());
+    let err = |e: std::io::Error| FsError::new(FsAction::Update, &file, &e);
     let existing = match std::fs::read_to_string(&file) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -72,14 +66,12 @@ pub(super) fn ensure_excluded(common: &Path, pattern: &str) -> Result<(), String
     std::fs::write(&file, format!("{existing}{separator}{pattern}\n")).map_err(err)
 }
 
-pub(super) fn origin_head(root: &Path) -> Result<String, String> {
-    text(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
-        .map(|s| s.trim().to_string())
-        .map_err(|e| format!("{e}\nrun `git remote set-head origin --auto` first"))
+pub(super) fn origin_head(root: &Path) -> Result<String, ProcError> {
+    git(root, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]).map(|s| s.trim().to_string())
 }
 
-pub(super) fn list_worktrees(root: &Path) -> Result<Vec<Worktree>, String> {
-    text(root, ["worktree", "list", "--porcelain"]).map(|t| parse_worktrees(&t))
+pub(super) fn list_worktrees(root: &Path) -> Result<Vec<Worktree>, ProcError> {
+    git(root, ["worktree", "list", "--porcelain"]).map(|t| parse_worktrees(&t))
 }
 
 /// Porcelain blocks separated by blank lines:
@@ -109,11 +101,11 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
         .collect()
 }
 
-pub(super) fn list_markers(root: &Path) -> Result<Markers, String> {
+pub(super) fn list_markers(root: &Path) -> Result<Markers, ProcError> {
     match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-issue$"]) {
         Ok(t) => Ok(parse_markers(&t)),
         Err(e) if e.exit_code() == Some(1) => Ok(Markers::new()),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e),
     }
 }
 
@@ -130,17 +122,17 @@ fn parse_markers(text: &str) -> Markers {
         .collect()
 }
 
-pub(super) fn branch_exists(root: &Path, branch: &BranchName) -> Result<bool, String> {
+pub(super) fn branch_exists(root: &Path, branch: &BranchName) -> Result<bool, ProcError> {
     let r = format!("refs/heads/{}", branch.as_str());
     match git(root, ["show-ref", "--verify", "--quiet", r.as_str()]) {
         Ok(_) => Ok(true),
         Err(e) if e.exit_code() == Some(1) => Ok(false),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(e),
     }
 }
 
-pub(super) fn fetch(root: &Path, remote_ref: &OriginRef) -> Result<(), String> {
-    text(root, ["fetch", "origin", remote_ref.branch().as_str()]).map(|_| ())
+pub(super) fn fetch(root: &Path, remote_ref: &OriginRef) -> Result<(), ProcError> {
+    git(root, ["fetch", "origin", remote_ref.branch().as_str()]).map(|_| ())
 }
 
 pub(super) fn add_worktree(
@@ -148,13 +140,13 @@ pub(super) fn add_worktree(
     dir: &Path,
     branch: &BranchName,
     create_from: Option<&OriginRef>,
-) -> Result<(), String> {
-    text(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
+) -> Result<(), ProcError> {
+    git(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
 }
 
-pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), String> {
+pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), ProcError> {
     let key = format!("branch.{}.dispatch-issue", branch.as_str());
-    text(root, ["config".to_string(), key, issue.0.to_string()]).map(|_| ())
+    git(root, ["config".to_string(), key, issue.0.to_string()]).map(|_| ())
 }
 
 #[cfg(test)]

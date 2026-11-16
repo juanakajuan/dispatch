@@ -105,7 +105,10 @@ fn failed_fetch_is_a_warning_and_the_start_continues() {
     install_world(base.clone(), Rc::new(RefCell::new(Sim { fetch_fails: true, ..Sim::default() })));
     let out = ws.start(&req(), &launch()).expect("start continues");
     assert_eq!(out.warnings.len(), 1);
-    assert!(out.warnings[0].contains("origin/main") && out.warnings[0].contains("no network"));
+    assert_eq!(
+        out.warnings[0].to_string(),
+        "fetch failed, using the local origin/main: git failed with code 128: no network"
+    );
 }
 
 #[test]
