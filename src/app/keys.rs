@@ -6,7 +6,7 @@ use super::msg::Cmd;
 use super::open::open_key;
 use super::sessions::{attach_key, start_key, stop_key};
 use super::{Focus, OpenWith, State};
-use crate::config::SETTINGS;
+use crate::config::settings::SETTINGS;
 use crate::session::{Session, SessionState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 

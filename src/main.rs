@@ -115,7 +115,7 @@ enum WriteJob {
     Start(session::request::StartRequest, session::request::Launch),
     Stop(domain::IssueNumber),
     Resume(domain::IssueNumber, session::request::Launch),
-    SaveConfig { setting: config::Setting, config: config::Config },
+    SaveConfig { setting: config::settings::Setting, config: config::Config },
     Send { issue: domain::IssueNumber, text: String },
     Merge(app::merge::MergeAsk),
 }
@@ -133,7 +133,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                     Msg::Resumed { issue, result: ws.resume(issue, &launch).map_err(|e| e.to_string()) }
                 }
                 WriteJob::SaveConfig { setting, config } => {
-                    Msg::Saved(config::save(setting, &config).map_err(|e| e.to_string()))
+                    Msg::Saved(config::settings::save(setting, &config).map_err(|e| e.to_string()))
                 }
                 WriteJob::Send { issue, text } => {
                     Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }

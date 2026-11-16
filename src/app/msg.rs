@@ -1,5 +1,6 @@
 use super::merge::MergeAsk;
-use crate::config::{Config, Setting};
+use crate::config::Config;
+use crate::config::settings::Setting;
 use crate::domain::{GithubRef, Issue, IssueNumber, PullRequest};
 use crate::merge::MergeRun;
 use crate::session::request::{Launch, StartRequest};

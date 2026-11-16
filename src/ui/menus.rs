@@ -1,7 +1,8 @@
 use super::palette;
 use super::text::{cells, fit, span};
 use crate::app::{self, State};
-use crate::config::{Config, SETTINGS};
+use crate::config::Config;
+use crate::config::settings::SETTINGS;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Line;

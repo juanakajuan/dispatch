@@ -1,7 +1,7 @@
 use super::keys::{Key, key_of};
 use super::msg::{Cmd, Job};
 use super::{Focus, State};
-use crate::config::{Change, SETTINGS, Setting};
+use crate::config::settings::{Change, SETTINGS, Setting};
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// The settings overlay. Browsing has no `edit`; a typed value has one.
