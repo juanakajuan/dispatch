@@ -106,7 +106,7 @@ fn list_windows() -> Result<Vec<Observed<PaneRef>>, String> {
 }
 
 pub(super) fn label(issue: IssueNumber) -> String {
-    format!("#{}", issue.0)
+    issue.to_string()
 }
 
 const SERVER_WAIT: Duration = Duration::from_secs(5);

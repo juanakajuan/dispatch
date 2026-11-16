@@ -75,7 +75,7 @@ pub(super) fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &ap
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(palette::DIM)
-        .title(span(format!(" Start session for #{} {} ", d.issue.0, fit(&d.title, 50)), palette::HEADING))
+        .title(span(format!(" Start session for {} {} ", d.issue, fit(&d.title, 50)), palette::HEADING))
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);

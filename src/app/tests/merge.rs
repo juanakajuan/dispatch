@@ -23,7 +23,10 @@ fn ran_after_ready(result: Result<MergeOutcome, String>) -> MergeRun {
 fn handoff(problem: MergeProblem) -> Msg {
     let mut fresh = pr(10, "fix/3-x", &[3]);
     fresh.mergeability = Mergeability::Conflict;
-    Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Handoff { problem, method: MergeMethod::Rebase, pr: fresh })) }
+    Msg::Merged {
+        ask: ASK,
+        run: ran(Ok(MergeOutcome::Handoff { problem, method: MergeMethod::Rebase, pr: Box::new(fresh) })),
+    }
 }
 
 fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
@@ -159,6 +162,21 @@ fn a_problem_pr_with_no_issue_to_start_on_only_explains() {
 }
 
 #[test]
+fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
+    let (mut state, _) = app();
+    let mut fresh = pr(10, "fix 3", &[3]);
+    fresh.mergeability = Mergeability::Conflict;
+    let outcome =
+        MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) };
+    let cmds = press(&mut state, Msg::Merged { ask: ASK_FIX, run: ran(Ok(outcome)) });
+    assert!(starts(&cmds).is_empty());
+    assert_eq!(
+        toast(&state),
+        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\": BadChar(' ')"
+    );
+}
+
+#[test]
 fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
     let (mut state, _) = app();
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) });
@@ -262,7 +280,7 @@ fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
     let handoff_after_ready = || {
         let mut fresh = pr(10, "fix/3-x", &[3]);
         fresh.mergeability = Mergeability::Conflict;
-        Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: fresh })
+        Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) })
     };
     let outcomes = [
         (Ok(MergeOutcome::Refused("wait.".to_string())), "wait. PR #10 is now ready for review."),

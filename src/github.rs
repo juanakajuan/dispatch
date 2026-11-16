@@ -1,7 +1,10 @@
 //! `gh` adapter. Wire structs are private; callers only see domain types.
 //! `gh` infers the repo from the working directory, so no owner/name here.
 
-use crate::domain::{Checks, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrNumber, PrState, PullRequest};
+use crate::domain::{
+    Checks, CommitOid, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
+    PullRequest,
+};
 use crate::proc;
 use std::fmt;
 use std::path::Path;
@@ -69,7 +72,7 @@ pub fn allowed_merge_methods(repo_root: &Path) -> Result<Vec<MergeMethod>, Fetch
 /// never deletes branches.
 pub fn merge_pr(repo_root: &Path, pr: &PullRequest, method: MergeMethod) -> Result<(), FetchError> {
     let flag = format!("--{method}");
-    let args = ["pr", "merge", &pr.number.0.to_string(), &flag, "--match-head-commit", &pr.head_oid];
+    let args = ["pr", "merge", &pr.number.0.to_string(), &flag, "--match-head-commit", pr.head_oid.as_str()];
     proc::run("gh", args, repo_root).map(|_| ()).map_err(|e| FetchError(e.to_string()))
 }
 
@@ -156,9 +159,9 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
         title: w.title,
         state,
         author: login(w.author),
-        head: w.head_ref_name,
-        head_oid: w.head_ref_oid,
-        base: w.base_ref_name,
+        head: PrBranch::parse(w.head_ref_name),
+        head_oid: CommitOid::new(w.head_ref_oid),
+        base: PrBranch::parse(w.base_ref_name),
         additions: w.additions,
         deletions: w.deletions,
         checks: rollup(&w.status_check_rollup),
@@ -319,8 +322,8 @@ mod tests {
         let open = pr(1028);
         assert_eq!((open.state, open.checks, open.mergeability), (PrState::Open, Checks::Pass, Mergeability::Clean));
         assert_eq!(open.closes, [IssueNumber(711)]);
-        assert_eq!(open.head, "feature/711-hardware-metadata");
-        assert_eq!(open.base, "master");
+        assert_eq!(open.head.display(), "feature/711-hardware-metadata");
+        assert_eq!(open.base.display(), "master");
         assert_eq!(pr(1002).updated_at.to_string(), "2026-10-12T08:33:48Z");
         assert_eq!(pr(1002).state, PrState::Merged);
         let draft = pr(14927);
@@ -393,7 +396,7 @@ mod tests {
     #[test]
     fn merge_pr_pins_the_head_and_passes_the_method_but_no_branch_delete() {
         proc::fake::install(|_| Ok(String::new()));
-        let pr = PullRequest { head_oid: "abc123".to_string(), ..crate::testutil::pr(12, "h", &[]) };
+        let pr = PullRequest { head_oid: CommitOid::new("abc123".to_string()), ..crate::testutil::pr(12, "h", &[]) };
         merge_pr(Path::new("/r"), &pr, MergeMethod::Rebase).expect("merges");
         assert_eq!(proc::fake::calls(), ["gh pr merge 12 --rebase --match-head-commit abc123"]);
     }

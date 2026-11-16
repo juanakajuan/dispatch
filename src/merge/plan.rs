@@ -26,27 +26,27 @@ pub enum MergeProblem {
 /// Pure. Order matters: a conflict needs the agent even while checks run,
 /// and pending checks wait rather than hand off, because they may pass.
 pub fn merge_plan(pr: &PullRequest) -> MergePlan {
-    let n = pr.number.0;
+    let n = pr.number;
     match pr.state {
         PrState::Open => {}
         PrState::Draft => return MergePlan::MarkReady,
-        PrState::Merged => return MergePlan::Refuse(format!("PR #{n} is already merged.")),
-        PrState::Closed => return MergePlan::Refuse(format!("PR #{n} is closed.")),
+        PrState::Merged => return MergePlan::Refuse(format!("PR {n} is already merged.")),
+        PrState::Closed => return MergePlan::Refuse(format!("PR {n} is closed.")),
     }
     match (pr.mergeability, pr.checks) {
         (Mergeability::Conflict, _) => MergePlan::Handoff(MergeProblem::Conflict),
         #[expect(clippy::match_same_arms, reason = "order matters: `Pending` must refuse before `Unstable` hands off")]
         (_, Checks::Fail) => MergePlan::Handoff(MergeProblem::ChecksFailing),
         (_, Checks::Pending) => {
-            MergePlan::Refuse(format!("PR #{n} has checks that are still running. Press m again when they finish."))
+            MergePlan::Refuse(format!("PR {n} has checks that are still running. Press m again when they finish."))
         }
         (Mergeability::Unstable, _) => MergePlan::Handoff(MergeProblem::ChecksFailing),
         (Mergeability::Unknown, _) => {
-            MergePlan::Refuse(format!("GitHub does not know yet if PR #{n} can merge. Try again in a moment."))
+            MergePlan::Refuse(format!("GitHub does not know yet if PR {n} can merge. Try again in a moment."))
         }
         (Mergeability::Behind, _) => MergePlan::Handoff(MergeProblem::Behind),
         (Mergeability::Blocked, Checks::None) => MergePlan::Refuse(format!(
-            "PR #{n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
+            "PR {n} is blocked and has no checks yet. If checks are about to start, press m again soon. If it needs a review, get one first."
         )),
         (Mergeability::Blocked, _) => MergePlan::Handoff(MergeProblem::Blocked),
         (Mergeability::Clean, _) => MergePlan::Direct,
@@ -55,12 +55,11 @@ pub fn merge_plan(pr: &PullRequest) -> MergePlan {
 
 /// One sentence that names the problem, for the toast and the agent prompt.
 pub fn problem_sentence(pr: PrNumber, base: &str, problem: MergeProblem) -> String {
-    let n = pr.0;
     match problem {
-        MergeProblem::Conflict => format!("PR #{n} has a merge conflict with {base}."),
-        MergeProblem::ChecksFailing => format!("PR #{n} has failing checks."),
-        MergeProblem::Behind => format!("PR #{n} is behind {base}, and the repo requires an up-to-date branch."),
-        MergeProblem::Blocked => format!("PR #{n} is blocked by a branch rule, such as a required review."),
+        MergeProblem::Conflict => format!("PR {pr} has a merge conflict with {base}."),
+        MergeProblem::ChecksFailing => format!("PR {pr} has failing checks."),
+        MergeProblem::Behind => format!("PR {pr} is behind {base}, and the repo requires an up-to-date branch."),
+        MergeProblem::Blocked => format!("PR {pr} is blocked by a branch rule, such as a required review."),
     }
 }
 

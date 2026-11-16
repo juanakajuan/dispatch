@@ -97,7 +97,7 @@ pub(super) fn row_parts(
         (None, false) => None,
     };
     let pr_summary = |p: &PullRequest| {
-        let mut v = vec![span(format!("PR #{} ", p.number.0), palette::DIM), pr_state_span(p.state)];
+        let mut v = vec![span(format!("PR {} ", p.number), palette::DIM), pr_state_span(p.state)];
         if p.checks != Checks::None {
             v.extend([
                 span(" · ", palette::DIM),
@@ -128,21 +128,21 @@ pub(super) fn row_parts(
                 }
                 (None, None) => vec![span(format!("{} · {} comments", i.author, i.comment_count), palette::DIM)],
             };
-            (glyph, format!("#{} {}", n.0, one_line(&i.title)), summary, age(i.updated_at, now))
+            (glyph, format!("{n} {}", one_line(&i.title)), summary, age(i.updated_at, now))
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
                 return (Span::raw(" "), String::new(), Vec::new(), String::new());
             };
             let mut summary = vec![
-                span(format!("{} → {}  ", p.head, p.base), palette::DIM),
+                span(format!("{} → {}  ", p.head.display(), p.base.display()), palette::DIM),
                 span(format!("+{}", p.additions), palette::PASS),
                 span(" ", palette::DIM),
                 span(format!("-{}", p.deletions), palette::FAIL),
                 span(format!(" · {}", checks_word(p.checks)), palette::DIM),
             ];
             if !p.closes.is_empty() {
-                let c = p.closes.iter().map(|c| format!("#{}", c.0)).collect::<Vec<_>>().join(", ");
+                let c = p.closes.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
                 summary.push(span(format!(" · closes {c}"), palette::DIM));
             }
             let glyph = match p.state {
@@ -151,7 +151,7 @@ pub(super) fn row_parts(
                 PrState::Closed => span(icons.pr_closed, palette::DIM),
                 PrState::Open => checks_span(p.checks, icons),
             };
-            (glyph, format!("#{} {}", n.0, one_line(&p.title)), summary, age(p.updated_at, now))
+            (glyph, format!("{n} {}", one_line(&p.title)), summary, age(p.updated_at, now))
         }
         RowKey::Session(n) => {
             let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
@@ -166,7 +166,7 @@ pub(super) fn row_parts(
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
             let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
-            (glyph, format!("#{} {}", n.0, name), summary, age)
+            (glyph, format!("{n} {name}"), summary, age)
         }
     }
 }

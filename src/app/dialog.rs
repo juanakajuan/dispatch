@@ -105,6 +105,6 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     state.starting.insert(n);
     state.focus = Focus::List;
     goto_session(state, n);
-    say(state, format!("Starting #{}", n.0));
+    say(state, format!("Starting {n}"));
     vec![Cmd::Job(Job::Start(req, Launch::from_config(&state.config)))]
 }

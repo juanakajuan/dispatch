@@ -12,6 +12,18 @@ pub struct IssueNumber(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrNumber(pub u32);
 
+impl std::fmt::Display for IssueNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+impl std::fmt::Display for PrNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
 /// Something with a page on GitHub. `gh` resolves the host, so this holds
 /// the number only, never a URL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +35,8 @@ pub enum GithubRef {
 impl std::fmt::Display for GithubRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GithubRef::Issue(n) => write!(f, "issue #{}", n.0),
-            GithubRef::Pr(n) => write!(f, "PR #{}", n.0),
+            GithubRef::Issue(n) => write!(f, "issue {n}"),
+            GithubRef::Pr(n) => write!(f, "PR {n}"),
         }
     }
 }
@@ -105,11 +117,58 @@ impl std::fmt::Display for OriginRef {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchNameError {
     Empty,
     BadChar(char),
     BadSequence(&'static str),
+}
+
+/// A PR's head or base branch as GitHub names it. A name that is not a
+/// valid `BranchName` stays `Unusable`: the PR still lists and can merge,
+/// but no session can start on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrBranch {
+    Valid(BranchName),
+    Unusable { raw: String, why: BranchNameError },
+}
+
+impl PrBranch {
+    pub fn parse(raw: String) -> PrBranch {
+        match BranchName::parse(&raw) {
+            Ok(name) => PrBranch::Valid(name),
+            Err(why) => PrBranch::Unusable { raw, why },
+        }
+    }
+
+    pub fn branch(&self) -> Option<&BranchName> {
+        match self {
+            PrBranch::Valid(name) => Some(name),
+            PrBranch::Unusable { .. } => None,
+        }
+    }
+
+    /// The name as GitHub shows it.
+    pub fn display(&self) -> &str {
+        match self {
+            PrBranch::Valid(name) => name.as_str(),
+            PrBranch::Unusable { raw, .. } => raw,
+        }
+    }
+}
+
+/// A commit SHA as GitHub reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitOid(String);
+
+impl CommitOid {
+    pub fn new(sha: String) -> CommitOid {
+        CommitOid(sha)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,11 +237,11 @@ pub struct PullRequest {
     pub author: String,
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
-    pub head: String,
-    /// The head commit SHA. A direct merge pins it, so a push after the
-    /// check can not merge unchecked code.
-    pub head_oid: String,
-    pub base: String,
+    pub head: PrBranch,
+    /// A direct merge pins it, so a push after the check can not merge
+    /// unchecked code.
+    pub head_oid: CommitOid,
+    pub base: PrBranch,
     pub additions: u32,
     pub deletions: u32,
     pub checks: Checks,
@@ -271,6 +330,19 @@ mod tests {
         for bad in ["main", "upstream/main", "origin/", "origin/a..b"] {
             assert_eq!(OriginRef::parse(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn pr_branch_keeps_a_bad_name_for_display() {
+        let good = PrBranch::parse("fix/3-x".to_string());
+        assert_eq!((good.branch().map(BranchName::as_str), good.display()), (Some("fix/3-x"), "fix/3-x"));
+        let bad = PrBranch::parse("a b".to_string());
+        assert_eq!((bad.branch(), bad.display()), (None, "a b"));
+    }
+
+    #[test]
+    fn numbers_display_with_a_hash() {
+        assert_eq!((IssueNumber(7).to_string(), PrNumber(12).to_string()), ("#7".to_string(), "#12".to_string()));
     }
 
     #[test]

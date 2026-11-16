@@ -33,7 +33,7 @@ fn row<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<Option<Row
 }
 
 fn no_running_session(issue: IssueNumber) -> SessionError {
-    SessionError::Command(format!("#{} has no running session", issue.0))
+    SessionError::Command(format!("{issue} has no running session"))
 }
 
 /// Three reads (the backend's windows, worktree list, config regexp), then
@@ -71,7 +71,7 @@ pub(super) fn start<M: Mux>(
         StartPlan::Steps(steps) => {
             let warnings = run_steps(ws, mux, steps, req.issue)?;
             let session = observe(ws, mux)?.remove(&req.issue).ok_or_else(|| {
-                SessionError::Command(format!("session for #{} is not visible after start", req.issue.0))
+                SessionError::Command(format!("session for {} is not visible after start", req.issue))
             })?;
             Ok(StartOutcome { session, warnings })
         }
@@ -106,7 +106,7 @@ fn run_steps<M: Mux>(ws: &Workspace, mux: &M, steps: Vec<Step>, issue: IssueNumb
 
 pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, launch: &Launch) -> Result<(), SessionError> {
     let Some(row) = row(ws, mux, issue)? else {
-        return Err(SessionError::Command(format!("no session for #{}", issue.0)));
+        return Err(SessionError::Command(format!("no session for {issue}")));
     };
     let argv = launch.claude.argv(&start_argv::continue_args(hooks(mux, launch)));
     match &row.window {

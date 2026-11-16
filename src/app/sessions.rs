@@ -21,7 +21,7 @@ pub(super) fn start_issue(state: &mut State, n: IssueNumber) {
     if state.sessions.contains_key(&n) {
         goto_session(state, n);
     } else if state.starting.contains(&n) {
-        say(state, format!("#{} is already starting", n.0));
+        say(state, format!("{n} is already starting"));
     } else if let Some(issue) = state.issues.items.iter().find(|i| i.number == n) {
         state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
     }
@@ -42,7 +42,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
     if session.state.is_live() {
         vec![Cmd::Attach(issue)]
     } else {
-        say(state, format!("Resuming #{} with claude --continue", issue.0));
+        say(state, format!("Resuming {issue} with claude --continue"));
         vec![Cmd::Job(Job::Resume(issue, Launch::from_config(&state.config)))]
     }
 }
@@ -50,7 +50,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
 pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
     let live = current_session(state).filter(|s| s.state.is_live());
     if let Some(issue) = live.map(|s| s.issue) {
-        say(state, format!("Stopping #{}", issue.0));
+        say(state, format!("Stopping {issue}"));
         return vec![Cmd::Job(Job::Stop(issue))];
     }
     say(state, "No running session here.".to_string());
@@ -62,14 +62,14 @@ pub(super) fn started(state: &mut State, issue: IssueNumber, result: Result<Star
     match result {
         Ok(outcome) => {
             let text = match outcome.warnings.first() {
-                Some(w) => format!("Started #{} (warning: {w})", issue.0),
-                None => format!("Started #{}", issue.0),
+                Some(w) => format!("Started {issue} (warning: {w})"),
+                None => format!("Started {issue}"),
             };
             state.sessions.insert(issue, outcome.session);
             state.due.github_soon = true;
             say(state, text);
         }
-        Err(e) => say(state, format!("Start #{} failed: {e}", issue.0)),
+        Err(e) => say(state, format!("Start {issue} failed: {e}")),
     }
     observe_now(state)
 }
@@ -77,16 +77,16 @@ pub(super) fn started(state: &mut State, issue: IssueNumber, result: Result<Star
 pub(super) fn stopped(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
     state.due.github_soon = true;
     match result {
-        Ok(()) => say(state, format!("Stopped #{}", issue.0)),
-        Err(e) => say(state, format!("Stop #{} failed: {e}", issue.0)),
+        Ok(()) => say(state, format!("Stopped {issue}")),
+        Err(e) => say(state, format!("Stop {issue} failed: {e}")),
     }
     observe_now(state)
 }
 
 pub(super) fn resumed(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
     match result {
-        Ok(()) => say(state, format!("Resumed #{}. Press a to attach.", issue.0)),
-        Err(e) => say(state, format!("Resume #{} failed: {e}", issue.0)),
+        Ok(()) => say(state, format!("Resumed {issue}. Press a to attach.")),
+        Err(e) => say(state, format!("Resume {issue} failed: {e}")),
     }
     observe_now(state)
 }
@@ -100,8 +100,8 @@ pub(super) fn attached(state: &mut State, result: Result<(), String>) -> Vec<Cmd
 
 pub(super) fn sent(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
     match result {
-        Ok(()) => say(state, format!("Asked #{}'s agent to fix and merge its PR", issue.0)),
-        Err(e) => say(state, format!("Merge request to #{} failed: {e}", issue.0)),
+        Ok(()) => say(state, format!("Asked {issue}'s agent to fix and merge its PR")),
+        Err(e) => say(state, format!("Merge request to {issue} failed: {e}")),
     }
     Vec::new()
 }

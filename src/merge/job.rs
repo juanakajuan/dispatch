@@ -19,7 +19,7 @@ pub enum MergeOutcome {
     Handoff {
         problem: MergeProblem,
         method: MergeMethod,
-        pr: PullRequest,
+        pr: Box<PullRequest>,
     },
     Refused(String),
 }
@@ -46,8 +46,7 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
     if plan == MergePlan::MarkReady {
         if !ready_ok {
             return Ok(MergeOutcome::Refused(format!(
-                "PR #{} is a draft now. Press m twice again to mark it ready and merge it.",
-                pr.0
+                "PR {pr} is a draft now. Press m twice again to mark it ready and merge it."
             )));
         }
         github::mark_ready(repo_root, pr).map_err(|e| e.to_string())?;
@@ -57,7 +56,7 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
     }
     let problem = match plan {
         MergePlan::Refuse(why) => return Ok(MergeOutcome::Refused(why)),
-        MergePlan::MarkReady => return Ok(MergeOutcome::Refused(format!("PR #{} is still a draft.", pr.0))),
+        MergePlan::MarkReady => return Ok(MergeOutcome::Refused(format!("PR {pr} is still a draft."))),
         MergePlan::Direct => None,
         MergePlan::Handoff(problem) => Some(problem),
     };
@@ -69,7 +68,7 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
             let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
             Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
         }
-        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: fresh }),
+        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: Box::new(fresh) }),
     }
 }
 
@@ -254,7 +253,7 @@ mod tests {
         world(view("CONFLICTING", "DIRTY", ""), Some("rebase"), ALL_ALLOWED);
         let outcome = outcome();
         assert!(
-            matches!(&outcome, Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr }) if pr.base == "main" && pr.head == "fix/3-x"),
+            matches!(&outcome, Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr }) if pr.base.display() == "main" && pr.head.display() == "fix/3-x"),
             "{outcome:?}"
         );
         assert!(merges().is_empty());

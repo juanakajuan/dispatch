@@ -41,7 +41,7 @@ impl fmt::Display for StartConflict {
                 write!(f, "branch {} is already checked out in {}", branch.as_str(), path.display())
             }
             StartConflict::BranchBelongsTo { branch, issue } => {
-                write!(f, "branch {} already belongs to issue #{}", branch.as_str(), issue.0)
+                write!(f, "branch {} already belongs to issue {issue}", branch.as_str())
             }
             StartConflict::PathTaken(path) => {
                 write!(f, "{} exists and is not a git worktree. Move it away and start again.", path.display())

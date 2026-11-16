@@ -75,7 +75,7 @@ impl Mux for Place {
     }
 
     fn open(&self, _repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), String> {
-        open_window(self, dir, &format!("#{}", issue.0), argv).map(|_| ())
+        open_window(self, dir, &issue.to_string(), argv).map(|_| ())
     }
 
     fn relaunch(

@@ -107,7 +107,7 @@ pub(super) fn go_to_issue_of_pr(state: &mut State) {
             state.selected.issue = Some(issue);
             state.filter.clear();
         }
-        None => say(state, format!("PR #{} closes no issue.", n.0)),
+        None => say(state, format!("PR {n} closes no issue.")),
     }
 }
 
@@ -174,7 +174,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .items
                 .iter()
                 .filter(|i| {
-                    let number = format!("#{}", i.number.0);
+                    let number = i.number.to_string();
                     let mut parts = vec![number.as_str(), i.title.as_str()];
                     parts.extend(i.labels.iter().map(String::as_str));
                     matches_filter(&parts, f)
@@ -188,7 +188,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .prs
                 .items
                 .iter()
-                .filter(|p| matches_filter(&[&format!("#{}", p.number.0), &p.title, &p.head], f))
+                .filter(|p| matches_filter(&[&p.number.to_string(), &p.title, p.head.display()], f))
                 .collect();
             sort::prs(&mut rows, state.sort.prs);
             rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
@@ -200,7 +200,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .filter(|n| {
                     let title = state.issues.items.iter().find(|i| i.number == *n).map_or("", |i| i.title.as_str());
                     let branch = state.sessions.get(n).map_or("", |s| s.branch.as_str());
-                    matches_filter(&[&format!("#{}", n.0), title, branch], f)
+                    matches_filter(&[&n.to_string(), title, branch], f)
                 })
                 .collect();
             sort::sessions(&mut rows, state.sort.sessions, activity);
@@ -239,7 +239,7 @@ pub fn current_session(state: &State) -> Option<&Session> {
             pr.closes
                 .iter()
                 .find_map(|c| state.sessions.get(c))
-                .or_else(|| state.sessions.values().find(|s| s.branch.as_str() == pr.head))
+                .or_else(|| state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)))
         }
     }
 }
@@ -263,7 +263,7 @@ pub fn lead_pr(state: &State, n: IssueNumber) -> Option<&PullRequest> {
 
 /// A PR whose head branch equals the session branch.
 pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a PullRequest> {
-    state.prs.items.iter().find(|p| p.head == session.branch.as_str())
+    state.prs.items.iter().find(|p| p.head.branch() == Some(&session.branch))
 }
 
 /// Case-insensitive substring match over `#N title labels branch`.
