@@ -67,6 +67,10 @@ fn launch() -> Launch {
 /// The git repository every sim shares: `orbit` with its main worktree, and
 /// the worktree for issue 142 once `added`. A sim asks `answer` first and
 /// handles its own multiplexer commands when it returns `None`.
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a test sim of external state: each flag is one independent fact the sim flips as the code under test runs commands"
+)]
 #[derive(Default)]
 struct GitWorld {
     added: bool,

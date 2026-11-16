@@ -83,15 +83,7 @@ pub fn view_pr(repo_root: &Path, pr: PrNumber) -> Result<PullRequest, GhError> {
 /// The merge methods the repo allows, in the order `merge`, `squash`, `rebase`.
 pub fn allowed_merge_methods(repo_root: &Path) -> Result<Vec<MergeMethod>, GhError> {
     let args = ["repo", "view", "--json", "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"];
-    let wire: WireRepoMerge = gh_json(repo_root, args, "gh repo view")?;
-    Ok([
-        (wire.merge_commit_allowed, MergeMethod::Merge),
-        (wire.squash_merge_allowed, MergeMethod::Squash),
-        (wire.rebase_merge_allowed, MergeMethod::Rebase),
-    ]
-    .into_iter()
-    .filter_map(|(allowed, method)| allowed.then_some(method))
-    .collect())
+    gh_json(repo_root, args, "gh repo view").map(|wire: WireRepoMerge| wire.methods())
 }
 
 /// `gh pr merge <n> --<method> --match-head-commit <sha>`. GitHub refuses the

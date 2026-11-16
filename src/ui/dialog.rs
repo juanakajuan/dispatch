@@ -40,19 +40,33 @@ pub(super) fn run_lines(state: &State, dialog: &app::dialog::StartDialog, width:
     lines
 }
 
-pub(super) fn styled_input(source: &tui_textarea::TextArea<'static>, focused: bool) -> tui_textarea::TextArea<'static> {
+#[derive(Clone, Copy)]
+pub(super) enum Focus {
+    On,
+    Off,
+}
+
+impl Focus {
+    pub(super) fn of(dialog: &app::dialog::StartDialog, field: DialogField) -> Focus {
+        if dialog.field == field { Focus::On } else { Focus::Off }
+    }
+}
+
+pub(super) fn styled_input(source: &tui_textarea::TextArea<'static>, focus: Focus) -> tui_textarea::TextArea<'static> {
     let mut input = source.clone();
     input.set_style(palette::PLAIN);
     input.set_cursor_line_style(palette::PLAIN);
-    input.set_cursor_style(if focused { palette::CURSOR } else { palette::PLAIN });
+    input.set_cursor_style(match focus {
+        Focus::On => palette::CURSOR,
+        Focus::Off => palette::PLAIN,
+    });
     input
 }
 
-pub(super) fn field_label(text: &str, focused: bool) -> Line<'static> {
-    if focused {
-        Line::from(vec![span("› ", palette::ACCENT), span(text.to_string(), palette::ACTIVE)])
-    } else {
-        Line::from(span(format!("  {text}"), palette::DIM))
+pub(super) fn field_label(text: &str, focus: Focus) -> Line<'static> {
+    match focus {
+        Focus::On => Line::from(vec![span("› ", palette::ACCENT), span(text.to_string(), palette::ACTIVE)]),
+        Focus::Off => Line::from(span(format!("  {text}"), palette::DIM)),
     }
 }
 
@@ -96,7 +110,7 @@ pub(super) fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &ap
     ])
     .areas(inner);
     let indent = |r: Rect| Rect { x: r.x.saturating_add(2), width: r.width.saturating_sub(2), ..r };
-    let focus = |f: DialogField| d.field == f;
+    let focus = |f: DialogField| Focus::of(d, f);
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
     frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
 

@@ -23,14 +23,24 @@ impl fmt::Display for CopyError {
     }
 }
 
-/// `inside_tmux` is `$TMUX` being set. Call it on the main thread only: a
-/// write from another thread can land inside a frame's escape sequence.
-pub fn copy(text: &str, inside_tmux: bool, cwd: &Path) -> Result<(), CopyError> {
-    if inside_tmux {
-        return proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(CopyError::Tmux);
+/// Where the copy goes: through tmux when `$TMUX` is set, else straight to
+/// the terminal.
+#[derive(Clone, Copy)]
+pub enum Via<'a> {
+    Tmux { cwd: &'a Path },
+    Terminal,
+}
+
+/// Call it on the main thread only: a write from another thread can land
+/// inside a frame's escape sequence.
+pub fn copy(text: &str, via: Via) -> Result<(), CopyError> {
+    match via {
+        Via::Tmux { cwd } => proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(CopyError::Tmux),
+        Via::Terminal => {
+            let mut out = std::io::stdout().lock();
+            out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(CopyError::Terminal)
+        }
     }
-    let mut out = std::io::stdout().lock();
-    out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(CopyError::Terminal)
 }
 
 fn osc52(text: &str) -> String {
@@ -75,7 +85,7 @@ mod tests {
     #[test]
     fn inside_tmux_copies_with_set_buffer_w() {
         proc::fake::install(|_| Ok(String::new()));
-        copy("https://github.com/o/r/issues/2", true, Path::new("/r")).expect("copies");
+        copy("https://github.com/o/r/issues/2", Via::Tmux { cwd: Path::new("/r") }).expect("copies");
         assert_eq!(proc::fake::calls(), ["tmux set-buffer -w https://github.com/o/r/issues/2"]);
     }
 }

@@ -227,6 +227,10 @@ pub fn path(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf
     Some(base.join("dispatch").join("config.json"))
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "boundary: the config file location comes from XDG_CONFIG_HOME and HOME; `path` is the pure part"
+)]
 pub(super) fn env_path() -> Option<PathBuf> {
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
     let home = std::env::var("HOME").ok();

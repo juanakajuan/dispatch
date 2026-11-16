@@ -138,6 +138,10 @@ pub(super) struct MuxEnv {
 }
 
 impl MuxEnv {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boundary: the multiplexer variables are read once here; `detect_mux` takes them as a `MuxEnv`"
+    )]
     pub(super) fn from_process() -> MuxEnv {
         let var = |name| std::env::var(name).ok();
         MuxEnv {

@@ -8,6 +8,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "a test sim of external state: each flag is one independent fact the sim flips as the code under test runs commands"
+)]
 #[derive(Default)]
 struct HerdrSim {
     git: GitWorld,

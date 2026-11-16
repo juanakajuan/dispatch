@@ -99,10 +99,16 @@ mod tests {
     const ALL_ALLOWED: &str = r#"{"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#;
 
     fn view(mergeable: &str, status: &str, checks: &str) -> String {
-        view_in("OPEN", false, mergeable, status, checks)
+        view_in(PrState::Open, mergeable, status, checks)
     }
 
-    fn view_in(state: &str, draft: bool, mergeable: &str, status: &str, checks: &str) -> String {
+    fn view_in(state: PrState, mergeable: &str, status: &str, checks: &str) -> String {
+        let (state, draft) = match state {
+            PrState::Open => ("OPEN", false),
+            PrState::Draft => ("OPEN", true),
+            PrState::Merged => ("MERGED", false),
+            PrState::Closed => ("CLOSED", false),
+        };
         format!(
             r#"{{"number":10,"title":"t","state":"{state}","isDraft":{draft},"author":null,
             "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
@@ -115,7 +121,7 @@ mod tests {
     /// it, `git config` with `setting`, `gh repo view` with `allowed`, and the
     /// merge with success.
     fn world(pr: String, setting: Option<&'static str>, allowed: &'static str) {
-        world_after(pr, view_in("MERGED", false, "UNKNOWN", "UNKNOWN", ""), setting, allowed, Ok(String::new()));
+        world_after(pr, view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", ""), setting, allowed, Ok(String::new()));
     }
 
     fn world_after(
@@ -157,11 +163,11 @@ mod tests {
         fake::install(move |call| {
             if call.starts_with("gh pr view") {
                 Ok(if merged {
-                    view_in("MERGED", false, "UNKNOWN", "UNKNOWN", "")
+                    view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", "")
                 } else if is_ready {
                     after.clone()
                 } else {
-                    view_in("OPEN", true, "MERGEABLE", "CLEAN", "")
+                    view_in(PrState::Draft, "MERGEABLE", "CLEAN", "")
                 })
             } else if call.starts_with("gh pr ready") {
                 is_ready = ready.is_ok();
@@ -212,7 +218,7 @@ mod tests {
 
     #[test]
     fn a_draft_that_is_still_a_draft_after_ready_is_refused() {
-        draft_world(view_in("OPEN", true, "MERGEABLE", "CLEAN", ""), Ok(""));
+        draft_world(view_in(PrState::Draft, "MERGEABLE", "CLEAN", ""), Ok(""));
         let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
         assert_eq!(run.draft, DraftStep::MarkedReady);
         assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(PrNumber(10)))));
@@ -311,7 +317,7 @@ mod tests {
 
     #[test]
     fn a_failed_gh_merge_is_an_error() {
-        let after = view_in("MERGED", false, "UNKNOWN", "UNKNOWN", "");
+        let after = view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", "");
         world_after(view("MERGEABLE", "CLEAN", ""), after, None, ALL_ALLOWED, Err("Head branch was modified"));
         let err = outcome().expect_err("fails");
         assert_eq!(err, MergeError::Gh(GhError::Run(fake::fail("gh", 1, "Head branch was modified"))));

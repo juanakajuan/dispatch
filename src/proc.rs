@@ -76,6 +76,10 @@ where
     if let Some(result) = fake::intercept(program, &args, cwd) {
         return result;
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one place `run` spawns a child; everything else calls `proc::run`"
+    )]
     let output = Command::new(program)
         .args(&args)
         .current_dir(cwd)
@@ -104,6 +108,10 @@ where
     if let Some(result) = fake::intercept_spawn(program, &args) {
         return result.map(|_| ());
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one place `spawn_detached` spawns a child; everything else calls `proc::spawn_detached`"
+    )]
     let mut command = Command::new(program);
     command.args(&args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]

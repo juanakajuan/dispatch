@@ -10,6 +10,10 @@ fn a_missing_multiplexer_is_named_in_the_setup_error() {
     assert!(herdr::Place::detect(Some("1"), None, "orbit").is_err());
 }
 
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "a test fixture: each flag says whether one multiplexer variable is set, and the call sites read as a truth table"
+)]
 fn env(herdr: bool, tmux: bool) -> MuxEnv {
     MuxEnv {
         herdr_env: herdr.then(|| "1".to_string()),

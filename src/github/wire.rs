@@ -3,7 +3,8 @@
 
 use super::GhError;
 use crate::domain::{
-    Checks, CommitOid, GithubRef, Issue, IssueNumber, Mergeability, PrBranch, PrNumber, PrState, PullRequest, Unusable,
+    Checks, CommitOid, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
+    PullRequest, Unusable,
 };
 use serde::de::DeserializeOwned;
 
@@ -51,8 +52,8 @@ pub(super) fn prs_from_wire(wire: Vec<WirePr>) -> Result<Vec<PullRequest>, GhErr
 pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
     let number = PrNumber(w.number);
     let state = match (w.state.as_str(), w.is_draft) {
-        ("OPEN", true) => PrState::Draft,
-        ("OPEN", false) => PrState::Open,
+        ("OPEN", Readiness::Draft) => PrState::Draft,
+        ("OPEN", Readiness::Ready) => PrState::Open,
         ("MERGED", _) => PrState::Merged,
         ("CLOSED", _) => PrState::Closed,
         (_, _) => return Err(GhError::UnknownPrState { pr: number, state: w.state }),
@@ -65,10 +66,9 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         title: w.title,
         state,
         author: login(w.author),
-        head: if w.is_cross_repository {
-            PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork }
-        } else {
-            PrBranch::parse(w.head_ref_name)
+        head: match w.is_cross_repository {
+            HeadRepo::Fork => PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork },
+            HeadRepo::Same => PrBranch::parse(w.head_ref_name),
         },
         head_oid: CommitOid::new(w.head_ref_oid),
         base: PrBranch::parse(w.base_ref_name),
@@ -159,13 +159,13 @@ pub(super) struct WirePr {
     number: u32,
     title: String,
     state: String,
-    is_draft: bool,
+    is_draft: Readiness,
     #[serde(default)]
     author: Option<WireAuthor>,
     created_at: String,
     updated_at: String,
     head_ref_name: String,
-    is_cross_repository: bool,
+    is_cross_repository: HeadRepo,
     head_ref_oid: String,
     base_ref_name: String,
     additions: u32,
@@ -176,16 +176,62 @@ pub(super) struct WirePr {
     closing_issues_references: Vec<WireIssueRef>,
 }
 
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(from = "bool")]
+enum Readiness {
+    Draft,
+    Ready,
+}
+
+impl From<bool> for Readiness {
+    fn from(is_draft: bool) -> Self {
+        if is_draft { Readiness::Draft } else { Readiness::Ready }
+    }
+}
+
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(from = "bool")]
+enum HeadRepo {
+    Fork,
+    Same,
+}
+
+impl From<bool> for HeadRepo {
+    fn from(is_cross_repository: bool) -> Self {
+        if is_cross_repository { HeadRepo::Fork } else { HeadRepo::Same }
+    }
+}
+
 #[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(
-    clippy::struct_excessive_bools,
-    reason = "the shape of `gh repo view --json`; `allowed_merge_methods` turns it into `MergeMethod` values"
-)]
 pub(super) struct WireRepoMerge {
-    pub(super) merge_commit_allowed: bool,
-    pub(super) squash_merge_allowed: bool,
-    pub(super) rebase_merge_allowed: bool,
+    #[serde(rename = "mergeCommitAllowed")]
+    merge: Allowed,
+    #[serde(rename = "squashMergeAllowed")]
+    squash: Allowed,
+    #[serde(rename = "rebaseMergeAllowed")]
+    rebase: Allowed,
+}
+
+impl WireRepoMerge {
+    pub(super) fn methods(&self) -> Vec<MergeMethod> {
+        [(self.merge, MergeMethod::Merge), (self.squash, MergeMethod::Squash), (self.rebase, MergeMethod::Rebase)]
+            .into_iter()
+            .filter_map(|(allowed, method)| (allowed == Allowed::Yes).then_some(method))
+            .collect()
+    }
+}
+
+#[derive(serde::Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(from = "bool")]
+enum Allowed {
+    Yes,
+    No,
+}
+
+impl From<bool> for Allowed {
+    fn from(allowed: bool) -> Self {
+        if allowed { Allowed::Yes } else { Allowed::No }
+    }
 }
 
 #[derive(serde::Deserialize)]

@@ -96,6 +96,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
     let (tx, rx) = mpsc::channel::<Msg>();
     let jobs = jobs::Jobs::new(ws, tx);
     let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "boundary: over SSH, a URL opens through the local clipboard, not a remote browser"
+    )]
     let over_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
     let open_with = if over_ssh { OpenWith::Clipboard } else { OpenWith::Browser };
     let context = Context { repo_name, open_with, start_preview: ws.start_preview() };
@@ -107,8 +111,16 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
                 Cmd::Quit => return Ok(()),
                 Cmd::Attach(issue) => pending.push(Msg::Attached(attach(terminal, ws, issue))),
                 Cmd::Copy { target, text } => {
-                    let inside_tmux = std::env::var_os("TMUX").is_some();
-                    let result = clipboard::copy(&text, inside_tmux, ws.repo_root()).map(|()| text);
+                    #[expect(
+                        clippy::disallowed_methods,
+                        reason = "boundary: inside tmux, the copy goes through tmux so it reaches the client terminal"
+                    )]
+                    let via = if std::env::var_os("TMUX").is_some() {
+                        clipboard::Via::Tmux { cwd: ws.repo_root() }
+                    } else {
+                        clipboard::Via::Terminal
+                    };
+                    let result = clipboard::copy(&text, via).map(|()| text);
                     pending.push(Msg::Copied { target, result });
                 }
                 Cmd::Job(job) => jobs.run(job),
@@ -144,6 +156,10 @@ fn attach(
             let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
             ratatui::restore();
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "the attach hands the terminal to the child with inherited stdio, which `proc::run` cannot do"
+            )]
             let status = std::process::Command::new(program).args(args).status();
             *terminal = ratatui::init();
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
