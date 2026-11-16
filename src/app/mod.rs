@@ -13,7 +13,7 @@ use std::time::Instant;
 use dialog::{StartDialog, dialog_key};
 use feed::{Due, Feed, Poll, observed, tick};
 use keys::{act, action_for};
-use list::{Selected, Sorts, Tab, filter_key};
+use list::{Tab, Tabs, filter_key};
 use menus::{SettingsMenu, keybinds_key, settings_key};
 use merge::{Armed, merged};
 use mouse::{HitMap, HitTarget, on_mouse};
@@ -83,8 +83,7 @@ pub struct State {
     /// Issues with a `WriteJob::Start` in flight. The only session-ish state the
     /// app owns; it covers the gap before the next observation shows the window.
     pub starting: BTreeSet<IssueNumber>,
-    pub selected: Selected,
-    pub sort: Sorts,
+    pub tabs: Tabs,
     pub filter: String,
     pub focus: Focus,
     pub toast: Option<Toast>,
@@ -106,8 +105,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         sessions: Sessions::new(),
         observe: Poll::default(),
         starting: BTreeSet::new(),
-        selected: Selected::default(),
-        sort: Sorts::default(),
+        tabs: Tabs::default(),
         filter: String::new(),
         focus: Focus::List,
         toast: None,

@@ -31,10 +31,10 @@ fn sortable() -> State {
 #[test]
 fn s_cycles_every_issue_mode_in_order_and_wraps() {
     let mut state = sortable();
-    let mut seen = vec![(state.sort.label(Tab::Issues), numbers(&state))];
+    let mut seen = vec![(state.tabs.sort_label(Tab::Issues), numbers(&state))];
     for _ in 0..IssueSort::ALL.len() {
         assert!(press(&mut state, shift_s()).is_empty());
-        seen.push((state.sort.label(Tab::Issues), numbers(&state)));
+        seen.push((state.tabs.sort_label(Tab::Issues), numbers(&state)));
     }
     assert_eq!(
         seen,
@@ -56,7 +56,7 @@ fn rows_group_by_state_before_the_sort_orders_them() {
     state.sessions.insert(IssueNumber(1), session(1, SessionState::NeedsYou));
     state.prs.items[0].closes = vec![IssueNumber(3)];
     for _ in 0..=IssueSort::ALL.len() {
-        assert_eq!(numbers(&state), [1, 3, 2], "needs you, in review, open: {}", state.sort.label(Tab::Issues));
+        assert_eq!(numbers(&state), [1, 3, 2], "needs you, in review, open: {}", state.tabs.sort_label(Tab::Issues));
         press(&mut state, shift_s());
     }
 }
@@ -66,15 +66,15 @@ fn each_tab_keeps_its_own_mode() {
     let mut state = sortable();
     press(&mut state, shift_s());
     press(&mut state, key('2'));
-    assert_eq!(state.sort.label(Tab::Prs), "attention");
+    assert_eq!(state.tabs.sort_label(Tab::Prs), "attention");
     assert_eq!(numbers(&state), [10, 11]);
     for _ in 0..4 {
         press(&mut state, shift_s());
     }
-    assert_eq!(state.sort.label(Tab::Prs), "number");
+    assert_eq!(state.tabs.sort_label(Tab::Prs), "number");
     assert_eq!(numbers(&state), [10, 11]);
     press(&mut state, shift_s());
-    assert_eq!(state.sort.label(Tab::Prs), "attention", "PRs have no comment mode");
+    assert_eq!(state.tabs.sort_label(Tab::Prs), "attention", "PRs have no comment mode");
 
     press(&mut state, key('3'));
     state.sessions.insert(IssueNumber(1), session(1, SessionState::NeedsYou));
@@ -82,13 +82,13 @@ fn each_tab_keeps_its_own_mode() {
     state.sessions.insert(IssueNumber(10), session(10, SessionState::Exited));
     assert_eq!(numbers(&state), [1, 9, 10]);
     press(&mut state, shift_s());
-    assert_eq!(state.sort.label(Tab::Sessions), "number");
+    assert_eq!(state.tabs.sort_label(Tab::Sessions), "number");
     assert_eq!(numbers(&state), [1, 9, 10]);
     state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
     assert_eq!(numbers(&state), [9, 1, 10], "the group comes first, then the number");
 
     press(&mut state, key('1'));
-    assert_eq!(state.sort.label(Tab::Issues), "newest");
+    assert_eq!(state.tabs.sort_label(Tab::Issues), "newest");
 }
 
 #[test]

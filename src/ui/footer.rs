@@ -69,7 +69,7 @@ fn fit_hints(mut hints: Vec<(&'static str, &'static str)>, room: usize) -> Vec<(
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
     let width = usize::from(area.width);
     let mut sort =
-        vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.sort.label(state.tab)), palette::DIM)];
+        vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.tabs.sort_label(state.tab)), palette::DIM)];
     let hints = app::keys::footer_hints(state);
     let mut shown = fit_hints(hints.clone(), width.saturating_sub(spans_width(&sort) + 1));
     if hints_width(&shown) + spans_width(&sort) + 1 > width {

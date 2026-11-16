@@ -1,8 +1,7 @@
 use super::palette;
 use super::text::{age, cells, fit, one_line, span};
 use crate::app::feed::LastFetch;
-use crate::app::list::RowKey;
-use crate::app::list::Tab;
+use crate::app::list::{Group, IssueGroup, PrGroup, RowKey, SessionGroup, Tab};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
@@ -10,6 +9,7 @@ use crate::glyphs::Icons;
 use crate::session::SessionState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
@@ -197,13 +197,9 @@ pub(super) fn draw_rows(
             if last_group.is_some() {
                 lines.push((None, Line::raw("")));
             }
-            let style = match group.rank {
-                0 if state.tab != Tab::Prs => palette::NEEDS_YOU,
-                0 | 1 => palette::HEADING,
-                _ => palette::DIM,
-            };
+            let style = group_style(group);
             let n = rows.iter().filter(|k| app::list::group_of(state, **k) == group).count();
-            lines.push((None, Line::from(vec![span(group.name, style), span(format!(" {n}"), palette::DIM)])));
+            lines.push((None, Line::from(vec![span(group.name(), style), span(format!(" {n}"), palette::DIM)])));
             last_group = Some(group);
         }
         let on = selected == Some(*key);
@@ -239,5 +235,17 @@ pub(super) fn draw_rows(
         if let Some(key) = key {
             hits.targets.push((rect, HitTarget::Row(key)));
         }
+    }
+}
+
+fn group_style(group: Group) -> Style {
+    match group {
+        Group::Issue(IssueGroup::NeedsYou) | Group::Session(SessionGroup::NeedsYou) => palette::NEEDS_YOU,
+        Group::Issue(IssueGroup::Working)
+        | Group::Session(SessionGroup::Working)
+        | Group::Pr(PrGroup::ReadyForReview | PrGroup::Draft) => palette::HEADING,
+        Group::Issue(IssueGroup::InReview | IssueGroup::Merged | IssueGroup::Open)
+        | Group::Pr(PrGroup::Merged | PrGroup::Closed)
+        | Group::Session(SessionGroup::Exited) => palette::DIM,
     }
 }

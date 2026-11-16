@@ -314,7 +314,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
             if let Some(key) = selected_row(state) {
                 select(state, key);
             }
-            state.sort.cycle(state.tab);
+            state.tabs.cycle_sort(state.tab);
         }
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },

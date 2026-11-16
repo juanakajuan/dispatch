@@ -3,7 +3,7 @@
 use super::error::{SessionError, StartWarning};
 use super::join::{Joined, Row, join, sessions};
 use super::mux::{Mux, Observed, hooks};
-use super::plan::{Layout, StartObservation, StartPlan, Step, plan_start};
+use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use super::request::{Launch, StartRequest};
 use super::worktree::{WORKTREES_EXCLUDE, worktree_dir_for};
 use super::{AttachPlan, Sessions, StartOutcome, Workspace, git, start_argv};
@@ -45,8 +45,16 @@ fn observe_for_start<M: Mux>(ws: &Workspace, mux: &M, req: &StartRequest) -> Res
         sessions: sessions(&world.join()),
         worktrees: world.worktrees,
         markers: world.markers,
-        target_dir_exists: worktree_dir_for(&ws.repo_root, req.issue).exists(),
-        branch_exists: git::branch_exists(&ws.repo_root, &req.branch).map_err(SessionError::Git)?,
+        target_dir: if worktree_dir_for(&ws.repo_root, req.issue).exists() {
+            TargetDir::Taken
+        } else {
+            TargetDir::Free
+        },
+        branch: if git::branch_exists(&ws.repo_root, &req.branch).map_err(SessionError::Git)? {
+            LocalBranch::Exists
+        } else {
+            LocalBranch::Missing
+        },
     })
 }
 

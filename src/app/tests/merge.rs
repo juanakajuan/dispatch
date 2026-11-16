@@ -113,7 +113,7 @@ fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
     );
     assert_eq!(req.prompt, plan::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
     assert!(state.starting.contains(&IssueNumber(3)));
-    assert_eq!((state.tab, state.selected.session), (Tab::Sessions, Some(IssueNumber(3))));
+    assert_eq!((state.tab, state.tabs.sessions.selected), (Tab::Sessions, Some(IssueNumber(3))));
     assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
 }
 
@@ -158,7 +158,7 @@ fn a_problem_pr_with_no_issue_to_start_on_only_explains() {
     let (mut state, _) = app();
     state.prs.items[1].mergeability = Mergeability::Conflict;
     press(&mut state, key('2'));
-    state.selected.pr = Some(PrNumber(11));
+    state.tabs.prs.selected = Some(PrNumber(11));
     assert!(press(&mut state, key('m')).is_empty());
     assert_eq!(
         toast(&state),

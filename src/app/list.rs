@@ -15,33 +15,77 @@ pub enum Tab {
     Sessions,
 }
 
-/// The section a row sits in. Lower `rank` first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Group {
-    pub rank: u8,
-    pub name: &'static str,
+/// The section a row sits in. Each tab has its own sections, and the
+/// declaration order of each enum is the order on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Group {
+    Issue(IssueGroup),
+    Pr(PrGroup),
+    Session(SessionGroup),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum IssueGroup {
+    NeedsYou,
+    Working,
+    InReview,
+    Merged,
+    Open,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PrGroup {
+    ReadyForReview,
+    Draft,
+    Merged,
+    Closed,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SessionGroup {
+    NeedsYou,
+    Working,
+    Exited,
+}
+
+impl Group {
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Issue(IssueGroup::NeedsYou) | Group::Session(SessionGroup::NeedsYou) => "Needs you",
+            Group::Issue(IssueGroup::Working) | Group::Session(SessionGroup::Working) => "Working",
+            Group::Issue(IssueGroup::InReview) => "In review",
+            Group::Issue(IssueGroup::Merged) | Group::Pr(PrGroup::Merged) => "Merged",
+            Group::Issue(IssueGroup::Open) => "Open",
+            Group::Pr(PrGroup::ReadyForReview) => "Ready for review",
+            Group::Pr(PrGroup::Draft) => "Draft",
+            Group::Pr(PrGroup::Closed) => "Closed",
+            Group::Session(SessionGroup::Exited) => "Exited",
+        }
+    }
 }
 
 pub fn group_of(state: &State, key: RowKey) -> Group {
-    let g = |rank, name| Group { rank, name };
-    let by_session = |n: IssueNumber| match activity(state, n) {
-        Some(SessionState::NeedsYou) => Some(g(0, "Needs you")),
-        Some(SessionState::Running) => Some(g(1, "Working")),
-        Some(SessionState::Exited) | None => None,
-    };
     match key {
-        RowKey::Session(n) => by_session(n).unwrap_or(g(2, "Exited")),
-        RowKey::Issue(n) => by_session(n).unwrap_or_else(|| match lead_pr(state, n).map(|p| p.state) {
-            Some(PrState::Open | PrState::Draft) => g(2, "In review"),
-            Some(PrState::Merged) => g(3, "Merged"),
-            _ => g(4, "Open"),
+        RowKey::Session(n) => Group::Session(match activity(state, n) {
+            Some(SessionState::NeedsYou) => SessionGroup::NeedsYou,
+            Some(SessionState::Running) => SessionGroup::Working,
+            Some(SessionState::Exited) | None => SessionGroup::Exited,
         }),
-        RowKey::Pr(n) => match state.prs.items.iter().find(|p| p.number == n).map(|p| p.state) {
-            Some(PrState::Open) => g(0, "Ready for review"),
-            Some(PrState::Draft) => g(1, "Draft"),
-            Some(PrState::Merged) => g(2, "Merged"),
-            _ => g(3, "Closed"),
-        },
+        RowKey::Issue(n) => Group::Issue(match activity(state, n) {
+            Some(SessionState::NeedsYou) => IssueGroup::NeedsYou,
+            Some(SessionState::Running) => IssueGroup::Working,
+            Some(SessionState::Exited) | None => match lead_pr(state, n).map(|p| p.state) {
+                Some(PrState::Open | PrState::Draft) => IssueGroup::InReview,
+                Some(PrState::Merged) => IssueGroup::Merged,
+                Some(PrState::Closed) | None => IssueGroup::Open,
+            },
+        }),
+        RowKey::Pr(n) => Group::Pr(match state.prs.items.iter().find(|p| p.number == n).map(|p| p.state) {
+            Some(PrState::Open) => PrGroup::ReadyForReview,
+            Some(PrState::Draft) => PrGroup::Draft,
+            Some(PrState::Merged) => PrGroup::Merged,
+            Some(PrState::Closed) | None => PrGroup::Closed,
+        }),
     }
 }
 
@@ -65,37 +109,59 @@ impl From<RowKey> for GithubRef {
     }
 }
 
-/// Each tab's sort mode. `S` cycles the shown tab's mode only.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Sorts {
-    pub issues: IssueSort,
-    pub prs: PrSort,
-    pub sessions: SessionSort,
-}
-
-impl Sorts {
-    pub(super) fn cycle(&mut self, tab: Tab) {
-        match tab {
-            Tab::Issues => self.issues = self.issues.next(),
-            Tab::Prs => self.prs = self.prs.next(),
-            Tab::Sessions => self.sessions = self.sessions.next(),
-        }
-    }
-
-    pub fn label(self, tab: Tab) -> &'static str {
-        match tab {
-            Tab::Issues => self.issues.label(),
-            Tab::Prs => self.prs.label(),
-            Tab::Sessions => self.sessions.label(),
-        }
-    }
-}
-
+/// What each tab remembers while another tab is shown.
 #[derive(Default)]
-pub struct Selected {
-    pub issue: Option<IssueNumber>,
-    pub pr: Option<PrNumber>,
-    pub session: Option<IssueNumber>,
+pub struct Tabs {
+    pub issues: TabState<IssueNumber, IssueSort>,
+    pub prs: TabState<PrNumber, PrSort>,
+    pub sessions: TabState<IssueNumber, SessionSort>,
+}
+
+/// A tab's selected row and sort mode. Selection stores the key, see `RowKey`.
+pub struct TabState<K, S> {
+    pub selected: Option<K>,
+    pub sort: S,
+}
+
+impl<K, S: Default> Default for TabState<K, S> {
+    fn default() -> Self {
+        TabState { selected: None, sort: S::default() }
+    }
+}
+
+impl Tabs {
+    /// `S` cycles the shown tab's mode only.
+    pub(super) fn cycle_sort(&mut self, tab: Tab) {
+        match tab {
+            Tab::Issues => self.issues.sort = self.issues.sort.next(),
+            Tab::Prs => self.prs.sort = self.prs.sort.next(),
+            Tab::Sessions => self.sessions.sort = self.sessions.sort.next(),
+        }
+    }
+
+    pub fn sort_label(&self, tab: Tab) -> &'static str {
+        match tab {
+            Tab::Issues => self.issues.sort.label(),
+            Tab::Prs => self.prs.sort.label(),
+            Tab::Sessions => self.sessions.sort.label(),
+        }
+    }
+
+    pub(super) fn select(&mut self, key: RowKey) {
+        match key {
+            RowKey::Issue(n) => self.issues.selected = Some(n),
+            RowKey::Pr(n) => self.prs.selected = Some(n),
+            RowKey::Session(n) => self.sessions.selected = Some(n),
+        }
+    }
+
+    fn selected(&self, tab: Tab) -> Option<RowKey> {
+        match tab {
+            Tab::Issues => self.issues.selected.map(RowKey::Issue),
+            Tab::Prs => self.prs.selected.map(RowKey::Pr),
+            Tab::Sessions => self.sessions.selected.map(RowKey::Session),
+        }
+    }
 }
 
 pub(super) fn go_to_issue_of_pr(state: &mut State) {
@@ -104,7 +170,7 @@ pub(super) fn go_to_issue_of_pr(state: &mut State) {
     match closes {
         Some(issue) => {
             state.tab = Tab::Issues;
-            state.selected.issue = Some(issue);
+            state.tabs.issues.selected = Some(issue);
             state.filter.clear();
         }
         None => toast::info(state, format!("PR {n} closes no issue.")),
@@ -131,11 +197,7 @@ pub(super) fn move_selection(state: &mut State, step: Move) {
 }
 
 pub(super) fn select(state: &mut State, key: RowKey) {
-    match key {
-        RowKey::Issue(n) => state.selected.issue = Some(n),
-        RowKey::Pr(n) => state.selected.pr = Some(n),
-        RowKey::Session(n) => state.selected.session = Some(n),
-    }
+    state.tabs.select(key);
 }
 
 pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
@@ -160,7 +222,7 @@ pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 /// through it.
 pub fn visible_rows(state: &State) -> Vec<RowKey> {
     let mut rows = sorted_rows(state);
-    rows.sort_by_key(|k| group_of(state, *k).rank);
+    rows.sort_by_key(|k| group_of(state, *k));
     rows
 }
 
@@ -180,7 +242,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                     matches_filter(&parts, f)
                 })
                 .collect();
-            sort::issues(&mut rows, state.sort.issues, activity);
+            sort::issues(&mut rows, state.tabs.issues.sort, activity);
             rows.into_iter().map(|i| RowKey::Issue(i.number)).collect()
         }
         Tab::Prs => {
@@ -190,7 +252,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .iter()
                 .filter(|p| matches_filter(&[&p.number.to_string(), &p.title, p.head.display()], f))
                 .collect();
-            sort::prs(&mut rows, state.sort.prs);
+            sort::prs(&mut rows, state.tabs.prs.sort);
             rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
         }
         Tab::Sessions => {
@@ -203,7 +265,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                     matches_filter(&[&n.to_string(), title, branch], f)
                 })
                 .collect();
-            sort::sessions(&mut rows, state.sort.sessions, activity);
+            sort::sessions(&mut rows, state.tabs.sessions.sort, activity);
             rows.into_iter().map(RowKey::Session).collect()
         }
     }
@@ -221,11 +283,7 @@ pub(super) fn activity(state: &State, n: IssueNumber) -> Option<SessionState> {
 /// The stored key if it is visible, else the first visible row.
 pub fn selected_row(state: &State) -> Option<RowKey> {
     let rows = visible_rows(state);
-    let stored = match state.tab {
-        Tab::Issues => state.selected.issue.map(RowKey::Issue),
-        Tab::Prs => state.selected.pr.map(RowKey::Pr),
-        Tab::Sessions => state.selected.session.map(RowKey::Session),
-    };
+    let stored = state.tabs.selected(state.tab);
     stored.filter(|k| rows.contains(k)).or_else(|| rows.first().copied())
 }
 

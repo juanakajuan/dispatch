@@ -4,7 +4,7 @@ use crate::domain::{IssueNumber, Mode, OriginRef, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
 use crate::session::mux::{Liveness, Observed};
-use crate::session::plan::{Layout, StartObservation, StartPlan, Step, plan_start};
+use crate::session::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use crate::session::request::StartFrom;
 use crate::session::{git, tmux};
 use std::path::PathBuf;
@@ -25,8 +25,8 @@ struct World {
     worktrees: Vec<git::Worktree>,
     markers: git::Markers,
     windows: Vec<Observed<tmux::WindowId>>,
-    target_dir_exists: bool,
-    branch_exists: bool,
+    target_dir: TargetDir,
+    branch: LocalBranch,
 }
 
 impl World {
@@ -35,8 +35,8 @@ impl World {
             worktrees: vec![wt("/a/orbit", Some("main"))],
             markers: git::Markers::new(),
             windows: Vec::new(),
-            target_dir_exists: false,
-            branch_exists: false,
+            target_dir: TargetDir::Free,
+            branch: LocalBranch::Missing,
         }
     }
 
@@ -45,8 +45,8 @@ impl World {
             sessions: sessions(&join(&self.worktrees, &self.markers, &self.windows)),
             worktrees: self.worktrees.clone(),
             markers: self.markers.clone(),
-            target_dir_exists: self.target_dir_exists,
-            branch_exists: self.branch_exists,
+            target_dir: self.target_dir,
+            branch: self.branch,
         }
     }
 
@@ -62,8 +62,8 @@ impl World {
             Step::AddWorktree { dir, branch, .. } => {
                 self.worktrees
                     .push(git::Worktree { path: WorktreePath::planned(dir.clone()), branch: Some(branch.clone()) });
-                self.branch_exists = true;
-                self.target_dir_exists = true;
+                self.branch = LocalBranch::Exists;
+                self.target_dir = TargetDir::Taken;
             }
             Step::Mark { branch, issue } => {
                 self.markers.insert(branch.clone(), *issue);
@@ -139,7 +139,7 @@ fn plan_session_in_an_old_sibling_worktree_reopens_there() {
 fn plan_marked_branch_without_worktree_uses_that_branch() {
     let mut w = World::empty();
     w.markers = markers(&[("fix/142-earlier-name", 142)]);
-    w.branch_exists = false;
+    w.branch = LocalBranch::Missing;
     assert_eq!(steps(w.plan()), [add("fix/142-earlier-name", None), mark("fix/142-earlier-name"), open_step()]);
 }
 
@@ -147,14 +147,14 @@ fn plan_marked_branch_without_worktree_uses_that_branch() {
 fn plan_worktree_at_target_without_marker_marks_its_branch() {
     let mut w = World::empty();
     w.worktrees.push(wt(TARGET, Some("fix/142-x")));
-    w.target_dir_exists = true;
+    w.target_dir = TargetDir::Taken;
     assert_eq!(steps(w.plan()), [mark("fix/142-x"), open_step()]);
 }
 
 #[test]
 fn plan_target_dir_that_is_no_worktree_conflicts() {
     let mut w = World::empty();
-    w.target_dir_exists = true;
+    w.target_dir = TargetDir::Taken;
     assert_eq!(w.plan(), Err(StartConflict::PathTaken(PathBuf::from(TARGET))));
 }
 
@@ -162,7 +162,7 @@ fn plan_target_dir_that_is_no_worktree_conflicts() {
 fn plan_branch_marked_for_another_issue_conflicts() {
     let mut w = World::empty();
     w.markers = markers(&[("fix/142-x", 7)]);
-    w.branch_exists = true;
+    w.branch = LocalBranch::Exists;
     assert_eq!(w.plan(), Err(StartConflict::BranchBelongsTo { branch: br("fix/142-x"), issue: IssueNumber(7) }));
 }
 
@@ -170,7 +170,7 @@ fn plan_branch_marked_for_another_issue_conflicts() {
 fn plan_branch_checked_out_elsewhere_conflicts() {
     let mut w = World::empty();
     w.worktrees.push(wt("/elsewhere", Some("fix/142-x")));
-    w.branch_exists = true;
+    w.branch = LocalBranch::Exists;
     assert_eq!(
         w.plan(),
         Err(StartConflict::BranchCheckedOut { branch: br("fix/142-x"), path: PathBuf::from("/elsewhere") })
@@ -180,7 +180,7 @@ fn plan_branch_checked_out_elsewhere_conflicts() {
 #[test]
 fn plan_existing_free_branch_skips_the_fetch_and_the_create() {
     let mut w = World::empty();
-    w.branch_exists = true;
+    w.branch = LocalBranch::Exists;
     assert_eq!(steps(w.plan()), [add("fix/142-x", None), mark("fix/142-x"), open_step()]);
 }
 
@@ -202,7 +202,7 @@ fn plan_for_a_pr_branch_starts_from_its_origin_branch() {
         [fetch("origin/fix/142-x"), add("fix/142-x", Some("origin/fix/142-x")), mark("fix/142-x"), open_step()]
     );
     let mut w = World::empty();
-    w.branch_exists = true;
+    w.branch = LocalBranch::Exists;
     let got = steps(plan_start(&w.obs(), &r, &layout()));
     assert_eq!(got, [add("fix/142-x", None), mark("fix/142-x"), open_step()], "an existing local branch is used as is");
 }
@@ -227,14 +227,14 @@ fn plan_uses_config_claude_command_hooks_and_plan_mode() {
 fn plan_converges_after_a_crash_at_any_step() {
     let starts: Vec<World> = {
         let mut fresh = World::empty();
-        fresh.branch_exists = false;
+        fresh.branch = LocalBranch::Missing;
         let mut existing = World::empty();
-        existing.branch_exists = true;
+        existing.branch = LocalBranch::Exists;
         let mut marked = World::empty();
         marked.markers = markers(&[("fix/142-old", 142)]);
         let mut half = World::empty();
         half.worktrees.push(wt(TARGET, Some("fix/142-x")));
-        half.target_dir_exists = true;
+        half.target_dir = TargetDir::Taken;
         vec![fresh, existing, marked, half]
     };
     for mut world in starts {

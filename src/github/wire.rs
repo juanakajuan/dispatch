@@ -178,6 +178,10 @@ pub(super) struct WirePr {
 
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the shape of `gh repo view --json`; `allowed_merge_methods` turns it into `MergeMethod` values"
+)]
 pub(super) struct WireRepoMerge {
     pub(super) merge_commit_allowed: bool,
     pub(super) squash_merge_allowed: bool,

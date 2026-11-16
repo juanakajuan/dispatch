@@ -30,7 +30,7 @@ pub(super) fn start_issue(state: &mut State, n: IssueNumber) {
 
 pub(super) fn goto_session(state: &mut State, n: IssueNumber) {
     state.tab = Tab::Sessions;
-    state.selected.session = Some(n);
+    state.tabs.sessions.selected = Some(n);
     state.filter.clear();
 }
 

@@ -12,10 +12,22 @@ pub(super) struct StartObservation {
     pub(super) sessions: Sessions,
     pub(super) worktrees: Vec<git::Worktree>,
     pub(super) markers: git::Markers,
-    /// The deterministic dir (`worktree_dir_for`) exists on disk.
-    pub(super) target_dir_exists: bool,
-    /// `req.branch` exists as a local branch.
-    pub(super) branch_exists: bool,
+    pub(super) target_dir: TargetDir,
+    pub(super) branch: LocalBranch,
+}
+
+/// Whether the deterministic dir (`worktree_dir_for`) exists on disk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TargetDir {
+    Free,
+    Taken,
+}
+
+/// Whether `req.branch` exists as a local branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum LocalBranch {
+    Missing,
+    Exists,
 }
 
 pub(super) struct Layout {
@@ -95,7 +107,7 @@ pub(super) fn plan_start(
         }
         return Ok(StartPlan::Steps(vec![mark(branch.clone()), open(w.path.clone())]));
     }
-    if obs.target_dir_exists {
+    if obs.target_dir == TargetDir::Taken {
         return Err(StartConflict::PathTaken(target));
     }
     if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.issue) {
@@ -111,7 +123,7 @@ pub(super) fn plan_start(
         });
     }
     let mut steps = Vec::new();
-    let from = (!obs.branch_exists).then(|| match req.from {
+    let from = (obs.branch == LocalBranch::Missing).then(|| match req.from {
         StartFrom::Base => layout.base.clone(),
         StartFrom::Origin => OriginRef::of(req.branch.clone()),
     });
