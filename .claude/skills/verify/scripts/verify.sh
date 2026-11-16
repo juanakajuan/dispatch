@@ -36,11 +36,14 @@ load() {
   source "$RUN/run.env"
 }
 
-# Variables that make dispatch pick another multiplexer (herdr, the herdr app)
-# or the SSH copy path. The run never inherits them from the caller's shell.
-# TMUX and TMUX_PANE are stripped only from tmux clients: tmux sets them again in each pane.
-LEAKY_ENV=(HERDR_ENV HERDR_WORKSPACE_ID HC_TERMINAL_SOCKET HC_TERMINAL_ID HC_SCOPE SSH_CONNECTION SSH_TTY)
-clean_env() { local v a=(-u TMUX -u TMUX_PANE); for v in "${LEAKY_ENV[@]}"; do a+=(-u "$v"); done; env "${a[@]}" "$@"; }
+# The only variables a run takes from the caller's shell. An allowlist, not a
+# denylist: each new multiplexer backend reads new variables (HERDR_*, HC_*),
+# and a denylist leaked them twice (a131cae, 097dad8).
+KEEP_ENV=(HOME USER LOGNAME LANG LC_ALL TERM COLORTERM TMPDIR XDG_RUNTIME_DIR SSH_AUTH_SOCK GH_TOKEN GITHUB_TOKEN PATH)
+clean_env() { local v a=(); for v in "${KEEP_ENV[@]}"; do [[ -n ${!v+x} ]] && a+=("$v=${!v}"); done; env -i "${a[@]}" "$@"; }
+# What the drive pane may hold: KEEP_ENV, what `up` sets, and what tmux adds to each pane.
+PANE_ENV_RE="^(${KEEP_ENV[*]}|GH_BROWSER|BROWSER|XDG_CONFIG_HOME|TMUX_TMPDIR|TMUX|TMUX_PANE|TERM_PROGRAM|TERM_PROGRAM_VERSION|PWD|SHLVL|SHELL|_|SSH_CONNECTION)="
+PANE_ENV_RE="${PANE_ENV_RE// /|}"
 
 # Always the run's own server. -S beats $TMUX, so the user's server is never hit.
 t() { clean_env tmux -S "$SOCK" "$@"; }
@@ -159,7 +162,9 @@ EOF
 
   local cols="${size%x*}" rows="${size#*x}"
   local ssh_env=(); ((over_ssh)) && ssh_env=(SSH_CONNECTION="10.0.0.2 50000 10.0.0.1 22")
-  clean_env "${ssh_env[@]}" \
+  # SHELL=/bin/sh: tmux runs the pane command with $SHELL -c, and sh execs it,
+  # so the pane process is dispatch. The login shell may be fish, which does not.
+  clean_env "${ssh_env[@]}" SHELL=/bin/sh \
     PATH="$RUN/bin:$PATH" GH_BROWSER="$RUN/bin/browser" BROWSER="$RUN/bin/browser" \
     XDG_CONFIG_HOME="$RUN/xdg" TMUX_TMPDIR="$RUN/tmux" \
     tmux -S "$SOCK" -f /dev/null new-session -d -s drive -n dispatch -x "$cols" -y "$rows" -c "$CLONE" "$RUN/bin/dispatch"
@@ -208,6 +213,7 @@ cmd_doctor() {
   check "drive pane has the gh guard first on PATH" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^PATH=$RUN/bin:"'
   check "drive pane has TMUX on this run's socket" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^TMUX=$SOCK,"'
   check "drive pane has no herdr, herdr app, or unwanted SSH variables" '! tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -E "^(HERDR_|HC_|SSH_TTY=$( ((OVER_SSH)) || echo "|SSH_CONNECTION=" ))" -q'
+  check "drive pane holds only allowlisted variables (KEEP_ENV in verify.sh)" '! tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -Evq "$PANE_ENV_RE"'
   check "binary matches $BIN_SRC (no rebuild since up)" 'cmp -s "$BIN" "$BIN_SRC"'
   check "binary is not older than src/ (built at $BUILT_REV)" '[[ -z $(find "$ROOT/src" "$ROOT/Cargo.toml" -newer "$BIN_SRC" -print -quit) ]]'
   check "gh is logged in, as the drive server sees it" 't run-shell "gh auth status >/dev/null 2>&1 && echo GH_OK" 2>/dev/null | grep -q GH_OK'
@@ -266,7 +272,10 @@ cmd_down() {
 cmd_restart() {
   load "$1"
   local ssh_env=(); [[ ${OVER_SSH:-0} == 1 ]] && ssh_env=(SSH_CONNECTION="10.0.0.2 50000 10.0.0.1 22")
-  t respawn-pane -k -t "$PANE" env "${LEAKY_ENV[@]/#/-u}" "$(t show-environment -g PATH)" "${ssh_env[@]}" "$BIN"
+  local server_env; mapfile -t server_env < <(t show-environment -g | grep -v '^-')
+  # shellcheck disable=SC2016 # $TMUX and $TMUX_PANE expand in the new pane, where tmux set them.
+  t respawn-pane -k -t "$PANE" bash -c 'exec env -i TMUX="$TMUX" TMUX_PANE="$TMUX_PANE" "$@"' _ \
+    "${server_env[@]}" "${ssh_env[@]}" "$BIN"
   wait_for 'updated [0-9]+[smh]? ago' 30 >/dev/null || die "dispatch did not finish the first fetch in 30s after restart"
   echo "restarted dispatch in $PANE"
 }

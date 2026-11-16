@@ -1,8 +1,9 @@
 //! The second `m`: look at the PR again, because the list can be a minute
 //! old, then merge it here or hand it to the session's agent.
 
+use super::plan::{self, MergePlan, MergeProblem, MergeRefusal};
+use super::{Consent, MergeAsk, MergeError};
 use crate::domain::{MergeMethod, PrNumber, PrState, PullRequest};
-use crate::rules::{self, MergePlan, MergeProblem};
 use crate::{github, proc};
 use std::path::Path;
 
@@ -19,86 +20,98 @@ pub enum MergeOutcome {
     Handoff {
         problem: MergeProblem,
         method: MergeMethod,
-        pr: PullRequest,
+        pr: Box<PullRequest>,
     },
-    Refused(String),
+    Refused(MergeRefusal),
 }
 
-/// What the job did. `marked_ready` stays true even when `result` is not a
-/// merge, because dispatch does not undo `gh pr ready`.
+/// What the job did. `draft` stays `MarkedReady` even when `result` is not
+/// a merge, because dispatch does not undo `gh pr ready`.
 #[derive(Debug, PartialEq, Eq)]
 pub struct MergeRun {
-    pub marked_ready: bool,
-    pub result: Result<MergeOutcome, String>,
+    pub draft: DraftStep,
+    pub result: Result<MergeOutcome, MergeError>,
 }
 
-/// `ready_ok` is true when the first `m` told the user that dispatch marks a
-/// draft ready.
-pub fn merge(repo_root: &Path, pr: PrNumber, ready_ok: bool) -> MergeRun {
-    let mut marked_ready = false;
-    let result = run(repo_root, pr, ready_ok, &mut marked_ready);
-    MergeRun { marked_ready, result }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraftStep {
+    /// The job did not run `gh pr ready`.
+    WasReady,
+    MarkedReady,
 }
 
-fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) -> Result<MergeOutcome, String> {
-    let mut fresh = github::view_pr(repo_root, pr).map_err(|e| e.to_string())?;
-    let mut plan = rules::merge_plan(&fresh);
-    if plan == MergePlan::MarkReady {
-        if !ready_ok {
-            return Ok(MergeOutcome::Refused(format!(
-                "PR #{} is a draft now. Press m twice again to mark it ready and merge it.",
-                pr.0
-            )));
-        }
-        github::mark_ready(repo_root, pr).map_err(|e| e.to_string())?;
-        *marked_ready = true;
-        fresh = github::view_pr(repo_root, pr).map_err(|e| e.to_string())?;
-        plan = rules::merge_plan(&fresh);
+pub fn merge(repo_root: &Path, ask: MergeAsk) -> MergeRun {
+    let pr = ask.pr;
+    let was_ready = |result| MergeRun { draft: DraftStep::WasReady, result };
+    let fresh = match github::view_pr(repo_root, pr) {
+        Ok(fresh) => fresh,
+        Err(e) => return was_ready(Err(e.into())),
+    };
+    if plan::merge_plan(&fresh) != MergePlan::MarkReady {
+        return was_ready(finish(repo_root, pr, &fresh));
     }
-    let problem = match plan {
+    if ask.consent != Consent::MarkReadyThenMerge {
+        return was_ready(Ok(MergeOutcome::Refused(MergeRefusal::DraftNow(pr))));
+    }
+    if let Err(e) = github::mark_ready(repo_root, pr) {
+        return was_ready(Err(e.into()));
+    }
+    let result = github::view_pr(repo_root, pr).map_err(MergeError::from).and_then(|f| finish(repo_root, pr, &f));
+    MergeRun { draft: DraftStep::MarkedReady, result }
+}
+
+/// Merges `fresh`, the PR as GitHub shows it now, or says who must fix it.
+fn finish(repo_root: &Path, pr: PrNumber, fresh: &PullRequest) -> Result<MergeOutcome, MergeError> {
+    let problem = match plan::merge_plan(fresh) {
         MergePlan::Refuse(why) => return Ok(MergeOutcome::Refused(why)),
-        MergePlan::MarkReady => return Ok(MergeOutcome::Refused(format!("PR #{} is still a draft.", pr.0))),
+        MergePlan::MarkReady => return Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(pr))),
         MergePlan::Direct => None,
         MergePlan::Handoff(problem) => Some(problem),
     };
-    let allowed = github::allowed_merge_methods(repo_root).map_err(|e| e.to_string())?;
-    let method = rules::merge_method(configured_method(repo_root)?, &allowed)?;
+    let allowed = github::allowed_merge_methods(repo_root)?;
+    let method = plan::merge_method(configured_method(repo_root)?, &allowed).map_err(MergeError::Method)?;
     match problem {
         None => {
-            github::merge_pr(repo_root, &fresh, method).map_err(|e| e.to_string())?;
+            github::merge_pr(repo_root, fresh, method)?;
             let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
             Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
         }
-        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: fresh }),
+        Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: Box::new(fresh.clone()) }),
     }
 }
 
 /// `git config --get` exits 1 when the key is unset.
-fn configured_method(repo_root: &Path) -> Result<Option<MergeMethod>, String> {
+fn configured_method(repo_root: &Path) -> Result<Option<MergeMethod>, MergeError> {
     match proc::run("git", ["config", "--get", SETTING], repo_root) {
-        Ok(raw) => MergeMethod::parse(&raw)
-            .map(Some)
-            .ok_or_else(|| format!("{SETTING} is {:?}. Use merge, squash, or rebase.", raw.trim())),
+        Ok(raw) => MergeMethod::parse(&raw).map(Some).ok_or_else(|| MergeError::BadSetting(raw.trim().to_string())),
         Err(e) if e.exit_code() == Some(1) => Ok(None),
-        Err(e) => Err(e.to_string()),
+        Err(e) => Err(MergeError::Setting(e)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::github::GhError;
+    use crate::merge::plan::MethodError;
     use crate::proc::fake;
 
     const ALL_ALLOWED: &str = r#"{"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"squashMergeAllowed":true}"#;
 
     fn view(mergeable: &str, status: &str, checks: &str) -> String {
-        view_in("OPEN", false, mergeable, status, checks)
+        view_in(PrState::Open, mergeable, status, checks)
     }
 
-    fn view_in(state: &str, draft: bool, mergeable: &str, status: &str, checks: &str) -> String {
+    fn view_in(state: PrState, mergeable: &str, status: &str, checks: &str) -> String {
+        let (state, draft) = match state {
+            PrState::Open => ("OPEN", false),
+            PrState::Draft => ("OPEN", true),
+            PrState::Merged => ("MERGED", false),
+            PrState::Closed => ("CLOSED", false),
+        };
         format!(
             r#"{{"number":10,"title":"t","state":"{state}","isDraft":{draft},"author":null,
-            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
             "statusCheckRollup":[{checks}],"mergeable":"{mergeable}","mergeStateStatus":"{status}",
             "closingIssuesReferences":[],"url":"u"}}"#
         )
@@ -108,7 +121,7 @@ mod tests {
     /// it, `git config` with `setting`, `gh repo view` with `allowed`, and the
     /// merge with success.
     fn world(pr: String, setting: Option<&'static str>, allowed: &'static str) {
-        world_after(pr, view_in("MERGED", false, "UNKNOWN", "UNKNOWN", ""), setting, allowed, Ok(String::new()));
+        world_after(pr, view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", ""), setting, allowed, Ok(String::new()));
     }
 
     fn world_after(
@@ -135,8 +148,12 @@ mod tests {
         });
     }
 
-    fn outcome() -> Result<MergeOutcome, String> {
-        merge(Path::new("/r"), PrNumber(10), false).result
+    fn ask(consent: Consent) -> MergeAsk {
+        MergeAsk { pr: PrNumber(10), consent }
+    }
+
+    fn outcome() -> Result<MergeOutcome, MergeError> {
+        merge(Path::new("/r"), ask(Consent::MergeOnly)).result
     }
 
     /// The PR is a draft until `gh pr ready` runs, then it is `after`, and a
@@ -146,11 +163,11 @@ mod tests {
         fake::install(move |call| {
             if call.starts_with("gh pr view") {
                 Ok(if merged {
-                    view_in("MERGED", false, "UNKNOWN", "UNKNOWN", "")
+                    view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", "")
                 } else if is_ready {
                     after.clone()
                 } else {
-                    view_in("OPEN", true, "MERGEABLE", "CLEAN", "")
+                    view_in(PrState::Draft, "MERGEABLE", "CLEAN", "")
                 })
             } else if call.starts_with("gh pr ready") {
                 is_ready = ready.is_ok();
@@ -179,8 +196,11 @@ mod tests {
     #[test]
     fn a_draft_is_marked_ready_looked_at_again_and_merged_when_clean() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert_eq!(run, MergeRun { marked_ready: true, result: Ok(MergeOutcome::Merged(MergeMethod::Merge)) });
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(
+            run,
+            MergeRun { draft: DraftStep::MarkedReady, result: Ok(MergeOutcome::Merged(MergeMethod::Merge)) }
+        );
         assert_eq!(readies(), ["gh pr ready 10"]);
         assert_eq!(merges(), ["gh pr merge 10 --merge --match-head-commit abc"]);
         assert_eq!(views(), 3, "before ready, after ready, after the merge");
@@ -190,32 +210,27 @@ mod tests {
     fn a_draft_with_pending_checks_after_ready_is_refused_and_stays_ready() {
         let running = r#"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#;
         draft_world(view("MERGEABLE", "BLOCKED", running), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(run.marked_ready);
-        assert!(matches!(run.result, Ok(MergeOutcome::Refused(why)) if why.contains("still running")));
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::MarkedReady);
+        assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::ChecksRunning(PrNumber(10)))));
         assert!(merges().is_empty());
     }
 
     #[test]
     fn a_draft_that_is_still_a_draft_after_ready_is_refused() {
-        draft_world(view_in("OPEN", true, "MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(run.marked_ready);
-        assert_eq!(run.result, Ok(MergeOutcome::Refused("PR #10 is still a draft.".to_string())));
+        draft_world(view_in(PrState::Draft, "MERGEABLE", "CLEAN", ""), Ok(""));
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::MarkedReady);
+        assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::StillDraft(PrNumber(10)))));
         assert!(merges().is_empty());
     }
 
     #[test]
     fn a_draft_without_consent_is_refused_and_gh_pr_ready_does_not_run() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Ok(""));
-        let run = merge(Path::new("/r"), PrNumber(10), false);
-        assert!(!run.marked_ready);
-        assert_eq!(
-            run.result,
-            Ok(MergeOutcome::Refused(
-                "PR #10 is a draft now. Press m twice again to mark it ready and merge it.".to_string()
-            ))
-        );
+        let run = merge(Path::new("/r"), ask(Consent::MergeOnly));
+        assert_eq!(run.draft, DraftStep::WasReady);
+        assert_eq!(run.result, Ok(MergeOutcome::Refused(MergeRefusal::DraftNow(PrNumber(10)))));
         assert!(readies().is_empty() && merges().is_empty());
         assert_eq!(fake::calls().len(), 1, "only the fresh view");
     }
@@ -223,9 +238,9 @@ mod tests {
     #[test]
     fn a_failing_gh_pr_ready_is_an_error_and_nothing_merges() {
         draft_world(view("MERGEABLE", "CLEAN", ""), Err("not allowed"));
-        let run = merge(Path::new("/r"), PrNumber(10), true);
-        assert!(!run.marked_ready);
-        assert!(run.result.is_err_and(|e| e.contains("not allowed")));
+        let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
+        assert_eq!(run.draft, DraftStep::WasReady);
+        assert_eq!(run.result, Err(MergeError::Gh(GhError::Run(fake::fail("gh", 1, "not allowed")))));
         assert!(merges().is_empty());
     }
 
@@ -254,7 +269,7 @@ mod tests {
         world(view("CONFLICTING", "DIRTY", ""), Some("rebase"), ALL_ALLOWED);
         let outcome = outcome();
         assert!(
-            matches!(&outcome, Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr }) if pr.base == "main" && pr.head == "fix/3-x"),
+            matches!(&outcome, Ok(MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr }) if pr.base.display() == "main" && pr.head.display() == "fix/3-x"),
             "{outcome:?}"
         );
         assert!(merges().is_empty());
@@ -272,7 +287,7 @@ mod tests {
     fn pending_checks_refuse_without_reading_the_setting() {
         let running = r#"{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}"#;
         world(view("MERGEABLE", "BLOCKED", running), Some("nonsense"), ALL_ALLOWED);
-        assert!(matches!(outcome(), Ok(MergeOutcome::Refused(why)) if why.contains("still running")));
+        assert_eq!(outcome(), Ok(MergeOutcome::Refused(MergeRefusal::ChecksRunning(PrNumber(10)))));
         assert_eq!(fake::calls().len(), 1, "only the fresh view");
     }
 
@@ -281,7 +296,7 @@ mod tests {
         let no_squash = r#"{"mergeCommitAllowed":true,"rebaseMergeAllowed":true,"squashMergeAllowed":false}"#;
         world(view("MERGEABLE", "CLEAN", ""), Some("squash"), no_squash);
         let err = outcome().expect_err("rejected");
-        assert!(err.contains("squash") && err.contains("merge, rebase"), "{err}");
+        assert!(matches!(err, MergeError::Method(MethodError::NotAllowed { configured: MergeMethod::Squash, .. })));
         assert!(merges().is_empty());
     }
 
@@ -289,7 +304,7 @@ mod tests {
     fn a_bad_setting_is_an_error_that_names_the_key() {
         world(view("MERGEABLE", "CLEAN", ""), Some("fast-forward"), ALL_ALLOWED);
         let err = outcome().expect_err("rejected");
-        assert_eq!(err, r#"dispatch.mergeMethod is "fast-forward". Use merge, squash, or rebase."#);
+        assert_eq!(err.to_string(), r#"dispatch.mergeMethod is "fast-forward". Use merge, squash, or rebase."#);
         assert!(merges().is_empty());
     }
 
@@ -302,10 +317,10 @@ mod tests {
 
     #[test]
     fn a_failed_gh_merge_is_an_error() {
-        let after = view_in("MERGED", false, "UNKNOWN", "UNKNOWN", "");
+        let after = view_in(PrState::Merged, "UNKNOWN", "UNKNOWN", "");
         world_after(view("MERGEABLE", "CLEAN", ""), after, None, ALL_ALLOWED, Err("Head branch was modified"));
         let err = outcome().expect_err("fails");
-        assert!(err.contains("Head branch was modified"), "{err}");
+        assert_eq!(err, MergeError::Gh(GhError::Run(fake::fail("gh", 1, "Head branch was modified"))));
     }
 
     #[test]

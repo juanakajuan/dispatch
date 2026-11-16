@@ -27,6 +27,7 @@
   "deletions": 22,
   "headRefName": "feature/711-hardware-metadata",
   "headRefOid": "oid1028",
+  "isCrossRepository": true,
   "isDraft": false,
   "mergeStateStatus": "CLEAN",
   "mergeable": "MERGEABLE",
@@ -55,8 +56,7 @@
    }
   ],
   "title": "feat(export): report CPU, memory and disk in JSON metadata",
-  "updatedAt": "2026-11-08T00:07:11Z",
-  "url": "https://github.com/sharkdp/hyperfine/pull/1028"
+  "updatedAt": "2026-11-08T00:07:11Z"
  },
  {
   "additions": 1,
@@ -86,6 +86,7 @@
   "deletions": 0,
   "headRefName": "test-clicolor-environment",
   "headRefOid": "oid1002",
+  "isCrossRepository": true,
   "isDraft": false,
   "mergeStateStatus": "UNKNOWN",
   "mergeable": "UNKNOWN",
@@ -114,8 +115,7 @@
    }
   ],
   "title": "test(integration): ignore ambient forced color",
-  "updatedAt": "2026-10-12T08:33:48Z",
-  "url": "https://github.com/sharkdp/hyperfine/pull/1002"
+  "updatedAt": "2026-10-12T08:33:48Z"
  },
  {
   "additions": 4835,
@@ -131,6 +131,7 @@
   "deletions": 1,
   "headRefName": "williammartin-multiaccount-draft-08-evaluation",
   "headRefOid": "oid14927",
+  "isCrossRepository": false,
   "isDraft": true,
   "mergeStateStatus": "DRAFT",
   "mergeable": "MERGEABLE",
@@ -159,8 +160,7 @@
    }
   ],
   "title": "Add guided multi-account setup and evaluation",
-  "updatedAt": "2026-11-03T21:29:03Z",
-  "url": "https://github.com/cli/cli/pull/14927"
+  "updatedAt": "2026-11-03T21:29:03Z"
  },
  {
   "additions": 13779,
@@ -190,6 +190,7 @@
   "deletions": 4437,
   "headRefName": "maxbeizer-fix-project-scope-error",
   "headRefOid": "oid14035",
+  "isCrossRepository": true,
   "isDraft": true,
   "mergeStateStatus": "DRAFT",
   "mergeable": "MERGEABLE",
@@ -197,7 +198,6 @@
   "state": "OPEN",
   "statusCheckRollup": [],
   "title": "Fix project scope errors during issue creation",
-  "updatedAt": "2026-10-23T15:08:26Z",
-  "url": "https://github.com/cli/cli/pull/14035"
+  "updatedAt": "2026-10-23T15:08:26Z"
  }
 ]

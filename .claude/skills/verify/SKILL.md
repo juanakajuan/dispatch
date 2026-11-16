@@ -25,7 +25,7 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit |
 | `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status` to the real gh. Blocks every other call, `pr merge` too, and logs it |
 | browser | `$RUN/bin/browser` (`GH_BROWSER`, `BROWSER`) | `o` goes through the real `gh … --web`. The URL goes to a log. No browser opens |
-| environment | `up` and `restart` remove `HERDR_ENV`, `HERDR_WORKSPACE_ID`, `HC_TERMINAL_SOCKET`, `HC_TERMINAL_ID`, `HC_SCOPE`, `SSH_CONNECTION`, and `SSH_TTY` | With them, dispatch picks herdr or the herdr app (`hc`) and starts sessions outside the sandbox, or `o` copies a URL instead of opening it. `--over-ssh` sets a fake `SSH_CONNECTION` to test the copy path |
+| environment | `up` and `restart` pass only the `KEEP_ENV` allowlist in `verify.sh` (`HOME`, `PATH`, `TERM`, locale, gh tokens, and a few more) | Any other variable can change what dispatch does. `HERDR_*` and `HC_*` make it start sessions outside the sandbox, and `SSH_CONNECTION` makes `o` copy a URL. `--over-ssh` sets a fake `SSH_CONNECTION` to test the copy path |
 
 The `bin/` scripts are verification scaffolding. `down` deletes them.
 
@@ -62,7 +62,7 @@ Run this first, and again when anything looks wrong. It is read-only.
 $V doctor "$RUN"
 ```
 
-It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the drive pane has the gh guard first on `PATH`, `TMUX` in the drive pane points at the run's socket, the drive pane has no herdr, herdr app, or SSH variables (except `SSH_CONNECTION` with `--over-ssh`), the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD` and tracks every `origin` branch, `gh` in the clone resolves to the run's repo, the last fetch did not fail, and the header shows a fetch age. It then prints the tab row, the repo and freshness line, and the key bar. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
+It checks: the run's tmux server answers, the drive pane is alive and runs this run's binary, the drive pane has the gh guard first on `PATH`, `TMUX` in the drive pane points at the run's socket, the drive pane has no herdr, herdr app, or SSH variables (except `SSH_CONNECTION` with `--over-ssh`) and no variable outside the allowlist, the binary is the same as `target/debug/dispatch` and is not older than `src/`, `gh` is logged in as the drive server sees it, the clone has `origin/HEAD` and tracks every `origin` branch, `gh` in the clone resolves to the run's repo, the last fetch did not fail, and the header shows a fetch age. It then prints the tab row, the repo and freshness line, and the key bar. A `FAIL` on the binary checks means you changed the code after `up`: run `build`, `down`, `up`. The fetch-age check fails on the Sessions tab, because only tabs 1 and 2 show an age. Press `1` and run it again.
 
 ## Drive
 
@@ -77,7 +77,7 @@ $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
 $V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
 ```
 
-To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` sets the `PATH` from `up` and removes the same variables as `up`. Doctor fails on `gh guard first on PATH` if the guard is lost.
+To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` starts dispatch with only the environment `up` gave the tmux server (the `KEEP_ENV` allowlist in `verify.sh`). Doctor fails on `gh guard first on PATH` if the guard is lost.
 
 Stable handles on the screen (line numbers are `capture-pane` lines, from 1):
 

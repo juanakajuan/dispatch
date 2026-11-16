@@ -12,6 +12,18 @@ pub struct IssueNumber(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrNumber(pub u32);
 
+impl std::fmt::Display for IssueNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+impl std::fmt::Display for PrNumber {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
 /// Something with a page on GitHub. `gh` resolves the host, so this holds
 /// the number only, never a URL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,8 +35,8 @@ pub enum GithubRef {
 impl std::fmt::Display for GithubRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GithubRef::Issue(n) => write!(f, "issue #{}", n.0),
-            GithubRef::Pr(n) => write!(f, "PR #{}", n.0),
+            GithubRef::Issue(n) => write!(f, "issue {n}"),
+            GithubRef::Pr(n) => write!(f, "PR {n}"),
         }
     }
 }
@@ -78,11 +90,102 @@ impl BranchName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+/// A branch on the `origin` remote. Displays as `origin/<branch>`, the form
+/// that `git symbolic-ref --short` prints and `git worktree add` takes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OriginRef(BranchName);
+
+impl OriginRef {
+    pub fn of(branch: BranchName) -> OriginRef {
+        OriginRef(branch)
+    }
+
+    /// `origin/<branch>`, with a valid branch.
+    pub fn parse(raw: &str) -> Option<OriginRef> {
+        let branch = raw.trim().strip_prefix("origin/")?;
+        BranchName::parse(branch).ok().map(OriginRef)
+    }
+
+    pub fn branch(&self) -> &BranchName {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for OriginRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "origin/{}", self.0.as_str())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BranchNameError {
     Empty,
     BadChar(char),
     BadSequence(&'static str),
+}
+
+/// A PR's head or base branch as GitHub names it. A branch dispatch can not
+/// check out from origin stays `Unusable`: the PR still lists and can merge,
+/// but no session can start on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrBranch {
+    Valid(BranchName),
+    Unusable { raw: String, why: Unusable },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Unusable {
+    BadName(BranchNameError),
+    /// The head of a PR from a fork. `origin/<raw>` is some other branch,
+    /// or none.
+    InFork,
+}
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unusable::BadName(e) => write!(f, "{e:?}"),
+            Unusable::InFork => f.write_str("the branch is in a fork"),
+        }
+    }
+}
+
+impl PrBranch {
+    pub fn parse(raw: String) -> PrBranch {
+        match BranchName::parse(&raw) {
+            Ok(name) => PrBranch::Valid(name),
+            Err(e) => PrBranch::Unusable { raw, why: Unusable::BadName(e) },
+        }
+    }
+
+    pub fn branch(&self) -> Option<&BranchName> {
+        match self {
+            PrBranch::Valid(name) => Some(name),
+            PrBranch::Unusable { .. } => None,
+        }
+    }
+
+    /// The name as GitHub shows it.
+    pub fn display(&self) -> &str {
+        match self {
+            PrBranch::Valid(name) => name.as_str(),
+            PrBranch::Unusable { raw, .. } => raw,
+        }
+    }
+}
+
+/// A commit SHA as GitHub reports it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitOid(String);
+
+impl CommitOid {
+    pub fn new(sha: String) -> CommitOid {
+        CommitOid(sha)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -123,7 +226,6 @@ pub struct Issue {
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
     pub comment_count: usize,
-    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -152,17 +254,16 @@ pub struct PullRequest {
     pub author: String,
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
-    pub head: String,
-    /// The head commit SHA. A direct merge pins it, so a push after the
-    /// check can not merge unchecked code.
-    pub head_oid: String,
-    pub base: String,
+    pub head: PrBranch,
+    /// A direct merge pins it, so a push after the check can not merge
+    /// unchecked code.
+    pub head_oid: CommitOid,
+    pub base: PrBranch,
     pub additions: u32,
     pub deletions: u32,
     pub checks: Checks,
     pub mergeability: Mergeability,
     pub closes: Vec<IssueNumber>,
-    pub url: String,
 }
 
 /// Whether GitHub can merge an open PR, from its `mergeable` and
@@ -235,6 +336,30 @@ mod tests {
         for bad in ["-x", "/x", "x/", "x.", "x.lock", "a..b", "a//b", "a@{b", "@", "a/.b"] {
             assert!(matches!(BranchName::parse(bad), Err(BranchNameError::BadSequence(_))), "{bad}");
         }
+    }
+
+    #[test]
+    fn origin_ref_needs_the_origin_prefix_and_a_valid_branch() {
+        let main = OriginRef::parse("origin/main\n").expect("origin/main");
+        assert_eq!(main.branch().as_str(), "main");
+        assert_eq!(main.to_string(), "origin/main");
+        assert_eq!(OriginRef::parse("origin/release/1.0").map(|r| r.to_string()), Some("origin/release/1.0".into()));
+        for bad in ["main", "upstream/main", "origin/", "origin/a..b"] {
+            assert_eq!(OriginRef::parse(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn pr_branch_keeps_a_bad_name_for_display() {
+        let good = PrBranch::parse("fix/3-x".to_string());
+        assert_eq!((good.branch().map(BranchName::as_str), good.display()), (Some("fix/3-x"), "fix/3-x"));
+        let bad = PrBranch::parse("a b".to_string());
+        assert_eq!((bad.branch(), bad.display()), (None, "a b"));
+    }
+
+    #[test]
+    fn numbers_display_with_a_hash() {
+        assert_eq!((IssueNumber(7).to_string(), PrNumber(12).to_string()), ("#7".to_string(), "#12".to_string()));
     }
 
     #[test]

@@ -3,18 +3,44 @@
 //! OSC 52 to its client, and it does so with tmux's default `set-clipboard`.
 //! Outside tmux, dispatch writes OSC 52 itself.
 
-use crate::proc;
+use crate::proc::{self, ProcError};
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
 
-/// `inside_tmux` is `$TMUX` being set. Call it on the main thread only: a
-/// write from another thread can land inside a frame's escape sequence.
-pub fn copy(text: &str, inside_tmux: bool, cwd: &Path) -> Result<(), String> {
-    if inside_tmux {
-        return proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(|e| e.to_string());
+#[derive(Debug)]
+pub enum CopyError {
+    Tmux(ProcError),
+    Terminal(std::io::Error),
+}
+
+impl fmt::Display for CopyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CopyError::Tmux(e) => e.fmt(f),
+            CopyError::Terminal(e) => e.fmt(f),
+        }
     }
-    let mut out = std::io::stdout().lock();
-    out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(|e| e.to_string())
+}
+
+/// Where the copy goes: through tmux when `$TMUX` is set, else straight to
+/// the terminal.
+#[derive(Clone, Copy)]
+pub enum Via<'a> {
+    Tmux { cwd: &'a Path },
+    Terminal,
+}
+
+/// Call it on the main thread only: a write from another thread can land
+/// inside a frame's escape sequence.
+pub fn copy(text: &str, via: Via) -> Result<(), CopyError> {
+    match via {
+        Via::Tmux { cwd } => proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(CopyError::Tmux),
+        Via::Terminal => {
+            let mut out = std::io::stdout().lock();
+            out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(CopyError::Terminal)
+        }
+    }
 }
 
 fn osc52(text: &str) -> String {
@@ -59,7 +85,7 @@ mod tests {
     #[test]
     fn inside_tmux_copies_with_set_buffer_w() {
         proc::fake::install(|_| Ok(String::new()));
-        copy("https://github.com/o/r/issues/2", true, Path::new("/r")).expect("copies");
+        copy("https://github.com/o/r/issues/2", Via::Tmux { cwd: Path::new("/r") }).expect("copies");
         assert_eq!(proc::fake::calls(), ["tmux set-buffer -w https://github.com/o/r/issues/2"]);
     }
 }

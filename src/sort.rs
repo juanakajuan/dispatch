@@ -112,10 +112,19 @@ fn pr_urgency(pr: &PullRequest) -> u8 {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Direction {
+    Ascending,
+    Descending,
+}
+
 /// Equal keys fall back to the number, in the mode's own direction, so the
 /// order never depends on the order `gh` returned.
-fn by_number<N: Ord>(ascending: bool, a: &N, b: &N) -> Ordering {
-    if ascending { a.cmp(b) } else { b.cmp(a) }
+fn by_number<N: Ord>(direction: Direction, a: &N, b: &N) -> Ordering {
+    match direction {
+        Direction::Ascending => a.cmp(b),
+        Direction::Descending => b.cmp(a),
+    }
 }
 
 pub fn issues(rows: &mut [&Issue], sort: IssueSort, session: impl Fn(IssueNumber) -> Option<SessionState>) {
@@ -129,8 +138,13 @@ pub fn issues(rows: &mut [&Issue], sort: IssueSort, session: impl Fn(IssueNumber
             IssueSort::Number => Ordering::Equal,
             IssueSort::Comments => b.comment_count.cmp(&a.comment_count),
         };
-        let ascending = matches!(sort, IssueSort::Oldest | IssueSort::Number);
-        primary.then_with(|| by_number(ascending, &a.number, &b.number))
+        let direction = match sort {
+            IssueSort::Oldest | IssueSort::Number => Direction::Ascending,
+            IssueSort::Attention | IssueSort::Newest | IssueSort::Updated | IssueSort::Comments => {
+                Direction::Descending
+            }
+        };
+        primary.then_with(|| by_number(direction, &a.number, &b.number))
     });
 }
 
@@ -144,8 +158,11 @@ pub fn prs(rows: &mut [&PullRequest], sort: PrSort) {
             PrSort::Updated => b.updated_at.cmp(&a.updated_at),
             PrSort::Number => Ordering::Equal,
         };
-        let ascending = matches!(sort, PrSort::Oldest | PrSort::Number);
-        primary.then_with(|| by_number(ascending, &a.number, &b.number))
+        let direction = match sort {
+            PrSort::Oldest | PrSort::Number => Direction::Ascending,
+            PrSort::Attention | PrSort::Newest | PrSort::Updated => Direction::Descending,
+        };
+        primary.then_with(|| by_number(direction, &a.number, &b.number))
     });
 }
 

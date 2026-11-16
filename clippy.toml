@@ -1,2 +1,9 @@
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
+max-struct-bools = 1
+max-fn-params-bools = 0
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "spawn through crate::proc::run so tests can fake it; only src/proc.rs and the attach in src/main.rs build a Command" },
+  { path = "std::env::var", reason = "read the environment only at a boundary (src/config/, src/session/mux.rs, src/transcript.rs, src/main.rs) and pass the value in as a typed field" },
+  { path = "std::env::var_os", reason = "read the environment only at a boundary (src/config/, src/session/mux.rs, src/transcript.rs, src/main.rs) and pass the value in as a typed field" },
+]

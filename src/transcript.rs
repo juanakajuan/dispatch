@@ -57,6 +57,10 @@ pub fn latest(worktree: &Path) -> Option<Summary> {
     parse_latest(&read_tail(&file)?)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "boundary: Claude Code keeps its transcripts under CLAUDE_CONFIG_DIR or HOME"
+)]
 fn projects_dir() -> Option<PathBuf> {
     let base = match std::env::var_os("CLAUDE_CONFIG_DIR") {
         Some(dir) => PathBuf::from(dir),

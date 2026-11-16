@@ -6,13 +6,15 @@ use std::fmt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProcError {
     /// Program missing or not executable. The message names the program, so
-    /// "tmux is not installed" reaches the user as is.
+    /// "tmux is not installed" reaches the user as is. `message` is the
+    /// `io::Error` text.
     Spawn {
         program: String,
-        source: std::io::Error,
+        kind: std::io::ErrorKind,
+        message: String,
     },
     Exit {
         program: String,
@@ -25,6 +27,10 @@ pub enum ProcError {
 }
 
 impl ProcError {
+    pub fn spawn(program: &str, source: &std::io::Error) -> ProcError {
+        ProcError::Spawn { program: program.to_string(), kind: source.kind(), message: source.to_string() }
+    }
+
     /// For callers that treat one exit code as an empty result
     /// (`git config --get-regexp` exits 1 when nothing matches).
     pub fn exit_code(&self) -> Option<i32> {
@@ -46,7 +52,7 @@ impl ProcError {
 impl fmt::Display for ProcError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProcError::Spawn { program, source } => write!(f, "cannot run {program}: {source}"),
+            ProcError::Spawn { program, message, .. } => write!(f, "cannot run {program}: {message}"),
             ProcError::Exit { program, code, stderr } => {
                 let code = code.map_or_else(|| "a signal".to_string(), |c| format!("code {c}"));
                 if stderr.is_empty() {
@@ -70,13 +76,17 @@ where
     if let Some(result) = fake::intercept(program, &args, cwd) {
         return result;
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one place `run` spawns a child; everything else calls `proc::run`"
+    )]
     let output = Command::new(program)
         .args(&args)
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .output()
-        .map_err(|source| ProcError::Spawn { program: program.to_string(), source })?;
+        .map_err(|source| ProcError::spawn(program, &source))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let detail =
@@ -98,11 +108,15 @@ where
     if let Some(result) = fake::intercept_spawn(program, &args) {
         return result.map(|_| ());
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the one place `spawn_detached` spawns a child; everything else calls `proc::spawn_detached`"
+    )]
     let mut command = Command::new(program);
     command.args(&args).current_dir(cwd).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     #[cfg(unix)]
     std::os::unix::process::CommandExt::process_group(&mut command, 0);
-    command.spawn().map(|_| ()).map_err(|source| ProcError::Spawn { program: program.to_string(), source })
+    command.spawn().map(|_| ()).map_err(|source| ProcError::spawn(program, &source))
 }
 
 /// The test seam. A test installs a script for its own thread, and `run`
@@ -189,7 +203,7 @@ mod tests {
     #[test]
     fn missing_program_names_it() {
         let err = run("dispatch-no-such-program", ["x"], Path::new("/")).expect_err("fails");
-        assert!(matches!(err, ProcError::Spawn { .. }));
+        assert!(matches!(err, ProcError::Spawn { kind: std::io::ErrorKind::NotFound, .. }));
         assert!(err.to_string().contains("dispatch-no-such-program"));
     }
 }

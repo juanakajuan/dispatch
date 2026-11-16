@@ -4,8 +4,10 @@
 //! command parser still treats an argument that ends in `;` as a command
 //! separator, which `escape_argv` handles.
 
-use super::WindowObs;
-use crate::domain::WorktreePath;
+use super::AttachPlan;
+use super::error::MuxError;
+use super::mux::{Liveness, Mux, Observed, Repo, WAITING_HOOKS};
+use crate::domain::{IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::path::Path;
 
@@ -15,12 +17,12 @@ use std::path::Path;
 pub struct WindowId(String);
 
 impl WindowId {
-    pub fn parse(raw: &str) -> Result<WindowId, String> {
+    pub fn parse(raw: &str) -> Result<WindowId, MuxError> {
         let id = raw.trim();
         if id.starts_with('@') && id.len() > 1 && id[1..].chars().all(|c| c.is_ascii_digit()) {
             Ok(WindowId(id.to_string()))
         } else {
-            Err(format!("tmux returned {id:?} instead of a window id"))
+            Err(MuxError::NotAWindowId(id.to_string()))
         }
     }
 
@@ -39,7 +41,7 @@ pub(super) enum Place {
 }
 
 impl Place {
-    pub(super) fn detect(tmux_env: Option<&str>, repo_dir_name: &str) -> Result<Place, String> {
+    pub(super) fn detect(tmux_env: Option<&str>, repo_dir_name: &str) -> Result<Place, MuxError> {
         match tmux_env.filter(|s| !s.is_empty()) {
             Some(_) => {
                 let id = tmux(["display-message", "-p", "#{session_id}"])?;
@@ -58,11 +60,56 @@ impl Place {
     }
 
     /// The session that `attach-session` and `switch-client` aim at.
-    pub(super) fn session_target(&self) -> String {
+    fn session_target(&self) -> String {
         match self {
             Place::Inside { session_id } => session_id.clone(),
             Place::Detached { session_name } => format!("={session_name}"),
         }
+    }
+}
+
+impl Mux for Place {
+    type Window = WindowId;
+
+    fn list(&self, _repo: Repo<'_>) -> Result<Vec<Observed<WindowId>>, MuxError> {
+        list_windows()
+    }
+
+    fn open(&self, _repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
+        open_window(self, dir, &issue.to_string(), argv).map(|_| ())
+    }
+
+    fn relaunch(
+        &self,
+        _repo: Repo<'_>,
+        window: &WindowId,
+        dir: &WorktreePath,
+        _issue: IssueNumber,
+        argv: &[String],
+    ) -> Result<(), MuxError> {
+        respawn(window, dir, argv)
+    }
+
+    fn stop(&self, window: &WindowId) -> Result<(), MuxError> {
+        kill_window(window)
+    }
+
+    fn send_line(&self, window: &WindowId, text: &str) -> Result<(), MuxError> {
+        send_line(window, text)
+    }
+
+    fn attach(&self, window: &WindowId) -> AttachPlan {
+        let session = self.session_target();
+        let select = ["tmux", "select-window", "-t", window.as_str()].map(String::from);
+        let (verb, plan): (&str, fn(Vec<String>) -> AttachPlan) = match self {
+            Place::Inside { .. } => ("switch-client", AttachPlan::Switch),
+            Place::Detached { .. } => ("attach-session", AttachPlan::Suspend),
+        };
+        plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
+    }
+
+    fn waiting_hooks(&self) -> Option<&'static str> {
+        Some(WAITING_HOOKS)
     }
 }
 
@@ -72,15 +119,7 @@ fn session_name_for(repo_dir_name: &str) -> String {
     format!("dispatch-{clean}")
 }
 
-fn tmux<I, S>(args: I) -> Result<String, String>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<std::ffi::OsStr>,
-{
-    tmux_raw(args).map_err(|e| e.to_string())
-}
-
-fn tmux_raw<I, S>(args: I) -> Result<String, ProcError>
+fn tmux<I, S>(args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
@@ -91,22 +130,36 @@ where
 /// tab-separated format; tags are set by dispatch only.
 const LIST_FORMAT: &str = "#{window_id}\t#{pane_dead}\t#{@dispatch-worktree}\t#{@dispatch-waiting}";
 
-pub(super) fn list_windows() -> Result<Vec<WindowObs>, String> {
-    match tmux_raw(["list-windows", "-a", "-F", LIST_FORMAT]) {
+fn list_windows() -> Result<Vec<Observed<WindowId>>, MuxError> {
+    match tmux(["list-windows", "-a", "-F", LIST_FORMAT]) {
         Ok(text) => Ok(parse_windows(&text)),
-        Err(e) if is_no_server(e.stderr()) => Ok(Vec::new()),
-        Err(e) => Err(e.to_string()),
+        Err(e) if classify(&e) == Some(Gone::Server) => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
     }
 }
 
-fn is_no_server(stderr: &str) -> bool {
-    stderr.contains("no server running") || stderr.contains("error connecting")
+/// What a failed call says is missing, read once from tmux's stderr.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Gone {
+    Server,
+    Window,
+}
+
+fn classify(e: &ProcError) -> Option<Gone> {
+    let stderr = e.stderr();
+    if stderr.contains("no server running") || stderr.contains("error connecting") {
+        Some(Gone::Server)
+    } else if stderr.contains("can't find window") {
+        Some(Gone::Window)
+    } else {
+        None
+    }
 }
 
 /// Rows with an empty `@dispatch-worktree` are not ours and are skipped.
 /// Rows with a wrong field count are skipped, not fatal: one odd window must
 /// not hide every session. A tag whose directory is gone is skipped too.
-fn parse_windows(text: &str) -> Vec<WindowObs> {
+fn parse_windows(text: &str) -> Vec<Observed<WindowId>> {
     text.lines()
         .filter_map(|line| {
             let fields: Vec<&str> = line.split('\t').collect();
@@ -114,11 +167,14 @@ fn parse_windows(text: &str) -> Vec<WindowObs> {
             if worktree.is_empty() {
                 return None;
             }
-            Some(WindowObs {
-                id: super::WindowId::Tmux(WindowId::parse(id).ok()?),
+            Some(Observed {
+                window: WindowId::parse(id).ok()?,
                 worktree: WorktreePath::from_observed(worktree)?,
-                dead: *dead == "1",
-                waiting: *waiting == "1",
+                liveness: match (*dead, *waiting) {
+                    ("1", _) => Liveness::Dead,
+                    (_, "1") => Liveness::Waiting,
+                    _ => Liveness::Working,
+                },
             })
         })
         .collect()
@@ -146,16 +202,11 @@ fn escape_argv(argv: &[String]) -> Vec<String> {
 ///
 /// A crash between the calls leaves an untagged window. That is accepted.
 /// Returns the new window id from `-P -F`.
-pub(super) fn open_window(
-    place: &Place,
-    dir: &WorktreePath,
-    name: &str,
-    command: &[String],
-) -> Result<WindowId, String> {
+fn open_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]) -> Result<WindowId, MuxError> {
     let dir_text = dir.as_path().to_string_lossy().into_owned();
     let mut args: Vec<String> = Vec::new();
     let new_session = match place {
-        Place::Detached { session_name } => tmux_raw(["has-session", "-t", &format!("={session_name}")]).is_err(),
+        Place::Detached { session_name } => tmux(["has-session", "-t", &format!("={session_name}")]).is_err(),
         Place::Inside { .. } => false,
     };
     match place {
@@ -172,25 +223,28 @@ pub(super) fn open_window(
     tags.extend([dir_text, ";".to_string()]);
     tags.extend(tag(["set-option", "-w", "-t", id.as_str(), "remain-on-exit"]));
     tags.push("on".to_string());
-    tmux(&tags).map_err(|e| format!("window {} died before it was tagged: {e}", id.as_str()))?;
+    if let Err(error) = tmux(&tags) {
+        return Err(MuxError::Untagged { window: id, error });
+    }
     Ok(id)
 }
 
 /// For `Workspace::resume` on a dead pane: tmux respawn-window -k -t <id> -c <dir> -- <argv..>.
 /// Keeps the window id and its tags.
-pub(super) fn respawn(id: &WindowId, dir: &WorktreePath, command: &[String]) -> Result<(), String> {
+fn respawn(id: &WindowId, dir: &WorktreePath, command: &[String]) -> Result<(), MuxError> {
     let mut args: Vec<String> = ["respawn-window", "-k", "-t", id.as_str(), "-c"].map(String::from).to_vec();
     args.push(dir.as_path().to_string_lossy().into_owned());
     args.push("--".to_string());
     args.extend(escape_argv(command));
-    tmux(&args).map(|_| ())
+    tmux(&args)?;
+    Ok(())
 }
 
-pub(super) fn kill_window(id: &WindowId) -> Result<(), String> {
-    match tmux_raw(["kill-window", "-t", id.as_str()]) {
+fn kill_window(id: &WindowId) -> Result<(), MuxError> {
+    match tmux(["kill-window", "-t", id.as_str()]) {
         Ok(_) => Ok(()),
-        Err(e) if e.stderr().contains("can't find window") || is_no_server(e.stderr()) => Ok(()),
-        Err(e) => Err(e.to_string()),
+        Err(e) if classify(&e).is_some() => Ok(()),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -198,11 +252,12 @@ pub(super) fn kill_window(id: &WindowId) -> Result<(), String> {
 /// `tmux send-keys -t <id> -l -- <text>` then `tmux send-keys -t <id> Enter`.
 /// Two calls, so Claude reads the text as typing and Enter as a submit rather
 /// than one paste with a newline in it.
-pub(super) fn send_line(id: &WindowId, text: &str) -> Result<(), String> {
+fn send_line(id: &WindowId, text: &str) -> Result<(), MuxError> {
     let mut args: Vec<String> = ["send-keys", "-t", id.as_str(), "-l", "--"].map(String::from).to_vec();
     args.extend(escape_argv(&[text.to_string()]));
     tmux(&args)?;
-    tmux(["send-keys", "-t", id.as_str(), "Enter"]).map(|_| ())
+    tmux(["send-keys", "-t", id.as_str(), "Enter"])?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -227,9 +282,9 @@ mod tests {
         );
         let got = parse_windows(&text);
         assert_eq!(got.len(), 2);
-        assert_eq!((got[0].id.as_str(), got[0].dead, got[0].waiting), ("@2", false, false));
+        assert_eq!((got[0].window.as_str(), got[0].liveness), ("@2", Liveness::Working));
         assert!(got[0].worktree.as_path().ends_with("my repo-1"));
-        assert_eq!((got[1].id.as_str(), got[1].dead, got[1].waiting), ("@3", true, true));
+        assert_eq!((got[1].window.as_str(), got[1].liveness), ("@3", Liveness::Dead));
     }
 
     #[test]
