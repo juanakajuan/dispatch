@@ -1,5 +1,3 @@
-src/app/mod.rs 1547
 src/ui.rs 1373
 src/config.rs 570
-banners src/app/mod.rs
 banners src/ui.rs

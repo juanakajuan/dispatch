@@ -4,10 +4,10 @@
 //! line each), the message row (only when there is a message), the prompt
 //! between two rules, and the footer keys. The dialog is a centered overlay.
 
-use crate::app::{
-    self, BINDINGS, Binding, DialogField, Feed, FeedStatus, Focus, HitMap, HitTarget, KeyGroup, RowKey, SettingsMenu,
-    StartDialog, State, Tab,
-};
+use crate::app::feed::FeedStatus;
+use crate::app::list::{RowKey, Tab};
+use crate::app::mouse::{HitMap, HitTarget};
+use crate::app::{self, Focus, State, dialog::DialogField};
 use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
@@ -266,7 +266,7 @@ fn message(state: &State) -> Option<(String, Style)> {
     failure.map(|text| (text, palette::ERROR))
 }
 
-fn feed_failure<T>(feed: &Feed<T>) -> Option<String> {
+fn feed_failure<T>(feed: &app::feed::Feed<T>) -> Option<String> {
     let FeedStatus::Failed { error, .. } = &feed.status else { return None };
     let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
     Some(format!("gh failed{kept}: {}", one_line(error)))
@@ -290,7 +290,7 @@ fn empty_text(state: &State) -> String {
 // ---- dialog ----------------------------------------------------------------
 
 /// The exact commands the dialog will run, for the "Runs" preview.
-fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
+fn preview(state: &State, dialog: &app::dialog::StartDialog) -> Vec<String> {
     let branch = dialog.branch.lines().join("");
     let prompt = dialog.prompt.lines().join("\n");
     let launch = Launch::from_config(&state.config);
@@ -310,7 +310,7 @@ fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
 
 /// The "Runs" label and each preview command, word-wrapped to `width` cells.
 /// A wrapped row hangs under the start of its command.
-fn run_lines(state: &State, dialog: &StartDialog, width: usize) -> Vec<Line<'static>> {
+fn run_lines(state: &State, dialog: &app::dialog::StartDialog, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(span("  Runs", palette::DIM))];
     for command in preview(state, dialog) {
         for (i, row) in wrap(&command, width.saturating_sub(4).max(1)).into_iter().enumerate() {
@@ -342,7 +342,7 @@ const DIALOG_FIXED_ROWS: u16 = 9;
 /// The prompt input keeps at least this many rows when the preview is tall.
 const PROMPT_MIN_ROWS: u16 = 3;
 
-fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) {
+fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &app::dialog::StartDialog) {
     let width = screen.width.min(96);
     let height = screen.height.min(28);
     let area = Rect::new(
@@ -407,15 +407,15 @@ fn draw_dialog(frame: &mut Frame, screen: Rect, state: &State, d: &StartDialog) 
 
 /// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
 fn keybinds_lines() -> Vec<Line<'static>> {
-    let keys = |b: &Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
-    let key_width = BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
+    let keys = |b: &app::keys::Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
+    let key_width = app::keys::BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
     let mut lines = Vec::new();
-    for group in KeyGroup::ALL {
+    for group in app::keys::KeyGroup::ALL {
         if !lines.is_empty() {
             lines.push(Line::raw(""));
         }
         lines.push(Line::from(span(group.title(), palette::HEADING)));
-        for b in BINDINGS.iter().filter(|b| b.group == group) {
+        for b in app::keys::BINDINGS.iter().filter(|b| b.group == group) {
             lines.push(Line::from(vec![
                 span(format!("  {:key_width$}  ", keys(b)), palette::ACCENT),
                 span(b.desc, palette::PLAIN),
@@ -450,7 +450,7 @@ fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16) -> u16 {
 
 // ---- settings --------------------------------------------------------------
 
-fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &SettingsMenu) {
+fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &app::menus::SettingsMenu) {
     let width = screen.width.min(76);
     let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
     let area = Rect::new(
@@ -507,7 +507,7 @@ fn draw_settings(frame: &mut Frame, screen: Rect, state: &State, menu: &Settings
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::{Context, Msg};
+    use crate::app::{Context, msg::Msg};
     use crate::domain::{BranchName, WorktreePath};
     use crate::glyphs::IconSet;
     use crate::session::{StartPreview, Window, WindowId};
@@ -1009,10 +1009,10 @@ mod tests {
         let mut state = full_state();
         send(&mut state, KeyCode::Char('?'));
         let screen = draw_into(&mut state, 100, 60);
-        for group in KeyGroup::ALL {
+        for group in app::keys::KeyGroup::ALL {
             assert!(screen.contains(group.title()), "missing heading {:?} in\n{screen}", group.title());
         }
-        for b in BINDINGS {
+        for b in app::keys::BINDINGS {
             let keys = b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
             let shown = screen.lines().any(|l| l.contains(&format!(" {keys} ")) && l.contains(b.desc));
             assert!(shown, "no row shows {keys:?} with {:?} in\n{screen}", b.desc);
@@ -1196,14 +1196,14 @@ mod agent {
                     return (Span::raw(" "), String::new(), Vec::new(), String::new());
                 };
                 let glyph = session_glyph(n).unwrap_or_else(|| {
-                    let m = pr_mark(app::lead_pr(state, n), icons);
+                    let m = pr_mark(app::list::lead_pr(state, n), icons);
                     if m.content.trim().is_empty() {
                         span(icons.idle, palette::DIM)
                     } else {
                         span(m.content.trim().to_string(), m.style)
                     }
                 });
-                let summary = match (said(state, n), app::lead_pr(state, n)) {
+                let summary = match (said(state, n), app::list::lead_pr(state, n)) {
                     (Some(said), _) => said,
                     (None, Some(p)) => pr_summary(p),
                     (None, None) if !i.labels.is_empty() => {
@@ -1245,7 +1245,7 @@ mod agent {
                     .or_else(|| session.map(|s| s.branch.as_str().to_string()))
                     .unwrap_or_default();
                 let summary = said(state, n)
-                    .or_else(|| session.and_then(|s| app::pr_for_session(state, s)).map(pr_summary))
+                    .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                     .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                     .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
                 let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
@@ -1266,12 +1266,12 @@ mod agent {
     }
 
     fn draw_rows(frame: &mut Frame, area: Rect, state: &State, now: jiff::Timestamp, icons: &Icons, hits: &mut HitMap) {
-        let rows = app::visible_rows(state);
+        let rows = app::list::visible_rows(state);
         if rows.is_empty() {
             frame.render_widget(Paragraph::new(span(format!(" {}", empty_text(state)), palette::DIM)), area);
             return;
         }
-        let selected = app::selected_row(state);
+        let selected = app::list::selected_row(state);
         let width = usize::from(area.width);
         let name_w = (width * 36 / 100).clamp(20, 64);
         let age_w = 5;
@@ -1279,7 +1279,7 @@ mod agent {
         let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
         let mut last_group = None;
         for key in &rows {
-            let group = app::group_of(state, *key);
+            let group = app::list::group_of(state, *key);
             if last_group != Some(group) {
                 if last_group.is_some() {
                     lines.push((None, Line::raw("")));
@@ -1289,7 +1289,7 @@ mod agent {
                     0 | 1 => palette::HEADING,
                     _ => palette::DIM,
                 };
-                let n = rows.iter().filter(|k| app::group_of(state, **k) == group).count();
+                let n = rows.iter().filter(|k| app::list::group_of(state, **k) == group).count();
                 lines.push((None, Line::from(vec![span(group.name, style), span(format!(" {n}"), palette::DIM)])));
                 last_group = Some(group);
             }
@@ -1356,7 +1356,7 @@ mod agent {
             Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
             Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
             Focus::Keybinds { .. } => vec![("j/k", "scroll"), ("esc", "close")],
-            Focus::List => app::key_bar(state),
+            Focus::List => app::keys::key_bar(state),
         };
         let mut spans = vec![Span::raw("")];
         for (i, (k, d)) in pairs.into_iter().enumerate() {

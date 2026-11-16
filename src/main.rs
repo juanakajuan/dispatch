@@ -32,7 +32,8 @@ mod testutil;
 mod transcript;
 mod ui;
 
-use app::{Cmd, Context, Job, Msg, OpenWith};
+use app::msg::{Cmd, Job, Msg};
+use app::{Context, OpenWith};
 use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use session::{AttachPlan, Workspace};
 use std::process::ExitCode;
@@ -95,7 +96,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
                 Cmd::Job(job) => dispatch_job(ws, job, &tx, &writer),
             }
         }
-        let mut hits = app::HitMap::default();
+        let mut hits = app::mouse::HitMap::default();
         terminal.draw(|frame| hits = ui::draw(frame, &state)).map_err(|e| e.to_string())?;
         state.hits = hits;
 
@@ -116,7 +117,7 @@ enum WriteJob {
     Resume(domain::IssueNumber, session::request::Launch),
     SaveConfig { setting: config::Setting, config: config::Config },
     Send { issue: domain::IssueNumber, text: String },
-    Merge(app::MergeAsk),
+    Merge(app::merge::MergeAsk),
 }
 
 fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
