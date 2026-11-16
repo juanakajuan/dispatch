@@ -12,7 +12,6 @@ pub fn issue(number: u32, title: &str, labels: &[&str]) -> Issue {
         created_at: jiff::Timestamp::UNIX_EPOCH,
         updated_at: jiff::Timestamp::UNIX_EPOCH,
         comment_count: 0,
-        url: String::new(),
     }
 }
 
@@ -32,7 +31,6 @@ pub fn pr(number: u32, head: &str, closes: &[u32]) -> PullRequest {
         checks: Checks::None,
         mergeability: Mergeability::Clean,
         closes: closes.iter().map(|n| IssueNumber(*n)).collect(),
-        url: String::new(),
     }
 }
 

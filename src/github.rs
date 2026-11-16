@@ -16,26 +16,17 @@ impl fmt::Display for FetchError {
 }
 
 pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
-    let json = proc::run(
-        "gh",
-        [
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--limit",
-            "200",
-            "--json",
-            "number,title,labels,author,createdAt,updatedAt,comments,url",
-        ],
-        repo_root,
-    )
-    .map_err(|e| FetchError(e.to_string()))?;
+    let json =
+        proc::run("gh", ["issue", "list", "--state", "open", "--limit", "200", "--json", ISSUE_FIELDS], repo_root)
+            .map_err(|e| FetchError(e.to_string()))?;
     parse_issues(&json)
 }
 
+/// The fields `Issue` needs, for `gh issue list`.
+const ISSUE_FIELDS: &str = "number,title,labels,author,createdAt,updatedAt,comments";
+
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
+const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
 
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
     let json = proc::run("gh", ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], repo_root)
@@ -136,7 +127,6 @@ fn parse_issues(json: &str) -> Result<Vec<Issue>, FetchError> {
                 labels: w.labels.into_iter().map(|l| l.name).collect(),
                 author: login(w.author),
                 comment_count: w.comments.len(),
-                url: w.url,
             })
         })
         .collect()
@@ -174,7 +164,6 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
         checks: rollup(&w.status_check_rollup),
         mergeability: mergeability(&w.mergeable, &w.merge_state_status),
         closes: w.closing_issues_references.iter().map(|r| IssueNumber(r.number)).collect(),
-        url: w.url,
     })
 }
 
@@ -239,7 +228,6 @@ struct WireIssue {
     created_at: String,
     updated_at: String,
     comments: Vec<serde::de::IgnoredAny>,
-    url: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -272,7 +260,6 @@ struct WirePr {
     mergeable: String,
     merge_state_status: String,
     closing_issues_references: Vec<WireIssueRef>,
-    url: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -360,7 +347,7 @@ mod tests {
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
-            "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","closingIssuesReferences":[],"url":"u"}]"#;
+            "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","closingIssuesReferences":[]}]"#;
         assert_eq!(parse_prs(json).expect("parses")[0].checks, Checks::Pending);
     }
 
@@ -384,7 +371,7 @@ mod tests {
             Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
                 "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
-                "closingIssuesReferences":[{"number":3}],"url":"u"}"#
+                "closingIssuesReferences":[{"number":3}]}"#
                 .to_string())
         });
         let pr = view_pr(Path::new("/r"), PrNumber(12)).expect("parses");
@@ -437,7 +424,23 @@ mod tests {
         assert_eq!(first.created_at.to_string(), "2026-09-08T10:31:38Z");
         assert_eq!(first.updated_at.to_string(), "2026-10-04T12:33:40Z");
         assert_eq!(first.author, "A4-Tacks");
-        assert!(first.url.starts_with("https://github.com/"));
+    }
+
+    /// The fixtures are real gh output for today's queries. A field dropped
+    /// from a query must leave its fixture too, or the parser tests read data
+    /// that gh no longer sends (863cca9 left `body` behind).
+    #[test]
+    fn fixtures_hold_exactly_the_fields_each_query_asks_for() {
+        for (fixture, fields) in [(ISSUES, ISSUE_FIELDS), (PRS, PR_FIELDS)] {
+            let rows: Vec<serde_json::Map<String, serde_json::Value>> = serde_json::from_str(fixture).expect("fixture");
+            let mut want: Vec<&str> = fields.split(',').collect();
+            want.sort_unstable();
+            for row in rows {
+                let mut got: Vec<&str> = row.keys().map(String::as_str).collect();
+                got.sort_unstable();
+                assert_eq!(got, want);
+            }
+        }
     }
 
     #[test]

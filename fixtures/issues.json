@@ -6,7 +6,6 @@
    "login": "A4-Tacks",
    "name": "A4-Tacks"
   },
-  "body": "Whether due to permission errors or not (#13804), this has resulted in unexpected behavior:\n\n```diff\n-Open • A4-Tacks (A4-Tacks)\n+Enhancement · Open • A4-Tacks (A4-Tacks)\n```\n\n**Current**:\n\n```text\n? Issue type  [Use arrows to move, type to filter]\n> Enhancement\n  Feature Request\n  Bug\n```\n\n**Expect like**:\n\n```text\n? Issue type  [Use arrows to move, type to filter]\n> [None]\n  Enhancement\n  Feature Request\n  Bug\n```",
   "comments": [
    {
     "id": "IC_kwDODKw3uc8AAAABTNJBdg",
@@ -167,8 +166,7 @@
   ],
   "number": 14386,
   "title": "`gh issue create` issue type supports old behavior",
-  "updatedAt": "2026-10-04T12:33:40Z",
-  "url": "https://github.com/cli/cli/issues/14386"
+  "updatedAt": "2026-10-04T12:33:40Z"
  },
  {
   "author": {
@@ -177,7 +175,6 @@
    "login": "jalil-salame",
    "name": "Jalil David Salamé Messina"
   },
-  "body": "I was trying to benchmark some tests in a `cargo` workspace and kept running into the issue that I needed to `cd` into the manifest directory to run the test binary (so I could measure without the overhead of `cargo`). I would love to have a `--cwd` flag so `hyperfine` changes the directory of the tested command:\n\n```console\n$ # current command\n$ sh -c \"cd path/to/src && exec hyperfine $PWD/target/debug/deps/my_test_binary_HASH\"\n...\n# proposed change\n$ hyperfine --cwd path/to/src target/debug/deps/my_test_binary_HASH\n...\n```\n\nIt seems simple to implement so I'd give it a shot if you'd like c:",
   "comments": [
    {
     "id": "IC_kwDOBv62x88AAAABiomLeA",
@@ -199,8 +196,7 @@
   "labels": [],
   "number": 1023,
   "title": "Run benchmark commands in a different CWD",
-  "updatedAt": "2026-11-04T00:36:22Z",
-  "url": "https://github.com/sharkdp/hyperfine/issues/1023"
+  "updatedAt": "2026-11-04T00:36:22Z"
  },
  {
   "author": {
@@ -209,13 +205,11 @@
    "login": "laurigates",
    "name": "Lauri Gates"
   },
-  "body": "`-n`/`--command-name` does not accept a value that starts with a dash when the value is passed as a separate argument:\n\n```\n$ hyperfine -N -r 2 -n \"--shared-blocks\" \"ls\"\nerror: unexpected argument '--shared-blocks' found\n\n  tip: a similar argument exists: '--shell'\n\nUsage: hyperfine -N --runs <NUM> --shell <SHELL> <command>...\n\nFor more information, try '--help'.\n```\n\nThe `=` form works:\n\n```\n$ hyperfine -N -r 2 --command-name=--shared-blocks \"ls\"\nBenchmark 1: --shared-blocks (2 runs)\n```\n\nA name without the similar-argument match gets a tip that does not apply here, since `-- --foo` would turn the name into a command:\n\n```\n$ hyperfine -N -r 2 -n \"--foo\" \"ls\"\nerror: unexpected argument '--foo' found\n\n  tip: to pass '--foo' as a value, use '-- --foo'\n```\n\nI hit this when naming benchmarks after the CLI flag each one tests. The script filtered hyperfine's output, so every run in the batch produced nothing and the error only showed up after removing the filter.\n\n**Expected:** accept the value, or point to `--command-name=<value>` in the error.\n\n`--parameter-scan` and `--parameter-list` already set `allow_hyphen_values(true)` ([cli.rs#L255](https://github.com/sharkdp/hyperfine/blob/26760e8365f5a7122fa9533d5120d8953dd68c1b/src/cli.rs#L255)); `command-name` does not ([cli.rs#L427-L435](https://github.com/sharkdp/hyperfine/blob/26760e8365f5a7122fa9533d5120d8953dd68c1b/src/cli.rs#L427-L435)). Adding it there would make `-n` take the next argument as the name unconditionally, the same as those two options.\n\nVersions: hyperfine 2.0.0 (Homebrew, and `cargo install hyperfine --version 2.0.0 --locked`), macOS 26.6.2 arm64.\n",
   "comments": [],
   "createdAt": "2026-10-29T14:42:07Z",
   "labels": [],
   "number": 1017,
   "title": "`--command-name` rejects a name that starts with `-`",
-  "updatedAt": "2026-10-29T14:42:07Z",
-  "url": "https://github.com/sharkdp/hyperfine/issues/1017"
+  "updatedAt": "2026-10-29T14:42:07Z"
  }
 ]

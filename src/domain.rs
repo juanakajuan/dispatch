@@ -123,7 +123,6 @@ pub struct Issue {
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
     pub comment_count: usize,
-    pub url: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,7 +161,6 @@ pub struct PullRequest {
     pub checks: Checks,
     pub mergeability: Mergeability,
     pub closes: Vec<IssueNumber>,
-    pub url: String,
 }
 
 /// Whether GitHub can merge an open PR, from its `mergeable` and
