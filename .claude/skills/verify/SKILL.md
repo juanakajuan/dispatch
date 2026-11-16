@@ -77,7 +77,7 @@ $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
 $V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
 ```
 
-To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` sets the `PATH` from `up` and removes the same variables as `up`. Doctor fails on `gh guard first on PATH` if the guard is lost.
+To start dispatch again, use `restart`, never `$V tmux "$RUN" respawn-pane …`. tmux gives the new pane the `PATH` of the tmux client that sends the command, so a plain respawn starts dispatch with the real `gh` and no guard. `restart` starts dispatch with only the environment `up` gave the tmux server (the `KEEP_ENV` allowlist in `verify.sh`). Doctor fails on `gh guard first on PATH` if the guard is lost.
 
 Stable handles on the screen (line numbers are `capture-pane` lines, from 1):
 
