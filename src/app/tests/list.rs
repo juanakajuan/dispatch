@@ -223,3 +223,17 @@ fn a_session_whose_branch_pr_merged_sits_in_a_merged_group_after_exited() {
     press(&mut state, key('S'));
     assert_eq!(visible_rows(&state).last(), Some(&RowKey::Session(IssueNumber(3))), "and in number order");
 }
+
+#[test]
+fn the_session_filter_matches_the_branch_its_worktree_has_checked_out() {
+    let (mut state, _) = app();
+    let mut s = session(3, SessionState::Running);
+    s.checkout = crate::session::Checkout::Other(BranchName::parse("try-other").expect("branch"));
+    state.sessions.insert(IssueNumber(3), s);
+    press(&mut state, key('3'));
+    press(&mut state, key('/'));
+    for c in "try-other".chars() {
+        press(&mut state, key(c));
+    }
+    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(3))]);
+}

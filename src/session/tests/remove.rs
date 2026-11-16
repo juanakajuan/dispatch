@@ -68,7 +68,7 @@ fn unpushed_commits_are_refused_with_their_count() {
     let three = NonZeroU32::new(3).expect("non-zero");
     assert_eq!(got, RemoveOutcome::Refused(RemoveRefusal::Unpushed(three)));
     let calls = fake::calls();
-    assert!(calls.iter().any(|c| c.starts_with("git rev-list --count fix/142-x --not --remotes")), "{calls:?}");
+    assert!(calls.iter().any(|c| c.starts_with("git rev-list --count fix/142-x HEAD --not --remotes")), "{calls:?}");
     assert!(changed(&calls).is_empty(), "{calls:?}");
 }
 
@@ -132,4 +132,24 @@ fn a_commit_count_that_is_not_a_number_is_an_error_and_nothing_is_removed() {
     let err = ws.remove(IssueNumber(142)).expect_err("not a count");
     assert_eq!(err, SessionError::NotACount("warning: something".to_string()));
     assert!(changed(&fake::calls()).is_empty());
+}
+
+#[test]
+fn a_session_on_another_branch_is_listed_and_removes_its_marked_branch() {
+    let (ws, base) = started("remove-other-branch", Tree::Clean, 0, Window::Open);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    let mut git = GitWorld::started();
+    fake::install(move |call| {
+        if call.starts_with("git worktree list") {
+            Ok(format!("worktree {}\nHEAD x\nbranch refs/heads/try-other\n\n", dir.display()))
+        } else if call.starts_with("git rev-list") {
+            Ok("0\n".to_string())
+        } else {
+            git.answer(call, &base).unwrap_or_else(|| Ok(String::new()))
+        }
+    });
+    let listed = ws.observe().expect("observed");
+    assert_eq!(listed[&IssueNumber(142)].checked_out(), "try-other");
+    assert_eq!(ws.remove(IssueNumber(142)).expect("removed"), RemoveOutcome::Removed);
+    assert!(fake::calls().iter().any(|c| c == "git branch -D fix/142-x"), "{:?}", fake::calls());
 }

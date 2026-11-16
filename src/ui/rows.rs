@@ -6,7 +6,7 @@ use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::session::SessionState;
+use crate::session::{Checkout, Session, SessionState};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -80,6 +80,13 @@ pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> 
     }
     v.push(span(one_line(&s.text), palette::PLAIN));
     Some(v)
+}
+
+/// A worktree that has another branch checked out says so before anything
+/// else: its PR and its `D` still go by the session branch.
+fn off_branch(s: &Session) -> Option<Vec<Span<'static>>> {
+    (s.checkout != Checkout::SessionBranch)
+        .then(|| vec![span(format!("on {}, not {}", s.checked_out(), s.branch.as_str()), palette::WARN)])
 }
 
 /// Glyph, name, summary, age. One line per row.
@@ -162,7 +169,9 @@ pub(super) fn row_parts(
                 .map(|i| one_line(&i.title))
                 .or_else(|| session.map(|s| s.branch.as_str().to_string()))
                 .unwrap_or_default();
-            let summary = said(state, n)
+            let summary = session
+                .and_then(off_branch)
+                .or_else(|| said(state, n))
                 .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);

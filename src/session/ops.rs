@@ -11,6 +11,7 @@ use crate::domain::IssueNumber;
 use std::num::NonZeroU32;
 
 struct World<W> {
+    root: std::path::PathBuf,
     worktrees: Vec<git::Worktree>,
     markers: git::Markers,
     windows: Vec<Observed<W>>,
@@ -18,14 +19,19 @@ struct World<W> {
 
 impl<W: Clone> World<W> {
     fn join(&self) -> Joined<W> {
-        join(&self.worktrees, &self.markers, &self.windows)
+        join(&self.root, &self.worktrees, &self.markers, &self.windows)
     }
 }
 
 fn read_world<M: Mux>(ws: &Workspace, mux: &M) -> Result<World<M::Window>, SessionError> {
     let windows = mux.list(ws.repo())?;
     let worktrees = git::list_worktrees(&ws.repo_root).map_err(SessionError::Git)?;
-    Ok(World { worktrees, markers: git::list_markers(&ws.repo_root).map_err(SessionError::Git)?, windows })
+    Ok(World {
+        root: ws.repo_root.clone(),
+        worktrees,
+        markers: git::list_markers(&ws.repo_root).map_err(SessionError::Git)?,
+        windows,
+    })
 }
 
 /// A fresh observation of one issue, so a stale row can not aim at a window
@@ -144,7 +150,7 @@ pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Res
     if git::has_uncommitted(row.worktree.as_path()).map_err(git_err)? {
         return Ok(RemoveOutcome::Refused(RemoveRefusal::Uncommitted));
     }
-    let unpushed = git::unpushed_count(&ws.repo_root, &row.branch)?;
+    let unpushed = git::unpushed_count(row.worktree.as_path(), &row.branch)?;
     if let Some(count) = NonZeroU32::new(unpushed) {
         return Ok(RemoveOutcome::Refused(RemoveRefusal::Unpushed(count)));
     }

@@ -6,9 +6,11 @@
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
 //!   window runs Claude in which worktree
 //!
-//! `observe()` reads all three and joins them on the worktree path. Nothing is
-//! cached here; `Workspace` is immutable and `Clone`, so each worker thread
-//! gets its own copy and no lock exists anywhere.
+//! `observe()` reads all three and joins them on the worktree path. A
+//! worktree at `.claude/worktrees/<issue>` stays that issue's session when it
+//! has another branch checked out. Nothing is cached here; `Workspace` is
+//! immutable and `Clone`, so each worker thread gets its own copy and no lock
+//! exists anywhere.
 //!
 //! The git markers live in `.git/config`, so they survive a dispatch crash, a
 //! tmux server restart, and a reboot. `git branch -D` deletes the `branch.<b>`
@@ -42,9 +44,31 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
     pub issue: IssueNumber,
+    /// The branch marked for the issue. PRs and `D` go by this branch.
     pub branch: BranchName,
+    pub checkout: Checkout,
     pub worktree: WorktreePath,
     pub state: SessionState,
+}
+
+impl Session {
+    /// What the worktree has checked out, as the list shows it.
+    pub fn checked_out(&self) -> &str {
+        match &self.checkout {
+            Checkout::SessionBranch => self.branch.as_str(),
+            Checkout::Other(branch) => branch.as_str(),
+            Checkout::Detached => "detached HEAD",
+        }
+    }
+}
+
+/// What the session's worktree has checked out. Someone can switch it by
+/// hand; the session stays.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Checkout {
+    SessionBranch,
+    Other(BranchName),
+    Detached,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

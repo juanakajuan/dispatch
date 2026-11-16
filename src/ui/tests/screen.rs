@@ -309,3 +309,16 @@ fn a_session_whose_pr_merged_shows_the_merged_glyph_and_count() {
         assert!(screen.contains("0 needs you"), "a merged session is not counted as needing you\n{screen}");
     }
 }
+
+#[test]
+fn a_session_on_another_branch_says_so_before_its_pr() {
+    let mut state = full_state();
+    if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
+        s.checkout = crate::session::Checkout::Other(BranchName::parse("try-other").expect("branch"));
+    }
+    send(&mut state, KeyCode::Char('3'));
+    let buf = render(&state, 100, 20);
+    let screen = text(&buf);
+    let (x, y) = find(&screen, "on try-other, not fix/3-x");
+    assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
+}

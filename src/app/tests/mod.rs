@@ -60,6 +60,7 @@ pub(super) fn session(n: u32, state: SessionState) -> Session {
     Session {
         issue: IssueNumber(n),
         branch: BranchName::parse(&format!("fix/{n}-x")).expect("branch"),
+        checkout: crate::session::Checkout::SessionBranch,
         worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
         state,
     }

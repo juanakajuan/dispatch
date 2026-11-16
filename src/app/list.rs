@@ -266,8 +266,10 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .into_iter()
                 .filter(|n| {
                     let title = state.issues.items.iter().find(|i| i.number == *n).map_or("", |i| i.title.as_str());
-                    let branch = state.sessions.get(n).map_or("", |s| s.branch.as_str());
-                    matches_filter(&[&n.to_string(), title, branch], f)
+                    let session = state.sessions.get(n);
+                    let branch = session.map_or("", |s| s.branch.as_str());
+                    let checked_out = session.map_or("", Session::checked_out);
+                    matches_filter(&[&n.to_string(), title, branch, checked_out], f)
                 })
                 .collect();
             sort::sessions(&mut rows, state.tabs.sessions.sort, activity);

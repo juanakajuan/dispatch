@@ -155,11 +155,13 @@ pub(super) fn has_uncommitted(worktree: &Path) -> Result<bool, ProcError> {
     git(worktree, ["status", "--porcelain"]).map(|t| !t.trim().is_empty())
 }
 
-/// How many commits of `branch` are on no remote-tracking ref.
-/// Output that is not a number is an error, never zero: zero lets the
-/// caller delete the branch.
-pub(super) fn unpushed_count(root: &Path, branch: &BranchName) -> Result<u32, SessionError> {
-    let out = git(root, ["rev-list", "--count", branch.as_str(), "--not", "--remotes"]).map_err(SessionError::Git)?;
+/// How many commits of `branch`, or of the worktree's `HEAD`, are on no
+/// remote-tracking ref. `HEAD` counts because the worktree may have a
+/// detached `HEAD` checked out, whose commits no branch keeps. Output that is not a number is an error, never zero: zero lets
+/// the caller delete the branch.
+pub(super) fn unpushed_count(worktree: &Path, branch: &BranchName) -> Result<u32, SessionError> {
+    let out = git(worktree, ["rev-list", "--count", branch.as_str(), "HEAD", "--not", "--remotes"])
+        .map_err(SessionError::Git)?;
     out.trim().parse().map_err(|_| SessionError::NotACount(out.trim().to_string()))
 }
 
