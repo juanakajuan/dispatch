@@ -11,9 +11,9 @@ The checks hold most rules. This file holds only what the code cannot say.
 
 ## Where a feature lives
 
-A feature has one name. `src/app/<name>.rs` holds its state and flow. `src/<name>/` or `src/session/` holds its rules and I/O. `src/ui/<name>.rs` draws it. Tests sit in a `tests/` folder next to the code, one file per feature.
+A feature has one name. `src/app/<name>.rs` holds its state and flow, and `src/<name>/` or `src/session/` holds its rules and I/O. `src/ui/` is split by screen region (header, rows, footer, dialog, menus), not by feature. In `app/`, `ui/`, and `session/`, tests are in a `tests/` folder, one file per feature. Other modules keep an inline `mod tests`.
 
-`app::update` is the only code that changes `State`. `ui` only reads. To do I/O from `app`, return a `Cmd`; `src/jobs.rs` runs it and sends a `Msg` back.
+`app::update` changes `State`. The one other write is `main.rs`, which stores the hit map that the last draw returned. `ui` only reads. To do I/O from `app`, return a `Cmd`: `main.rs` runs `Attach`, `Copy`, and `Quit`, and `src/jobs.rs` runs each `Cmd::Job` and sends a `Msg` back.
 
 ## Rules that are not obvious
 
