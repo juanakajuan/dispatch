@@ -62,6 +62,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
             let msg = match job {
                 WriteJob::Start(req, launch) => Msg::Started { issue: req.issue, result: ws.start(&req, &launch) },
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue) },
+                WriteJob::Remove(issue) => Msg::Removed { issue, result: ws.remove(issue) },
                 WriteJob::Resume(issue, launch) => Msg::Resumed { issue, result: ws.resume(issue, &launch) },
                 WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),
                 WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text) },

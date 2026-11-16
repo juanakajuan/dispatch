@@ -4,6 +4,7 @@ use super::menus::SettingsMenu;
 use super::merge::{Armed, merge_key, merge_target};
 use super::msg::Cmd;
 use super::open::open_key;
+use super::remove::{removable, remove_key};
 use super::sessions::{attach_key, start_key, stop_key};
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
@@ -26,6 +27,7 @@ pub enum Action {
     Enter,
     Attach,
     Stop,
+    Remove,
     Open,
     Merge,
     Refresh,
@@ -72,6 +74,8 @@ pub enum When {
     OnSessions,
     SessionLive,
     SessionExited,
+    /// The session exited, or its PR is merged.
+    Removable,
     /// The selection has an open or draft PR.
     Mergeable,
     OpenWith(OpenWith),
@@ -190,6 +194,13 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("x", "stop", When::SessionLive)],
     },
     Binding {
+        keys: &[Key::Char('D')],
+        action: Action::Remove,
+        group: KeyGroup::Sessions,
+        desc: "remove the worktree and branch (press twice)",
+        bar: &[bar("D", "remove", When::Removable)],
+    },
+    Binding {
         keys: &[Key::Char('m')],
         action: Action::Merge,
         group: KeyGroup::PullRequests,
@@ -292,6 +303,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
         When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
         When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),
+        When::Removable => removable(state),
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,
     };
@@ -319,7 +331,7 @@ pub(super) fn action_for(ev: &KeyEvent) -> Option<Action> {
     BINDINGS.iter().find(|b| b.keys.contains(&key)).map(|b| b.action)
 }
 
-/// `armed` is what a previous `m` armed; only the next `m` uses it.
+/// `armed` is what a previous `m` or `D` armed; only the next press of that key uses it.
 pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> Vec<Cmd> {
     match action {
         Action::GoTab(tab) => state.tab = tab,
@@ -333,6 +345,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         },
         Action::Attach => return attach_key(state),
         Action::Stop => return stop_key(state),
+        Action::Remove => return remove_key(state, armed),
         Action::Open => return open_key(state),
         Action::Merge => return merge_key(state, armed),
         Action::Refresh => {

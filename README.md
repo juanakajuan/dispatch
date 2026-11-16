@@ -85,6 +85,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
+| `D` | Remove the worktree and the branch of a session that has exited or whose PR is merged. Press `D` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
@@ -202,17 +203,24 @@ So you can quit dispatch, kill it, or restart the machine, and the sessions are 
 
 If a session's window is gone, the session shows as `exited`. If you check out another branch inside the worktree, the session disappears from the list until you switch back.
 
-## Remove a session's worktree by hand
+## Remove a session's worktree
 
-dispatch never deletes worktrees or branches. To remove one, from the main checkout:
+Press `D` twice on a session that has exited, or whose PR is merged. The first press says what dispatch will remove. The second press does it:
+
+1. It checks the worktree again. If the worktree has changes that are not committed, dispatch does nothing and the toast says so. If the branch has commits that no remote has, dispatch does nothing and the toast says how many. Commit or push, then press `D` twice again.
+2. It closes the session's window, if the window still exists.
+3. It runs `git worktree remove <path>`, without `--force`.
+4. It runs `git branch -D <branch>`. This is safe, because step 1 showed that every commit is on a remote. `-D` also removes the markers in `.git/config`, so the session leaves the list.
+
+A session that is running or waits for you is not removed. Press `x` to stop it first. The exception is a session whose PR is merged: `D` closes its window too. Any other key between the two presses cancels.
+
+To drop a worktree that has changes you do not want, remove it by hand from the main checkout:
 
 ```
 tmux kill-window -t '#142'        # if the window still exists
-git worktree remove .claude/worktrees/142
+git worktree remove --force .claude/worktrees/142
 git branch -D fix/142-retry-queue-drops-jobs
 ```
-
-`git branch -D` also removes the markers in `.git/config`, so the session leaves the list. Use `--force` on `git worktree remove` if the worktree has changes you want to drop.
 
 ## Check the code
 

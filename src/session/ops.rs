@@ -6,8 +6,9 @@ use super::mux::{Mux, Observed, hooks};
 use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use super::request::{Launch, StartRequest};
 use super::worktree::{WORKTREES_EXCLUDE, worktree_dir_for};
-use super::{AttachPlan, Sessions, StartOutcome, Workspace, git, start_argv};
+use super::{AttachPlan, RemoveOutcome, RemoveRefusal, Sessions, StartOutcome, Workspace, git, start_argv};
 use crate::domain::IssueNumber;
+use std::num::NonZeroU32;
 
 struct World<W> {
     worktrees: Vec<git::Worktree>,
@@ -131,6 +132,28 @@ pub(super) fn stop<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Resul
         Some((window, _)) => Ok(mux.stop(&window)?),
         None => Ok(()),
     }
+}
+
+/// Refuses before it changes anything: uncommitted work, then commits on no
+/// remote. Then it closes the window and removes the worktree and the branch.
+pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<RemoveOutcome, SessionError> {
+    let Some(row) = row(ws, mux, issue)? else {
+        return Err(SessionError::NoSession(issue));
+    };
+    let git_err = SessionError::Git;
+    if git::has_uncommitted(row.worktree.as_path()).map_err(git_err)? {
+        return Ok(RemoveOutcome::Refused(RemoveRefusal::Uncommitted));
+    }
+    let unpushed = git::unpushed_count(&ws.repo_root, &row.branch)?;
+    if let Some(count) = NonZeroU32::new(unpushed) {
+        return Ok(RemoveOutcome::Refused(RemoveRefusal::Unpushed(count)));
+    }
+    if let Some((window, _)) = &row.window {
+        mux.stop(window)?;
+    }
+    git::remove_worktree(&ws.repo_root, row.worktree.as_path()).map_err(git_err)?;
+    git::delete_branch(&ws.repo_root, &row.branch).map_err(git_err)?;
+    Ok(RemoveOutcome::Removed)
 }
 
 pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, text: &str) -> Result<(), SessionError> {

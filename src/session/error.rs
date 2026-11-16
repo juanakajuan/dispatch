@@ -15,6 +15,8 @@ pub enum SessionError {
     NoSession(IssueNumber),
     NotRunning(IssueNumber),
     NotVisibleAfterStart(IssueNumber),
+    /// `git rev-list --count` printed this instead of a number.
+    NotACount(String),
 }
 
 impl fmt::Display for SessionError {
@@ -26,6 +28,7 @@ impl fmt::Display for SessionError {
             SessionError::NoSession(issue) => write!(f, "no session for {issue}"),
             SessionError::NotRunning(issue) => write!(f, "{issue} has no running session"),
             SessionError::NotVisibleAfterStart(issue) => write!(f, "session for {issue} is not visible after start"),
+            SessionError::NotACount(raw) => write!(f, "git rev-list printed {raw:?} instead of a commit count"),
         }
     }
 }
