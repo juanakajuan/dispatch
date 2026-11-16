@@ -144,7 +144,7 @@ pub(super) fn fix_request(
     let branch = match &pr.head {
         PrBranch::Valid(name) => name.clone(),
         PrBranch::Unusable { raw, why } => {
-            return Err(format!("PR {} has the branch name {raw:?}: {why:?}", pr.number));
+            return Err(format!("PR {} has the branch name {raw:?}: {why}", pr.number));
         }
     };
     Ok(StartRequest {

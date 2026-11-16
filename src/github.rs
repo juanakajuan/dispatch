@@ -3,7 +3,7 @@
 
 use crate::domain::{
     Checks, CommitOid, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
-    PullRequest,
+    PullRequest, Unusable,
 };
 use crate::proc;
 use std::fmt;
@@ -29,7 +29,7 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, FetchError> {
 const ISSUE_FIELDS: &str = "number,title,labels,author,createdAt,updatedAt,comments";
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
+const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,isCrossRepository,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
 
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, FetchError> {
     let json = proc::run("gh", ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS], repo_root)
@@ -159,7 +159,11 @@ fn pr_from_wire(w: WirePr) -> Result<PullRequest, FetchError> {
         title: w.title,
         state,
         author: login(w.author),
-        head: PrBranch::parse(w.head_ref_name),
+        head: if w.is_cross_repository {
+            PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork }
+        } else {
+            PrBranch::parse(w.head_ref_name)
+        },
         head_oid: CommitOid::new(w.head_ref_oid),
         base: PrBranch::parse(w.base_ref_name),
         additions: w.additions,
@@ -255,6 +259,7 @@ struct WirePr {
     created_at: String,
     updated_at: String,
     head_ref_name: String,
+    is_cross_repository: bool,
     head_ref_oid: String,
     base_ref_name: String,
     additions: u32,
@@ -323,6 +328,8 @@ mod tests {
         assert_eq!((open.state, open.checks, open.mergeability), (PrState::Open, Checks::Pass, Mergeability::Clean));
         assert_eq!(open.closes, [IssueNumber(711)]);
         assert_eq!(open.head.display(), "feature/711-hardware-metadata");
+        assert_eq!(open.head.branch(), None, "a fork's branch is not on origin");
+        assert!(pr(14927).head.branch().is_some(), "a branch in the repo itself");
         assert_eq!(open.base.display(), "master");
         assert_eq!(pr(1002).updated_at.to_string(), "2026-10-12T08:33:48Z");
         assert_eq!(pr(1002).state, PrState::Merged);
@@ -346,7 +353,7 @@ mod tests {
     #[test]
     fn mixed_check_shapes_parse_by_typename() {
         let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"author":{"login":"a"},
-            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
@@ -372,7 +379,7 @@ mod tests {
     fn view_pr_reads_one_pr_with_the_list_fields() {
         proc::fake::install(|_| {
             Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
-                "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
+                "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
                 "closingIssuesReferences":[{"number":3}]}"#
                 .to_string())

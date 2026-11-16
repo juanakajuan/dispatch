@@ -124,20 +124,37 @@ pub enum BranchNameError {
     BadSequence(&'static str),
 }
 
-/// A PR's head or base branch as GitHub names it. A name that is not a
-/// valid `BranchName` stays `Unusable`: the PR still lists and can merge,
+/// A PR's head or base branch as GitHub names it. A branch dispatch can not
+/// check out from origin stays `Unusable`: the PR still lists and can merge,
 /// but no session can start on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrBranch {
     Valid(BranchName),
-    Unusable { raw: String, why: BranchNameError },
+    Unusable { raw: String, why: Unusable },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Unusable {
+    BadName(BranchNameError),
+    /// The head of a PR from a fork. `origin/<raw>` is some other branch,
+    /// or none.
+    InFork,
+}
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Unusable::BadName(e) => write!(f, "{e:?}"),
+            Unusable::InFork => f.write_str("the branch is in a fork"),
+        }
+    }
 }
 
 impl PrBranch {
     pub fn parse(raw: String) -> PrBranch {
         match BranchName::parse(&raw) {
             Ok(name) => PrBranch::Valid(name),
-            Err(why) => PrBranch::Unusable { raw, why },
+            Err(e) => PrBranch::Unusable { raw, why: Unusable::BadName(e) },
         }
     }
 

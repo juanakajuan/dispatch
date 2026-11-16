@@ -1,4 +1,5 @@
 use super::*;
+use crate::domain::{PrBranch, Unusable};
 
 fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
     cmds.iter()
@@ -173,6 +174,24 @@ fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
     assert_eq!(
         toast(&state),
         "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\": BadChar(' ')"
+    );
+}
+
+#[test]
+fn a_pr_from_a_fork_still_merges_but_never_gets_a_fix_session() {
+    let (mut state, _) = app();
+    let fork = PrBranch::Unusable { raw: "fix/3-x".to_string(), why: Unusable::InFork };
+    state.prs.items[0].head = fork.clone();
+    press(&mut state, key('m'));
+    assert_eq!(merges(&press(&mut state, key('m'))), [ASK], "a clean fork PR merges directly");
+    let fresh = PullRequest { head: fork, mergeability: Mergeability::Conflict, ..pr(10, "fix/3-x", &[3]) };
+    let outcome =
+        MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) };
+    let cmds = press(&mut state, Msg::Merged { ask: ASK_FIX, run: ran(Ok(outcome)) });
+    assert!(starts(&cmds).is_empty());
+    assert_eq!(
+        toast(&state),
+        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix/3-x\": the branch is in a fork"
     );
 }
 
