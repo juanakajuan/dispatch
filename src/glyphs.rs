@@ -115,7 +115,7 @@ mod tests {
                 i.radio_on,
                 i.radio_off,
             ] {
-                assert_eq!(crate::ui::cells(g), 1, "{set:?} glyph {g:?}");
+                assert_eq!(crate::ui::text::cells(g), 1, "{set:?} glyph {g:?}");
             }
         }
     }
