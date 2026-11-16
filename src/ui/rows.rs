@@ -185,13 +185,16 @@ pub(super) fn draw_rows(
         return;
     }
     let selected = app::list::selected_row(state);
-    let width = usize::from(area.width);
-    let name_w = (width * 36 / 100).clamp(20, 64);
     let age_w = 5;
-    let summary_w = width.saturating_sub(name_w + age_w + 6);
+    let parts: Vec<_> = rows.iter().map(|key| row_parts(state, *key, now, icons)).collect();
+    let (name_w, summary_w) = columns(
+        usize::from(area.width).saturating_sub(age_w + 6),
+        parts.iter().map(|(_, name, _, _)| cells(name)).max().unwrap_or(0),
+        parts.iter().map(|(_, _, summary, _)| summary.iter().map(|s| cells(&s.content)).sum()).max().unwrap_or(0),
+    );
     let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
     let mut last_group = None;
-    for key in &rows {
+    for (key, (glyph, name, summary, age)) in rows.iter().zip(parts) {
         let group = app::list::group_of(state, *key);
         if last_group != Some(group) {
             if last_group.is_some() {
@@ -203,7 +206,6 @@ pub(super) fn draw_rows(
             last_group = Some(group);
         }
         let on = selected == Some(*key);
-        let (glyph, name, summary, age) = row_parts(state, *key, now, icons);
         let marker = if on { span("❯", palette::ACCENT) } else { Span::raw(" ") };
         let name_style = if on { palette::HEADING } else { palette::PLAIN };
         let mut summary_text: Vec<Span<'static>> = Vec::new();
@@ -236,6 +238,14 @@ pub(super) fn draw_rows(
             hits.targets.push((rect, HitTarget::Row(key)));
         }
     }
+}
+
+/// Split `avail` cells between the name and summary columns. The name takes
+/// what it needs first; the summary keeps up to 40% when both cannot fit.
+fn columns(avail: usize, name_need: usize, summary_need: usize) -> (usize, usize) {
+    let summary_floor = summary_need.min(avail * 40 / 100);
+    let name_w = name_need.min(avail.saturating_sub(summary_floor)).max(avail.min(20));
+    (name_w, avail.saturating_sub(name_w))
 }
 
 fn group_style(group: Group) -> Style {
