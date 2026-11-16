@@ -7,7 +7,7 @@ use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{Sessions, StartOutcome};
+use crate::session::{RemoveOutcome, Sessions, StartOutcome};
 use crate::transcript::Summary;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
@@ -38,6 +38,10 @@ pub enum Msg {
     Resumed {
         issue: IssueNumber,
         result: Result<(), SessionError>,
+    },
+    Removed {
+        issue: IssueNumber,
+        result: Result<RemoveOutcome, SessionError>,
     },
     Attached(Result<(), AttachError>),
     Opened {
@@ -118,6 +122,9 @@ pub enum WriteJob {
     Start(StartRequest, Launch),
     Stop(IssueNumber),
     Resume(IssueNumber, Launch),
+    /// Close the window, then remove the worktree and branch, unless they hold
+    /// work that is not saved.
+    Remove(IssueNumber),
     /// Save one setting to the config file.
     SaveConfig {
         setting: Setting,

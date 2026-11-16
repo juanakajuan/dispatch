@@ -35,6 +35,7 @@ use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 
 /// One issue being worked in one worktree. Derived, never stored.
@@ -70,6 +71,22 @@ pub type Sessions = BTreeMap<IssueNumber, Session>;
 pub struct StartOutcome {
     pub session: Session,
     pub warnings: Vec<StartWarning>,
+}
+
+/// What `Workspace::remove` did. A refusal is an answer, not an error: it
+/// changed nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoveOutcome {
+    Removed,
+    Refused(RemoveRefusal),
+}
+
+/// Why the worktree stays. Removing it would lose work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemoveRefusal {
+    Uncommitted,
+    /// This many commits of the branch are on no remote.
+    Unpushed(NonZeroU32),
 }
 
 /// How the shell attaches. Pure data, so the choice is unit tested.
@@ -136,6 +153,13 @@ impl Workspace {
     /// already gone counts as success.
     pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
         each_backend!(&self.mux, mux => ops::stop(self, mux, issue))
+    }
+
+    /// Closes the window, then removes the worktree and the branch. Refuses
+    /// when the worktree has uncommitted changes or the branch has commits
+    /// that no remote has. Never forces.
+    pub fn remove(&self, issue: IssueNumber) -> Result<RemoveOutcome, SessionError> {
+        each_backend!(&self.mux, mux => ops::remove(self, mux, issue))
     }
 
     /// Types `text` into the session's Claude prompt and submits it. Refuses

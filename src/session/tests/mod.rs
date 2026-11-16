@@ -7,6 +7,7 @@ mod hc;
 mod herdr;
 mod join;
 mod plan;
+mod remove;
 mod request;
 mod start_argv;
 mod tmux;

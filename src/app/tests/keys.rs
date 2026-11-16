@@ -14,7 +14,10 @@ fn key_bar_follows_the_context() {
     assert!(names(&state).contains(&"a resume".to_string()));
     press(&mut state, key('2'));
     assert!(names(&state).contains(&"enter go to issue".to_string()));
-    assert_eq!(names(&state), ["? keys", "enter go to issue", "a resume", "m merge", "o open on GitHub", "q quit"]);
+    assert_eq!(
+        names(&state),
+        ["? keys", "enter go to issue", "a resume", "D remove", "m merge", "o open on GitHub", "q quit"]
+    );
 }
 
 #[test]

@@ -19,6 +19,7 @@ use merge::{Armed, merged};
 use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
+use remove::removed;
 use sessions::{attached, resumed, sent, started, stopped};
 use toast::Toast;
 
@@ -31,6 +32,7 @@ pub mod merge;
 pub mod mouse;
 pub mod msg;
 pub mod open;
+pub mod remove;
 pub mod sessions;
 #[cfg(test)]
 mod tests;
@@ -90,8 +92,8 @@ pub struct State {
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
-    /// Set by an `m` that waits for one more `m` on the same PR. Any other
-    /// key clears it.
+    /// Set by an `m` or `D` that waits for one more press of the same key on
+    /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
     pub summaries: std::collections::BTreeMap<IssueNumber, crate::transcript::Summary>,
 }
@@ -160,6 +162,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Started { issue, result } => started(state, issue, result),
         Msg::Stopped { issue, result } => stopped(state, issue, result),
         Msg::Resumed { issue, result } => resumed(state, issue, result),
+        Msg::Removed { issue, result } => removed(state, issue, result),
         Msg::Opened { target, result } => opened(state, target, result),
         Msg::PageUrl { target, result } => page_url(state, target, result),
         Msg::Copied { target, result } => copied(state, target, result),

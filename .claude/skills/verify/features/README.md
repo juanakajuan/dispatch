@@ -47,7 +47,7 @@ Each feature file starts with an H1 title and one paragraph about the user-visib
 
 - [Issue and PR lists](./lists.md): tabs, fetch freshness, refresh, filter, sort, PR icons on issue rows.
 - [Start a session](./start-session.md): the start dialog, its fields, and the worktree, marker, and window it makes.
-- [Sessions](./sessions.md): session states, attach, stop, and resume.
+- [Sessions](./sessions.md): session states, attach, stop, resume, and remove.
 - [Merge](./merge.md): the two-press `m` flow, direct merge, and the handoff to an agent.
 - [Open on GitHub](./open-on-github.md): `o` on an issue, a PR, or a session.
 - [Settings and keys](./settings-and-keybinds.md): the `,` settings menu, the `?` keys menu, and the key bar.

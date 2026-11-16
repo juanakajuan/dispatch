@@ -1,7 +1,7 @@
 //! git adapter. Private to `session`. Parsers are pure and tested on text
 //! captured from git 2.56.
 
-use super::error::{FsAction, FsError, GitError};
+use super::error::{FsAction, FsError, GitError, SessionError};
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
@@ -147,6 +147,32 @@ pub(super) fn add_worktree(
 pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), ProcError> {
     let key = format!("branch.{}.dispatch-issue", branch.as_str());
     git(root, ["config".to_string(), key, issue.0.to_string()]).map(|_| ())
+}
+
+/// Whether `git status --porcelain` in the worktree lists any change,
+/// untracked files included.
+pub(super) fn has_uncommitted(worktree: &Path) -> Result<bool, ProcError> {
+    git(worktree, ["status", "--porcelain"]).map(|t| !t.trim().is_empty())
+}
+
+/// How many commits of `branch` are on no remote-tracking ref.
+/// Output that is not a number is an error, never zero: zero lets the
+/// caller delete the branch.
+pub(super) fn unpushed_count(root: &Path, branch: &BranchName) -> Result<u32, SessionError> {
+    let out = git(root, ["rev-list", "--count", branch.as_str(), "--not", "--remotes"]).map_err(SessionError::Git)?;
+    out.trim().parse().map_err(|_| SessionError::NotACount(out.trim().to_string()))
+}
+
+/// No `--force`: git itself refuses a worktree with changes.
+pub(super) fn remove_worktree(root: &Path, worktree: &Path) -> Result<(), ProcError> {
+    git(root, ["worktree".as_ref(), "remove".as_ref(), worktree.as_os_str()]).map(|_| ())
+}
+
+/// `-D`, because the caller proved that every commit is on a remote, and
+/// `-d` refuses a squash-merged branch. It deletes the `branch.<b>` config
+/// section too, so the marker goes with it.
+pub(super) fn delete_branch(root: &Path, branch: &BranchName) -> Result<(), ProcError> {
+    git(root, ["branch", "-D", branch.as_str()]).map(|_| ())
 }
 
 #[cfg(test)]

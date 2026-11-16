@@ -18,6 +18,8 @@ pub enum Armed {
     /// The check found a problem and no running session is on the PR's
     /// branch. The next `m` starts `req`, a session that fixes it.
     Fix { pr: PrNumber, req: StartRequest },
+    /// The next `D` removes the worktree and branch of this issue's session.
+    Remove(IssueNumber),
 }
 
 /// Who fixes a PR that can not merge.

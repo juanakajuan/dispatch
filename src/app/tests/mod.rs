@@ -33,6 +33,7 @@ mod menus;
 mod merge;
 mod open;
 mod refresh;
+mod remove;
 mod sessions;
 mod sort;
 
