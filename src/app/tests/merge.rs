@@ -236,16 +236,21 @@ fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
 }
 
 #[test]
-fn a_direct_merge_leaves_an_exited_or_unrelated_session_alone() {
+fn a_direct_merge_closes_the_window_of_an_exited_session_on_the_pr_branch() {
     let (mut state, _) = app();
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    let cmds = press(&mut state, merged_squash());
+    assert_eq!(stops(&cmds), [IssueNumber(3)]);
+    assert_eq!(toast(&state), "Merged PR #10 (squash) and closed #3's window");
+}
+
+#[test]
+fn a_direct_merge_leaves_a_session_on_another_branch_alone() {
+    let (mut state, _) = app();
     state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
     let cmds = press(&mut state, merged_squash());
-    assert!(stops(&cmds).is_empty(), "#3's window is gone and #2 is on another branch");
+    assert!(stops(&cmds).is_empty(), "#2 is on another branch");
     assert_eq!(toast(&state), "Merged PR #10 (squash)");
-
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
-    assert!(stops(&press(&mut state, merged_squash())).is_empty(), "no window");
 }
 
 #[test]
