@@ -242,8 +242,20 @@ pub static BINDINGS: &[Binding] = &[
     },
 ];
 
-/// The key bar for the current context: (keys, description).
-pub fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
+/// The hints the footer shows for the focus: (keys, what they do).
+pub fn footer_hints(state: &State) -> Vec<(&'static str, &'static str)> {
+    match &state.focus {
+        Focus::Filter => vec![("enter", "keep"), ("esc", "clear")],
+        Focus::Dialog(_) => vec![("ctrl-s", "start"), ("tab", "next field"), ("esc", "cancel")],
+        Focus::Settings(menu) if menu.edit.is_some() => vec![("enter", "save"), ("esc", "cancel")],
+        Focus::Settings(_) => vec![("j/k", "move"), ("enter", "change"), ("esc", "close")],
+        Focus::Keybinds { .. } => vec![("j/k", "scroll"), ("esc", "close")],
+        Focus::List => key_bar(state),
+    }
+}
+
+/// The key bar for the list: (keys, description).
+pub(super) fn key_bar(state: &State) -> Vec<(&'static str, &'static str)> {
     let session = current_session(state).map(Session::state);
     let shown = |when: When| match when {
         When::Always => true,

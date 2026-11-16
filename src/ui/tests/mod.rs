@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod dialog;
+mod footer;
 mod menus;
 mod screen;
 mod text;
