@@ -8,6 +8,7 @@ use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState,
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::merge::{Consent, MergeAsk, MergeError};
+use crate::session::SessionState;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use std::fmt;
 
@@ -210,9 +211,13 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
     match result {
         Ok(MergeOutcome::Merged(method)) => {
             let mut cmds = Vec::new();
-            match live_session_on_pr(state, ask.pr) {
-                Some(issue) => {
-                    toast::info(state, format!("Merged PR {} ({method}) and stopped {issue}'s session", ask.pr));
+            match session_on_pr(state, ask.pr) {
+                Some((issue, session)) => {
+                    let closed = match session {
+                        SessionState::Running | SessionState::NeedsYou => format!("stopped {issue}'s session"),
+                        SessionState::Exited => format!("closed {issue}'s window"),
+                    };
+                    toast::info(state, format!("Merged PR {} ({method}) and {closed}", ask.pr));
                     cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
                 }
                 None => toast::info(state, format!("Merged PR {} ({method})", ask.pr)),
@@ -238,11 +243,12 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
     }
 }
 
-/// The issue of the session with a live window on the PR's head branch. A
-/// merged PR needs no agent, so `merged` stops it like `x` does.
-pub(super) fn live_session_on_pr(state: &State, pr: PrNumber) -> Option<IssueNumber> {
+/// The session on the PR's head branch, live or exited. A merged PR needs no
+/// agent, so the merge stops it like `x` does. An exited session still gets
+/// the stop, because its terminal or space can outlive Claude.
+fn session_on_pr(state: &State, pr: PrNumber) -> Option<(IssueNumber, SessionState)> {
     let head = state.prs.items.iter().find(|p| p.number == pr)?.head.branch()?;
-    state.sessions.values().find(|s| &s.branch == head && s.state.is_live()).map(|s| s.issue)
+    state.sessions.values().find(|s| &s.branch == head).map(|s| (s.issue, s.state))
 }
 
 /// The check found `problem` on `pr`, the PR as GitHub showed it now.

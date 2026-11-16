@@ -84,8 +84,14 @@ impl Mux for Hc {
         self.open(repo, dir, issue, argv)
     }
 
+    /// The app shows a space for as long as one terminal carries its label,
+    /// so ending only Claude's terminal would leave the space open, and any
+    /// terminal the user opened there with it.
     fn stop(&self, window: &Pane) -> Result<(), MuxError> {
-        stop(&window.address)
+        let label = format!("herdr.space={}", window.space);
+        let text = hc(["ls", "--all", "--json", "--label", label.as_str()])?;
+        let list: TerminalList = serde_json::from_str(&text).map_err(|e| unexpected_json(&e))?;
+        list.terminals.iter().try_for_each(|row| stop(&row.address))
     }
 
     /// `--force` types even when Claude waits on a dialog.

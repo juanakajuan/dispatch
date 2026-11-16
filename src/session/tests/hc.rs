@@ -13,6 +13,8 @@ struct HcSim {
     git: GitWorld,
     terminals: Vec<(&'static str, &'static str, Option<&'static str>)>,
     gone: bool,
+    /// Other terminals that carry the space label, such as one the user opened.
+    space_mates: Vec<&'static str>,
 }
 
 fn not_found() -> crate::proc::ProcError {
@@ -26,9 +28,12 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
         if let Some(answer) = s.git.answer(call, &base) {
             answer
         } else if call.starts_with("hc ls") {
+            let mates = if call.contains("--label herdr.space=") { s.space_mates.as_slice() } else { &[] };
             let rows: Vec<_> = s
                 .terminals
                 .iter()
+                .map(|(a, state, status)| (*a, *state, *status))
+                .chain(mates.iter().map(|a| (*a, "live", Some("idle"))))
                 .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status}))
                 .collect();
             Ok(serde_json::json!({"hidden_finished": 0, "terminals": rows}).to_string())
@@ -126,7 +131,12 @@ fn hc_resume_of_a_dead_terminal_removes_it_then_runs_continue_in_the_same_space(
     let base = temp_dir("hc-resume");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", Some("done"))], gone: false };
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "finished", Some("done"))],
+        gone: false,
+        ..HcSim::default()
+    };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     ws.resume(IssueNumber(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")]);
@@ -148,7 +158,12 @@ fn hc_resume_of_a_live_terminal_does_nothing() {
     let base = temp_dir("hc-resume-live");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "live", Some("working"))], gone: false };
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "live", Some("working"))],
+        gone: false,
+        ..HcSim::default()
+    };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     ws.resume(IssueNumber(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), Vec::<String>::new());
@@ -159,7 +174,12 @@ fn hc_stop_kills_then_removes_and_keeps_the_worktree() {
     let base = temp_dir("hc-stop");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "live", Some("working"))], gone: false };
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "live", Some("working"))],
+        gone: false,
+        ..HcSim::default()
+    };
     let sim = Rc::new(RefCell::new(sim));
     install_hc_world(base.clone(), Rc::clone(&sim));
     ws.stop(IssueNumber(142)).expect("stop");
@@ -172,11 +192,28 @@ fn hc_stop_kills_then_removes_and_keeps_the_worktree() {
 }
 
 #[test]
+fn hc_stop_ends_every_terminal_in_the_space() {
+    let base = temp_dir("hc-stop-space");
+    let ws = hc_workspace(&base);
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "finished", None)],
+        space_mates: vec!["t7"],
+        ..HcSim::default()
+    };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    ws.stop(IssueNumber(142)).expect("stop");
+    assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4", "hc kill t7", "hc rm t7"]);
+}
+
+#[test]
 fn hc_stop_of_a_finished_terminal_still_removes_it() {
     let base = temp_dir("hc-stop-finished");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false };
+    let sim =
+        HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     ws.stop(IssueNumber(142)).expect("stop");
     assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4"]);
@@ -188,7 +225,7 @@ fn hc_observe_prefers_a_live_terminal_over_a_newer_finished_one() {
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
     let terminals = vec![("t2", "live", Some("working")), ("t3", "finished", Some("done"))];
-    let sim = HcSim { git: GitWorld::started(), terminals, gone: false };
+    let sim = HcSim { git: GitWorld::started(), terminals, gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
     assert_eq!(
@@ -207,7 +244,12 @@ fn hc_send_goes_to_the_terminal() {
     let base = temp_dir("hc-send");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "live", Some("idle"))], gone: false };
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "live", Some("idle"))],
+        gone: false,
+        ..HcSim::default()
+    };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     ws.send(IssueNumber(142), "merge it").expect("send");
     assert_eq!(hc_calls(), ["hc send --force t4 merge it"]);
@@ -218,7 +260,8 @@ fn hc_send_refuses_a_finished_terminal() {
     let base = temp_dir("hc-send-dead");
     let ws = hc_workspace(&base);
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false };
+    let sim =
+        HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     assert!(ws.send(IssueNumber(142), "hi").is_err());
 }
@@ -229,7 +272,12 @@ fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
     let mut ws = hc_workspace(&base);
     let dir = base.join("orbit/.claude/worktrees/142");
     std::fs::create_dir_all(&dir).expect("mkdir");
-    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "live", Some("working"))], gone: false };
+    let sim = HcSim {
+        git: GitWorld::started(),
+        terminals: vec![("t4", "live", Some("working"))],
+        gone: false,
+        ..HcSim::default()
+    };
     let sim = Rc::new(RefCell::new(sim));
     install_hc_world(base.clone(), Rc::clone(&sim));
     let id = IssueNumber(142);

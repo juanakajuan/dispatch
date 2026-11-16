@@ -150,7 +150,8 @@ impl Workspace {
     }
 
     /// Kills the window. The worktree and branch stay. A window that is
-    /// already gone counts as success.
+    /// already gone counts as success. Under hc this ends every terminal in
+    /// the worktree's space, as herdr closes its whole workspace.
     pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
         each_backend!(&self.mux, mux => ops::stop(self, mux, issue))
     }
