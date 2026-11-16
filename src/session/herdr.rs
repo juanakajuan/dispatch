@@ -1,6 +1,7 @@
 //! dispatch runs Claude by typing a launcher script's path into the
 //! workspace's pane, because `herdr agent start` refuses a multi-line prompt.
 
+use super::start_argv::herdr_worktree_create_args;
 use super::{WindowId, WindowObs};
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
 use crate::proc::{self, ProcError};
@@ -208,7 +209,7 @@ fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<WindowObs> {
         .collect()
 }
 
-fn label(issue: IssueNumber) -> String {
+pub(super) fn label(issue: IssueNumber) -> String {
     format!("#{}", issue.0)
 }
 
@@ -265,10 +266,7 @@ pub(super) fn create_worktree(
     issue: IssueNumber,
 ) -> Result<(), String> {
     let source = source(place, repo_root)?;
-    let (dir, label) = (dir.to_string_lossy(), label(issue));
-    let mut args = vec!["worktree", "create", "--workspace", source.as_str(), "--branch", branch.as_str()];
-    args.extend(from.into_iter().flat_map(|base| ["--base", base]));
-    args.extend(["--path", dir.as_ref(), "--label", label.as_str(), "--no-focus"]);
+    let args = herdr_worktree_create_args(source.as_str(), &dir.to_string_lossy(), branch.as_str(), from, issue);
     herdr(args).map(|_| ())
 }
 

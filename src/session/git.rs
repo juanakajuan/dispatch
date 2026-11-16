@@ -151,12 +151,7 @@ pub(super) fn add_worktree(
     branch: &BranchName,
     create_from: Option<&str>,
 ) -> Result<(), String> {
-    let dir = dir.to_string_lossy();
-    match create_from {
-        Some(base) => text(root, ["worktree", "add", dir.as_ref(), "-b", branch.as_str(), base]),
-        None => text(root, ["worktree", "add", dir.as_ref(), branch.as_str()]),
-    }
-    .map(|_| ())
+    text(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
 }
 
 pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), String> {

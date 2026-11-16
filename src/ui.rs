@@ -11,8 +11,7 @@ use crate::app::{
 use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::rules;
-use crate::session::{Backend, Session, SessionState};
+use crate::session::{Launch, Session, SessionState};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -294,23 +293,19 @@ fn empty_text(state: &State) -> String {
 fn preview(state: &State, dialog: &StartDialog) -> Vec<String> {
     let branch = dialog.branch.lines().join("");
     let prompt = dialog.prompt.lines().join("\n");
-    let args = rules::claude_args(dialog.mode, prompt.trim(), None);
-    let shown: Vec<String> = state
-        .config
-        .claude_command
-        .argv(&args)
+    let launch = Launch::from_config(&state.config);
+    let commands =
+        state.context.start_preview.commands(dialog.issue, branch.trim(), dialog.mode, prompt.trim(), &launch);
+    commands
         .into_iter()
-        .map(|a| if a.contains([' ', '\n', '"']) { format!("{:?}", one_line(&a)) } else { a })
-        .collect();
-    let base = if state.context.base.is_empty() { "origin/main" } else { state.context.base.as_str() };
-    let (dir, n, branch) = (rules::WORKTREES_DIR, dialog.issue.0, branch.trim());
-    let create = match state.context.backend {
-        Backend::Tmux | Backend::Hc => format!("git worktree add {dir}/{n} -b {branch} {base}"),
-        Backend::Herdr => {
-            format!("herdr worktree create --branch {branch} --base {base} --path {dir}/{n} --label #{n}")
-        }
-    };
-    vec![create, shown.join(" ")]
+        .map(|argv| {
+            let shown: Vec<String> = argv
+                .into_iter()
+                .map(|a| if a.contains([' ', '\n', '"']) { format!("{:?}", one_line(&a)) } else { a })
+                .collect();
+            shown.join(" ")
+        })
+        .collect()
 }
 
 /// The "Runs" label and each preview command, word-wrapped to `width` cells.
@@ -515,7 +510,7 @@ mod tests {
     use crate::app::{Context, Msg};
     use crate::domain::{BranchName, WorktreePath};
     use crate::glyphs::IconSet;
-    use crate::session::{Window, WindowId};
+    use crate::session::{StartPreview, Window, WindowId};
     use crate::testutil::{issue, pr};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
@@ -560,7 +555,7 @@ mod tests {
         let (mut state, _) = app::init(
             Instant::now(),
             Config::default(),
-            Context { repo_name: "orbit".to_string(), base: "origin/main".to_string(), ..Context::default() },
+            Context { repo_name: "orbit".to_string(), ..Context::default() },
         );
         state.issues.items = vec![
             issue(
@@ -791,7 +786,7 @@ mod tests {
             previewed_commands(&screen),
             [
                 "git worktree add .claude/worktrees/2 -b docs/2-docs origin/main".to_string(),
-                format!("claude {prompt:?}"),
+                format!("claude --settings \"<waiting hooks>\" {prompt:?}"),
             ],
             "the whole commands, end of the prompt included, in\n{screen}"
         );
@@ -801,12 +796,12 @@ mod tests {
     #[test]
     fn dialog_previews_the_herdr_command_on_herdr() {
         let mut state = full_state();
-        state.context.backend = Backend::Herdr;
+        state.context.start_preview = StartPreview::herdr_inside("w-orbit");
         send(&mut state, KeyCode::Char('j'));
         send(&mut state, KeyCode::Char('s'));
         let screen = text(&render(&state, 120, 30));
-        let want =
-            "herdr worktree create --branch docs/2-docs --base origin/main --path .claude/worktrees/2 --label #2";
+        let want = "herdr worktree create --workspace w-orbit --branch docs/2-docs --base origin/main \
+                    --path .claude/worktrees/2 --label #2 --no-focus";
         assert_eq!(previewed_commands(&screen).first().map(String::as_str), Some(want), "{screen}");
         assert!(!screen.contains("git worktree add"), "{screen}");
     }

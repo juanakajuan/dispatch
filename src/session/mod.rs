@@ -17,7 +17,11 @@
 mod git;
 mod hc;
 mod herdr;
+mod start_argv;
 mod tmux;
+
+pub use start_argv::StartPreview;
+use start_argv::claude_argv;
 
 use crate::config::{ClaudeCommand, Config, Multiplexer};
 use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
@@ -53,14 +57,6 @@ struct WindowObs {
     worktree: WorktreePath,
     dead: bool,
     waiting: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Backend {
-    #[default]
-    Tmux,
-    Herdr,
-    Hc,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -306,17 +302,8 @@ impl Workspace {
         &self.repo_root
     }
 
-    pub fn backend(&self) -> Backend {
-        match self.mux {
-            Mux::Tmux(_) => Backend::Tmux,
-            Mux::Herdr(_) => Backend::Herdr,
-            Mux::Hc(_) => Backend::Hc,
-        }
-    }
-
-    /// `origin/main`, for the dialog preview.
-    pub fn base(&self) -> &str {
-        &self.base
+    pub fn start_preview(&self) -> StartPreview {
+        StartPreview { mux: self.mux.clone(), base: self.base.clone() }
     }
 
     /// Three subprocesses (worktree list, config regexp, tmux list-windows),
@@ -595,7 +582,7 @@ fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Re
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
         name: format!("#{}", req.issue.0),
-        argv: layout.claude.argv(&rules::claude_args(req.mode, &req.prompt, layout.hooks)),
+        argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
     };
     let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
     let add = |branch: BranchName, from: Option<String>| Step::AddWorktree { dir: target.clone(), branch, from };
@@ -1605,8 +1592,6 @@ mod tests {
                 Err(fake::fail("hc", 11, r#"{"error":{"kind":"finished"}}"#))
             } else if call.starts_with("hc rm") || call.starts_with("hc kill") {
                 if s.gone { Err(not_found()) } else { Ok("{}".to_string()) }
-            } else if call.starts_with("hc read") {
-                Ok("one\ntwo\n\n\n".to_string())
             } else if call.contains("dispatch-issue 142") {
                 s.marked = true;
                 Ok(String::new())
@@ -1626,18 +1611,9 @@ mod tests {
         fake::calls()
             .into_iter()
             .filter(|c| {
-                [
-                    "git fetch",
-                    "git worktree add",
-                    "git config branch",
-                    "hc run",
-                    "hc rm",
-                    "hc kill",
-                    "hc send",
-                    "hc read",
-                ]
-                .iter()
-                .any(|p| c.starts_with(p))
+                ["git fetch", "git worktree add", "git config branch", "hc run", "hc rm", "hc kill", "hc send"]
+                    .iter()
+                    .any(|p| c.starts_with(p))
             })
             .collect()
     }

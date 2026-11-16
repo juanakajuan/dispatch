@@ -181,13 +181,12 @@ pub enum HitTarget {
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(Default))]
 pub struct Context {
     pub repo_name: String,
-    /// `origin/main`
-    pub base: String,
     pub open_with: OpenWith,
-    pub backend: crate::session::Backend,
+    pub start_preview: crate::session::StartPreview,
 }
 
 /// What `o` does with a page. Over SSH, `gh --web` opens a browser on the
