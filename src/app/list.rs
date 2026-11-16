@@ -46,6 +46,7 @@ pub enum SessionGroup {
     NeedsYou,
     Working,
     Exited,
+    Merged,
 }
 
 impl Group {
@@ -54,7 +55,9 @@ impl Group {
             Group::Issue(IssueGroup::NeedsYou) | Group::Session(SessionGroup::NeedsYou) => "Needs you",
             Group::Issue(IssueGroup::Working) | Group::Session(SessionGroup::Working) => "Working",
             Group::Issue(IssueGroup::InReview) => "In review",
-            Group::Issue(IssueGroup::Merged) | Group::Pr(PrGroup::Merged) => "Merged",
+            Group::Issue(IssueGroup::Merged) | Group::Pr(PrGroup::Merged) | Group::Session(SessionGroup::Merged) => {
+                "Merged"
+            }
             Group::Issue(IssueGroup::Open) => "Open",
             Group::Pr(PrGroup::ReadyForReview) => "Ready for review",
             Group::Pr(PrGroup::Draft) => "Draft",
@@ -67,11 +70,13 @@ impl Group {
 pub fn group_of(state: &State, key: RowKey) -> Group {
     match key {
         RowKey::Session(n) => Group::Session(match activity(state, n) {
+            _ if session_merged(state, n) => SessionGroup::Merged,
             Some(SessionState::NeedsYou) => SessionGroup::NeedsYou,
             Some(SessionState::Running) => SessionGroup::Working,
             Some(SessionState::Exited) | None => SessionGroup::Exited,
         }),
         RowKey::Issue(n) => Group::Issue(match activity(state, n) {
+            _ if session_merged(state, n) => IssueGroup::Merged,
             Some(SessionState::NeedsYou) => IssueGroup::NeedsYou,
             Some(SessionState::Running) => IssueGroup::Working,
             Some(SessionState::Exited) | None => match lead_pr(state, n).map(|p| p.state) {
@@ -317,6 +322,12 @@ pub fn lead_pr(state: &State, n: IssueNumber) -> Option<&PullRequest> {
         PrState::Closed => None,
     };
     prs_closing(state, n).filter_map(|p| Some(((rank(p)?, p.number), p))).max_by_key(|(k, _)| *k).map(|(_, p)| p)
+}
+
+/// Issue `n` has a session whose branch has a merged PR. Its work is done,
+/// whatever its window still does.
+pub fn session_merged(state: &State, n: IssueNumber) -> bool {
+    state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).is_some_and(|pr| pr.state == PrState::Merged)
 }
 
 /// A PR whose head branch equals the session branch.

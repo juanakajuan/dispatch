@@ -90,6 +90,7 @@ pub(super) fn row_parts(
     icons: &Icons,
 ) -> (Span<'static>, String, Vec<Span<'static>>, String) {
     let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(|s| s.state), state.starting.contains(&n)) {
+        _ if app::list::session_merged(state, n) => Some(span(icons.pr_merged, palette::MERGED)),
         (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
         (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
         (Some(SessionState::Exited), _) => Some(span(icons.exited, palette::EXITED)),
@@ -256,6 +257,6 @@ fn group_style(group: Group) -> Style {
         | Group::Pr(PrGroup::ReadyForReview | PrGroup::Draft) => palette::HEADING,
         Group::Issue(IssueGroup::InReview | IssueGroup::Merged | IssueGroup::Open)
         | Group::Pr(PrGroup::Merged | PrGroup::Closed)
-        | Group::Session(SessionGroup::Exited) => palette::DIM,
+        | Group::Session(SessionGroup::Exited | SessionGroup::Merged) => palette::DIM,
     }
 }

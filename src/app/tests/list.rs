@@ -203,3 +203,23 @@ fn double_click_on_a_session_row_attaches_to_it() {
     let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
     assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
 }
+
+#[test]
+fn a_session_whose_branch_pr_merged_sits_in_a_merged_group_after_exited() {
+    let (mut state, _) = app();
+    state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
+    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
+    state.prs.items[0].state = PrState::Merged;
+    press(&mut state, key('3'));
+    assert_eq!(
+        visible_rows(&state),
+        [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(1)), RowKey::Session(IssueNumber(3))],
+        "a merged PR outranks the window's state"
+    );
+    let group = group_of(&state, RowKey::Session(IssueNumber(3)));
+    assert_eq!((group, group.name()), (Group::Session(SessionGroup::Merged), "Merged"));
+    assert_eq!(group_of(&state, RowKey::Issue(IssueNumber(3))), Group::Issue(IssueGroup::Merged));
+    press(&mut state, key('S'));
+    assert_eq!(visible_rows(&state).last(), Some(&RowKey::Session(IssueNumber(3))), "and in number order");
+}
