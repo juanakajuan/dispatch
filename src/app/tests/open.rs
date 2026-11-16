@@ -3,7 +3,7 @@ use super::*;
 fn opens(cmds: &[Cmd]) -> Vec<GithubRef> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Open(t)) => Some(*t),
+            Cmd::Job(Job::Read(ReadJob::Open(t))) => Some(*t),
             _ => None,
         })
         .collect()
@@ -59,7 +59,7 @@ fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
     state.context.open_with = OpenWith::Clipboard;
     press(&mut state, key('j'));
     let cmds = press(&mut state, key('o'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPageUrl(GithubRef::Issue(IssueNumber(2))))]));
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::FetchPageUrl(GithubRef::Issue(IssueNumber(2)))))]));
     assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copying the issue #2 URL"));
     let bar: Vec<_> = key_bar(&state).into_iter().filter(|(k, _)| *k == "o").collect();
     assert_eq!(bar, [("o", "copy URL")]);

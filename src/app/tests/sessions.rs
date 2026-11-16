@@ -18,7 +18,7 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
 
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, key('a'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Resume(n, _))] if *n == IssueNumber(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == IssueNumber(3)));
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("claude --continue")));
 }
 
@@ -30,7 +30,7 @@ fn x_stops_only_a_live_session_by_issue_number() {
     assert!(press(&mut state, key('x')).is_empty(), "exited has nothing to stop");
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('x'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Stop(n))] if *n == IssueNumber(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Stop(n)))] if *n == IssueNumber(3)));
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn results_of_writes_clear_starting_toast_and_ask_for_an_observation() {
     let cmds = press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err(git_error("boom")) });
     assert!(state.starting.is_empty());
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("boom")));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::ObserveSessions)]));
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::ObserveSessions))]));
     let again = press(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
     assert!(again.is_empty(), "an observation is already in flight");
 }

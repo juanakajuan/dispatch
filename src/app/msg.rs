@@ -79,24 +79,39 @@ pub enum Cmd {
     Quit,
 }
 
-/// Runs on a worker thread and comes back as exactly one `Msg`. `Stop` and
-/// `Resume` carry the issue, not the session, because the worker observes
-/// again before it acts, so a stale row can not aim at a reused window id.
+/// Runs on a worker thread and comes back as exactly one `Msg`. The shell
+/// runs a read on its own short thread and a write in order on one writer
+/// thread.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Job {
+    Read(ReadJob),
+    Write(WriteJob),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadJob {
     FetchIssues,
     FetchPrs,
     ObserveSessions,
-    Start(StartRequest, Launch),
-    Stop(IssueNumber),
-    Resume(IssueNumber, Launch),
     /// Open the page in the browser. No inflight flag: two presses may open
     /// two tabs, which is what the user asked for.
     Open(GithubRef),
     /// Look up the page URL, for `OpenWith::Clipboard`.
     FetchPageUrl(GithubRef),
-    /// Save one setting to the config file. It runs on the writer thread, so
-    /// two quick saves can not interleave their read and write.
+}
+
+/// Writes share one thread, because two concurrent `git config` writes can
+/// fail on the `.git/config` lock, two quick saves could interleave their
+/// read and write, and a second merge must see the first one done. `Stop`
+/// and `Resume` carry the issue, not the session, because the worker
+/// observes again before it acts, so a stale row can not aim at a reused
+/// window id.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WriteJob {
+    Start(StartRequest, Launch),
+    Stop(IssueNumber),
+    Resume(IssueNumber, Launch),
+    /// Save one setting to the config file.
     SaveConfig {
         setting: Setting,
         config: Config,

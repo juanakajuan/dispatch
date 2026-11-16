@@ -1,5 +1,5 @@
 use super::keys::{Key, key_of};
-use super::msg::{Cmd, Job};
+use super::msg::{Cmd, Job, WriteJob};
 use super::{Focus, State};
 use crate::config::settings::{Change, SETTINGS, Setting};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -76,5 +76,5 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 
 /// `state.config` already holds the new value. Save it.
 pub(super) fn changed(state: &State, setting: Setting) -> Vec<Cmd> {
-    vec![Cmd::Job(Job::SaveConfig { setting, config: state.config.clone() })]
+    vec![Cmd::Job(Job::Write(WriteJob::SaveConfig { setting, config: state.config.clone() }))]
 }

@@ -1,7 +1,7 @@
 use super::dialog::open_dialog;
 use super::feed::observe_now;
 use super::list::{RowKey, Tab, current_session, selected_row};
-use super::msg::{Cmd, Job};
+use super::msg::{Cmd, Job, WriteJob};
 use super::toast::say;
 use super::{Focus, State};
 use crate::domain::IssueNumber;
@@ -44,7 +44,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         vec![Cmd::Attach(issue)]
     } else {
         say(state, format!("Resuming {issue} with claude --continue"));
-        vec![Cmd::Job(Job::Resume(issue, Launch::from_config(&state.config)))]
+        vec![Cmd::Job(Job::Write(WriteJob::Resume(issue, Launch::from_config(&state.config))))]
     }
 }
 
@@ -52,7 +52,7 @@ pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
     let live = current_session(state).filter(|s| s.state.is_live());
     if let Some(issue) = live.map(|s| s.issue) {
         say(state, format!("Stopping {issue}"));
-        return vec![Cmd::Job(Job::Stop(issue))];
+        return vec![Cmd::Job(Job::Write(WriteJob::Stop(issue)))];
     }
     say(state, "No running session here.".to_string());
     Vec::new()

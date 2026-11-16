@@ -1,5 +1,5 @@
 use super::list::selected_row;
-use super::msg::{Cmd, Job};
+use super::msg::{Cmd, Job, ReadJob};
 use super::toast::say;
 use super::{OpenWith, State};
 use crate::clipboard::CopyError;
@@ -16,11 +16,11 @@ pub(super) fn open_key(state: &mut State) -> Vec<Cmd> {
     match state.context.open_with {
         OpenWith::Browser => {
             say(state, format!("Opening {target} on GitHub"));
-            vec![Cmd::Job(Job::Open(target))]
+            vec![Cmd::Job(Job::Read(ReadJob::Open(target)))]
         }
         OpenWith::Clipboard => {
             say(state, format!("Copying the {target} URL"));
-            vec![Cmd::Job(Job::FetchPageUrl(target))]
+            vec![Cmd::Job(Job::Read(ReadJob::FetchPageUrl(target)))]
         }
     }
 }

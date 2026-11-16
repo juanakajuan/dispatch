@@ -97,7 +97,7 @@ pub(super) fn dialog(state: &State) -> &StartDialog {
 pub(super) fn starts(cmds: &[Cmd]) -> Vec<&StartRequest> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Start(r, _)) => Some(r),
+            Cmd::Job(Job::Write(WriteJob::Start(r, _))) => Some(r),
             _ => None,
         })
         .collect()
@@ -106,7 +106,7 @@ pub(super) fn starts(cmds: &[Cmd]) -> Vec<&StartRequest> {
 pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Send { issue, text }) => Some((*issue, text.as_str())),
+            Cmd::Job(Job::Write(WriteJob::Send { issue, text })) => Some((*issue, text.as_str())),
             _ => None,
         })
         .collect()

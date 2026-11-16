@@ -14,8 +14,8 @@ fn tick_does_not_stack_a_second_fetch_while_one_is_inflight() {
     state.due.github = now;
     state.inflight.issues = true;
     let cmds = press(&mut state, Msg::Tick(now + Duration::from_millis(1)));
-    assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchIssues))));
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+    assert!(!cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchIssues)))));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     let later = press(&mut state, Msg::Tick(now + Duration::from_millis(2)));
     assert!(later.is_empty(), "due time moved forward");
 }
@@ -25,7 +25,7 @@ fn tick_observes_sessions_every_two_seconds_once() {
     let (mut state, now) = app();
     let t = now + SESSIONS_EVERY;
     let cmds = press(&mut state, Msg::Tick(t));
-    assert_eq!(cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::ObserveSessions))).count(), 1);
+    assert_eq!(cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::ObserveSessions)))).count(), 1);
     let cmds = press(&mut state, Msg::Tick(t + Duration::from_millis(100)));
     assert!(cmds.is_empty());
 }
@@ -52,13 +52,13 @@ fn new_data_resets_the_refresh_time_on_the_timer_and_after_r() {
     let (mut state, _) = app();
     let due = state.due.github;
     let cmds = press(&mut state, Msg::Tick(due));
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     let first = due + Duration::from_secs(2);
     press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: first });
     assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == first));
 
     let cmds = press(&mut state, key('r'));
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     let second = first + Duration::from_secs(30);
     press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: second });
     assert!(matches!(state.prs.status, FeedStatus::Fresh { at } if at == second));
@@ -75,7 +75,7 @@ fn r_refreshes_without_stacking_and_q_quits() {
 }
 
 fn github_fetches(cmds: &[Cmd]) -> usize {
-    cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::FetchIssues | Job::FetchPrs))).count()
+    cmds.iter().filter(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchIssues | ReadJob::FetchPrs)))).count()
 }
 
 /// Sends `msg`, then checks that the GitHub fetch waits for the cooldown,
@@ -169,7 +169,7 @@ fn the_timer_firing_during_a_fetch_keeps_the_pending_event() {
     press(&mut state, Msg::FocusGained);
     state.due.github = now + GITHUB_COOLDOWN;
     let cmds = press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::FetchPrs), ..]), "the timer fetches what is idle");
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::FetchPrs)), ..]), "the timer fetches what is idle");
     press(&mut state, Msg::Issues { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
     press(&mut state, Msg::Prs { result: Ok(Vec::new()), at: now + GITHUB_COOLDOWN });
     assert_eq!(

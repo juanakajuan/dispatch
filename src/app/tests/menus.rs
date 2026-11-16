@@ -45,7 +45,7 @@ fn clear_input(state: &mut State) {
 fn saves(cmds: &[Cmd]) -> Vec<(Setting, &Config)> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::SaveConfig { setting, config }) => Some((*setting, config)),
+            Cmd::Job(Job::Write(WriteJob::SaveConfig { setting, config })) => Some((*setting, config)),
             _ => None,
         })
         .collect()
@@ -188,7 +188,7 @@ fn a_new_start_uses_the_changed_settings() {
     press(&mut state, code(KeyCode::Esc));
     press(&mut state, key('s'));
     let cmds = press(&mut state, ctrl('s'));
-    let [Cmd::Job(Job::Start(_, launch))] = cmds.as_slice() else { panic!("one start") };
+    let [Cmd::Job(Job::Write(WriteJob::Start(_, launch)))] = cmds.as_slice() else { panic!("one start") };
     assert!(!launch.detect_waiting, "the toggle reaches the next start");
     assert_eq!(*launch, Launch::from_config(&state.config));
 }
@@ -204,7 +204,7 @@ fn a_resume_uses_the_changed_command() {
     press(&mut state, code(KeyCode::Esc));
     press(&mut state, key('3'));
     let cmds = press(&mut state, key('a'));
-    let [Cmd::Job(Job::Resume(_, launch))] = cmds.as_slice() else { panic!("one resume") };
+    let [Cmd::Job(Job::Write(WriteJob::Resume(_, launch)))] = cmds.as_slice() else { panic!("one resume") };
     assert_eq!(launch.claude.words(), "claude --x");
 }
 

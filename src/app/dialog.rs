@@ -1,5 +1,5 @@
 use super::keys::{Key, key_of};
-use super::msg::{Cmd, Job};
+use super::msg::{Cmd, Job, WriteJob};
 use super::sessions::goto_session;
 use super::toast::say;
 use super::{Focus, State};
@@ -106,5 +106,5 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     state.focus = Focus::List;
     goto_session(state, n);
     say(state, format!("Starting {n}"));
-    vec![Cmd::Job(Job::Start(req, Launch::from_config(&state.config)))]
+    vec![Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))]
 }

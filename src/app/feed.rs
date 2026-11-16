@@ -1,5 +1,5 @@
 use super::State;
-use super::msg::{Cmd, GITHUB_COOLDOWN, Job, SESSIONS_EVERY, TOAST_FOR};
+use super::msg::{Cmd, GITHUB_COOLDOWN, Job, ReadJob, SESSIONS_EVERY, TOAST_FOR};
 use super::toast::say;
 use crate::github::GhError;
 use crate::session::error::SessionError;
@@ -55,7 +55,7 @@ pub(super) fn observe_now(state: &mut State) -> Vec<Cmd> {
         return Vec::new();
     }
     state.inflight.sessions = true;
-    vec![Cmd::Job(Job::ObserveSessions)]
+    vec![Cmd::Job(Job::Read(ReadJob::ObserveSessions))]
 }
 
 pub(super) fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, GhError>, at: Instant) {
@@ -98,11 +98,11 @@ pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
 pub(super) fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
     if !state.inflight.issues {
         state.inflight.issues = true;
-        cmds.push(Cmd::Job(Job::FetchIssues));
+        cmds.push(Cmd::Job(Job::Read(ReadJob::FetchIssues)));
     }
     if !state.inflight.prs {
         state.inflight.prs = true;
-        cmds.push(Cmd::Job(Job::FetchPrs));
+        cmds.push(Cmd::Job(Job::Read(ReadJob::FetchPrs)));
     }
 }
 

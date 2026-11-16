@@ -17,7 +17,7 @@ use list::{Selected, Sorts, Tab, filter_key};
 use menus::{SettingsMenu, keybinds_key, settings_key};
 use merge::{Armed, merged};
 use mouse::{HitMap, HitTarget, on_mouse};
-use msg::{Cmd, Job, Msg, SESSIONS_EVERY};
+use msg::{Cmd, Job, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
 use sessions::{attached, resumed, sent, started, stopped};
 use toast::{Toast, say};
@@ -69,7 +69,7 @@ pub enum OpenWith {
 
 pub struct State {
     pub context: Context,
-    /// The live config. The settings menu edits it, and `Job::SaveConfig`
+    /// The live config. The settings menu edits it, and `WriteJob::SaveConfig`
     /// writes the change to the file.
     pub config: Config,
     pub tab: Tab,
@@ -79,7 +79,7 @@ pub struct State {
     /// observation. A finished start adds its own session at once, so the row
     /// does not blink out until the next observation.
     pub sessions: Sessions,
-    /// Issues with a `Job::Start` in flight. The only session-ish state the
+    /// Issues with a `WriteJob::Start` in flight. The only session-ish state the
     /// app owns; it covers the gap before the next observation shows the window.
     pub starting: BTreeSet<IssueNumber>,
     pub selected: Selected,
@@ -123,7 +123,14 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         summaries: std::collections::BTreeMap::new(),
         config,
     };
-    (state, vec![Cmd::Job(Job::FetchIssues), Cmd::Job(Job::FetchPrs), Cmd::Job(Job::ObserveSessions)])
+    (
+        state,
+        vec![
+            Cmd::Job(Job::Read(ReadJob::FetchIssues)),
+            Cmd::Job(Job::Read(ReadJob::FetchPrs)),
+            Cmd::Job(Job::Read(ReadJob::ObserveSessions)),
+        ],
+    )
 }
 
 /// The reducer.

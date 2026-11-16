@@ -1,7 +1,7 @@
 use super::State;
 use super::feed::refresh_github;
 use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
-use super::msg::{Cmd, Job};
+use super::msg::{Cmd, Job, WriteJob};
 use super::sessions::goto_session;
 use super::toast::say;
 use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest, Unusable};
@@ -156,14 +156,14 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         return Vec::new();
     }
     say(state, format!("Checking PR {n}"));
-    vec![Cmd::Job(Job::Merge(ask))]
+    vec![Cmd::Job(Job::Write(WriteJob::Merge(ask)))]
 }
 
 pub(super) fn start_fix(state: &mut State, req: StartRequest) -> Vec<Cmd> {
     let n = req.issue;
     state.starting.insert(n);
     goto_session(state, n);
-    vec![Cmd::Job(Job::Start(req, Launch::from_config(&state.config)))]
+    vec![Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))]
 }
 
 pub(super) fn fix_request(
@@ -211,7 +211,7 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             match live_session_on_pr(state, ask.pr) {
                 Some(issue) => {
                     say(state, format!("Merged PR {} ({method}) and stopped {issue}'s session", ask.pr));
-                    cmds.push(Cmd::Job(Job::Stop(issue)));
+                    cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
                 }
                 None => say(state, format!("Merged PR {} ({method})", ask.pr)),
             }
@@ -255,10 +255,10 @@ pub(super) fn handoff(
     let issue = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
             say(state, format!("{sentence} Asking {i}'s agent to fix it."));
-            return vec![Cmd::Job(Job::Send {
+            return vec![Cmd::Job(Job::Write(WriteJob::Send {
                 issue: i,
                 text: plan::handoff_prompt(pr.number, pr.base.display(), problem, method),
-            })];
+            }))];
         }
         Ok(Fixer::NewSession(i)) => i,
         Err(why) => {

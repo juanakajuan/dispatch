@@ -8,7 +8,7 @@ use crate::merge::{Consent, MergeAsk, MergeError};
 fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Merge(ask)) => Some(*ask),
+            Cmd::Job(Job::Write(WriteJob::Merge(ask))) => Some(*ask),
             _ => None,
         })
         .collect()
@@ -205,7 +205,7 @@ fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
     let (mut state, _) = app();
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) });
     assert_eq!(toast(&state), "Merged PR #10 (squash)");
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     assert!(sends(&cmds).is_empty());
     assert!(stops(&cmds).is_empty(), "no session on the branch");
 }
@@ -213,7 +213,7 @@ fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
 fn stops(cmds: &[Cmd]) -> Vec<IssueNumber> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Stop(n)) => Some(*n),
+            Cmd::Job(Job::Write(WriteJob::Stop(n))) => Some(*n),
             _ => None,
         })
         .collect()
@@ -231,7 +231,7 @@ fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
         let cmds = press(&mut state, merged_squash());
         assert_eq!(stops(&cmds), [IssueNumber(3)]);
         assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session");
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     }
 }
 
@@ -272,7 +272,7 @@ fn a_queued_merge_says_so() {
     let (mut state, _) = app();
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
     assert_eq!(toast(&state), "PR #10 is in the merge queue");
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))));
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast()
     let (mut state, _) = app();
     let refused = MergeOutcome::Refused(MergeRefusal::ChecksRunning(PrNumber(10)));
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(refused)) });
-    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "a stale list catches up");
+    assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))), "a stale list catches up");
     assert_eq!(toast(&state), "PR #10 has checks that are still running. Press m again when they finish.");
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Err(gh_failed("not allowed"))) });
     assert!(cmds.is_empty());
@@ -322,8 +322,8 @@ fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
         let (mut state, _) = app();
         let cmds = press(&mut state, Msg::Merged { ask: ASK_READY, run: ran_after_ready(result) });
         assert_eq!(toast(&state), text);
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchPrs))), "{text}");
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::FetchIssues))), "{text}");
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))), "{text}");
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchIssues)))), "{text}");
     }
 }
 
