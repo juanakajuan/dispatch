@@ -1,7 +1,7 @@
-src/app.rs 2951
-src/session/mod.rs 1814
-src/ui.rs 1378
-src/session/herdr.rs 658
+src/app.rs 2950
+src/session/mod.rs 1790
+src/ui.rs 1373
+src/session/herdr.rs 656
 src/config.rs 570
 banners src/app.rs
 banners src/session/mod.rs

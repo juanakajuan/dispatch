@@ -14,6 +14,8 @@ for f in $(find src -name '*.rs' | sort); do
       echo "$f: $lines lines, now under $limit. Delete its line from $allow."; fail=1
     elif [ "$lines" -gt "$ceiling" ]; then
       echo "$f: $lines lines, over its ceiling of $ceiling in $allow. Split it into a module directory; do not raise the ceiling."; fail=1
+    elif [ "$lines" -lt "$ceiling" ]; then
+      echo "$f: $lines lines, under its ceiling of $ceiling. Lower the ceiling in $allow to $lines."; fail=1
     fi
   elif [ "$lines" -gt "$limit" ]; then
     echo "$f: $lines lines, over $limit. Split it into a module directory (src/<name>/mod.rs plus one file per job)."; fail=1
@@ -22,6 +24,17 @@ for f in $(find src -name '*.rs' | sort); do
     grep -nE '^[[:space:]]*// ?(-{3,}|={3,})' "$f" | sed "s|^|$f:|"
     echo "$f: a section banner comment. A file with sections wants to be a module: make each section its own file."; fail=1
   fi
+  case "$f" in
+    src/main.rs | */mod.rs) ;;
+    *)
+      name=$(basename "$f" .rs)
+      dir=$(dirname "$f")
+      if [ -f "$dir/mod.rs" ]; then parent="$dir/mod.rs"; elif [ "$dir" = src ]; then parent=src/main.rs; else parent="$dir.rs"; fi
+      if ! grep -qE "^[[:space:]]*(#\[[^]]*\][[:space:]]*)?(pub(\([a-z]+\))? )?mod $name;" "$parent" 2>/dev/null; then
+        echo "$f: no \`mod $name;\` in $parent, so it never compiles and its tests never run. Declare it or delete it."; fail=1
+      fi
+      ;;
+  esac
 done
 
 awk '$1 != "banners" { print $1 }' "$allow" | while read -r f; do
