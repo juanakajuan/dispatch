@@ -78,10 +78,7 @@ fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
     }
     fake::install(|call| {
         if call.starts_with("hc") {
-            Err(crate::proc::ProcError::Spawn {
-                program: "hc".to_string(),
-                source: std::io::Error::from(std::io::ErrorKind::NotFound),
-            })
+            Err(crate::proc::ProcError::spawn("hc", &std::io::Error::from(std::io::ErrorKind::NotFound)))
         } else {
             Ok(String::new())
         }
@@ -95,10 +92,7 @@ fn the_herdr_app_is_chosen_by_setting_or_by_its_socket() {
 #[test]
 fn the_chosen_multiplexer_must_be_installed() {
     fake::install(|_| Err(fake::fail("x", 1, "")));
-    let spawn = || crate::proc::ProcError::Spawn {
-        program: "x".to_string(),
-        source: std::io::Error::from(std::io::ErrorKind::NotFound),
-    };
+    let spawn = || crate::proc::ProcError::spawn("x", &std::io::Error::from(std::io::ErrorKind::NotFound));
     fake::install(move |call| if call.starts_with("herdr") { Err(spawn()) } else { Ok(String::new()) });
     let err = detect_mux(Multiplexer::Herdr, &env(false, true), std::path::Path::new("/w/orbit"));
     assert!(matches!(err, Err(SetupError::ProgramMissing("herdr"))));
