@@ -1,5 +1,5 @@
 src/app.rs 2950
-src/session/mod.rs 1790
+src/session/mod.rs 642
 src/ui.rs 1373
 src/session/herdr.rs 656
 src/config.rs 570

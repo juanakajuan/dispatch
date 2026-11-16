@@ -1,0 +1,190 @@
+use super::{GitWorld, br, launch, req, workspace};
+use crate::domain::IssueNumber;
+use crate::proc::fake;
+use crate::session::{AttachPlan, Mux, SessionState, WindowId, tmux};
+use crate::testutil::temp_dir;
+use std::cell::RefCell;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+#[derive(Default)]
+struct Sim {
+    git: GitWorld,
+    window: bool,
+    tagged: bool,
+    fetch_fails: bool,
+}
+
+/// A tiny git and tmux: answers the observation commands from `Sim`
+/// and changes `Sim` on the mutating ones.
+fn install_world(base: PathBuf, sim: Rc<RefCell<Sim>>) {
+    fake::install(move |call| {
+        let mut s = sim.borrow_mut();
+        let dir = base.join("orbit/.claude/worktrees/142");
+        if let Some(answer) = s.git.answer(call, &base) {
+            answer
+        } else if call.starts_with("tmux list-windows") {
+            Ok(if s.window && s.tagged { format!("@4\t0\t{}\t\n", dir.display()) } else { String::new() })
+        } else if call.starts_with("git fetch") {
+            if s.fetch_fails { Err(fake::fail("git", 128, "no network")) } else { Ok(String::new()) }
+        } else if call.starts_with("tmux new-window") {
+            s.window = true;
+            Ok("@4\n".to_string())
+        } else if call.starts_with("tmux set-option") {
+            s.tagged = true;
+            Ok(String::new())
+        } else {
+            Ok(String::new())
+        }
+    });
+}
+
+fn mutating(calls: &[String]) -> Vec<&str> {
+    calls
+        .iter()
+        .map(String::as_str)
+        .filter(|c| {
+            ["git fetch", "git worktree add", "git config branch", "tmux new-", "tmux set-option"]
+                .iter()
+                .any(|p| c.starts_with(p))
+        })
+        .collect()
+}
+
+#[test]
+fn start_runs_the_steps_in_order_and_a_second_start_runs_none() {
+    let base = temp_dir("start");
+    let ws = workspace(&base);
+    let r = req();
+    install_world(base.clone(), Rc::new(RefCell::new(Sim::default())));
+    let out = ws.start(&r, &launch()).expect("start");
+    assert_eq!(out.session.state(), SessionState::Running);
+    assert!(out.warnings.is_empty());
+    let dir = base.join("orbit/.claude/worktrees/142");
+    let calls = fake::calls();
+    let ran = mutating(&calls);
+    assert_eq!(ran.len(), 5, "{ran:?}");
+    assert_eq!(ran[0], "git fetch origin main");
+    assert_eq!(ran[1], format!("git worktree add {} -b fix/142-x origin/main", dir.display()));
+    assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
+    assert!(ran[3].starts_with(&format!(
+        "tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p",
+        dir.display()
+    )));
+    assert!(ran[4].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
+    let exclude = base.join("orbit/.git/info/exclude");
+    assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
+
+    let before = fake::calls().len();
+    let again = ws.start(&r, &launch()).expect("second start");
+    assert_eq!(again.session, out.session);
+    assert!(mutating(&fake::calls()[before..]).is_empty(), "second start must not mutate");
+}
+
+#[test]
+fn start_after_a_crash_between_steps_runs_only_the_rest() {
+    let base = temp_dir("crash");
+    let ws = workspace(&base);
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = Sim { git: GitWorld { added: true, ..GitWorld::default() }, ..Sim::default() };
+    install_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let out = ws.start(&req(), &launch()).expect("start");
+    assert_eq!(out.session.branch, br("fix/142-x"));
+    let calls = fake::calls();
+    let ran = mutating(&calls);
+    assert_eq!(ran.len(), 3, "{ran:?}");
+    assert!(ran[0].starts_with("git config branch.fix/142-x.dispatch-issue"));
+    assert!(ran.iter().all(|c| !c.starts_with("git worktree add") && !c.starts_with("git fetch")));
+}
+
+#[test]
+fn failed_fetch_is_a_warning_and_the_start_continues() {
+    let base = temp_dir("fetch");
+    let ws = workspace(&base);
+    install_world(base.clone(), Rc::new(RefCell::new(Sim { fetch_fails: true, ..Sim::default() })));
+    let out = ws.start(&req(), &launch()).expect("start continues");
+    assert_eq!(out.warnings.len(), 1);
+    assert!(out.warnings[0].contains("origin/main") && out.warnings[0].contains("no network"));
+}
+
+#[test]
+fn failed_worktree_add_stops_the_run_with_the_git_message() {
+    let base = temp_dir("addfail");
+    let ws = workspace(&base);
+    fake::install(|call| {
+        if call.starts_with("git worktree add") {
+            Err(fake::fail("git", 128, "fatal: boom"))
+        } else if call.starts_with("git worktree list") || call.starts_with("tmux list-windows") {
+            Ok(String::new())
+        } else if call.starts_with("git config --get-regexp") || call.starts_with("git show-ref") {
+            Err(fake::fail("git", 1, ""))
+        } else {
+            Ok(String::new())
+        }
+    });
+    let err = ws.start(&req(), &launch()).expect_err("fails");
+    assert!(err.to_string().contains("fatal: boom"), "{err}");
+    assert!(!fake::calls().iter().any(|c| c.starts_with("tmux new-")));
+}
+
+#[test]
+fn stop_kills_the_window_by_a_fresh_observation_and_keeps_the_worktree() {
+    let base = temp_dir("stop");
+    let ws = workspace(&base);
+    install_world(
+        base.clone(),
+        Rc::new(RefCell::new(Sim { git: GitWorld::started(), window: true, tagged: true, ..Sim::default() })),
+    );
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    ws.stop(IssueNumber(142)).expect("stop");
+    let calls = fake::calls();
+    assert!(calls.iter().any(|c| c == "tmux kill-window -t @4"));
+    assert!(!calls.iter().any(|c| c.contains("worktree remove") || c.contains("branch -")));
+    assert!(ws.stop(IssueNumber(999)).is_ok(), "no session is already stopped");
+}
+
+#[test]
+fn resume_respawns_a_dead_pane_in_an_old_sibling_worktree() {
+    let base = temp_dir("resume");
+    let ws = workspace(&base);
+    std::fs::create_dir_all(base.join("orbit-142")).expect("mkdir");
+    let dir = base.join("orbit-142");
+    let listed = format!("@4\t1\t{}\t\n", dir.display());
+    let wt_text = format!("worktree {}\nbranch refs/heads/fix/142-x\n\n", dir.display());
+    fake::install(move |call| {
+        if call.starts_with("git worktree list") {
+            Ok(wt_text.clone())
+        } else if call.starts_with("git config --get-regexp") {
+            Ok("branch.fix/142-x.dispatch-issue 142\n".to_string())
+        } else if call.starts_with("tmux list-windows") {
+            Ok(listed.clone())
+        } else {
+            Ok(String::new())
+        }
+    });
+    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    let last = fake::calls().pop().expect("a call");
+    assert_eq!(last, format!("tmux respawn-window -k -t @4 -c {} -- claude --continue", dir.display()));
+}
+
+#[test]
+fn attach_inside_switches_and_outside_suspends() {
+    let base = temp_dir("attach");
+    let mut ws = workspace(&base);
+    let id = WindowId::parse("@4").expect("id");
+    assert_eq!(
+        ws.attach_plan(&id).expect("plan"),
+        AttachPlan::Switch(
+            ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
+        )
+    );
+    ws.mux = Mux::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+    assert_eq!(
+        ws.attach_plan(&id).expect("plan"),
+        AttachPlan::Suspend(
+            ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"]
+                .map(String::from)
+                .to_vec()
+        )
+    );
+}
