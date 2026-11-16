@@ -6,7 +6,10 @@ mod hc;
 mod herdr;
 mod join;
 mod plan;
+mod request;
+mod start_argv;
 mod tmux;
+mod worktree;
 
 use super::mux::Mux;
 use super::request::{Launch, StartFrom, StartRequest};

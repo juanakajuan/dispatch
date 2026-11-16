@@ -146,3 +146,13 @@ fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
     }
     assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "filters by the issue title");
 }
+
+#[test]
+fn filter_is_case_insensitive_over_all_parts() {
+    let parts = ["#142", "Retry queue", "bug", "fix/142-retry"];
+    assert!(matches_filter(&parts, ""));
+    assert!(matches_filter(&parts, "RETRY"));
+    assert!(matches_filter(&parts, "#142"));
+    assert!(matches_filter(&parts, "bug fix"));
+    assert!(!matches_filter(&parts, "docs"));
+}

@@ -1,10 +1,10 @@
 use super::error::StartConflict;
 use super::request::{StartFrom, StartRequest};
 use super::start_argv::claude_argv;
+use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
 use crate::config::ClaudeCommand;
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
-use crate::rules;
 use std::path::PathBuf;
 
 /// Everything `plan_start` needs. Gathered by `observe_for_start`.
@@ -12,7 +12,7 @@ pub(super) struct StartObservation {
     pub(super) sessions: Sessions,
     pub(super) worktrees: Vec<git::Worktree>,
     pub(super) markers: git::Markers,
-    /// The deterministic dir (`rules::worktree_dir_for`) exists on disk.
+    /// The deterministic dir (`worktree_dir_for`) exists on disk.
     pub(super) target_dir_exists: bool,
     /// `req.branch` exists as a local branch.
     pub(super) branch_exists: bool,
@@ -76,7 +76,7 @@ pub(super) fn plan_start(
     req: &StartRequest,
     layout: &Layout,
 ) -> Result<StartPlan, StartConflict> {
-    let target = rules::worktree_dir_for(&layout.repo_root, req.issue);
+    let target = worktree_dir_for(&layout.repo_root, req.issue);
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
         name: format!("#{}", req.issue.0),

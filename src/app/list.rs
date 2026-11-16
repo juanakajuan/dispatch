@@ -3,7 +3,6 @@ use super::msg::Cmd;
 use super::toast::say;
 use super::{Focus, State};
 use crate::domain::{GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
-use crate::rules::{self};
 use crate::session::{Session, SessionState};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -178,7 +177,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                     let number = format!("#{}", i.number.0);
                     let mut parts = vec![number.as_str(), i.title.as_str()];
                     parts.extend(i.labels.iter().map(String::as_str));
-                    rules::matches_filter(&parts, f)
+                    matches_filter(&parts, f)
                 })
                 .collect();
             sort::issues(&mut rows, state.sort.issues, activity);
@@ -189,7 +188,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .prs
                 .items
                 .iter()
-                .filter(|p| rules::matches_filter(&[&format!("#{}", p.number.0), &p.title, &p.head], f))
+                .filter(|p| matches_filter(&[&format!("#{}", p.number.0), &p.title, &p.head], f))
                 .collect();
             sort::prs(&mut rows, state.sort.prs);
             rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
@@ -201,7 +200,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .filter(|n| {
                     let title = state.issues.items.iter().find(|i| i.number == *n).map_or("", |i| i.title.as_str());
                     let branch = state.sessions.get(n).map_or("", |s| s.branch.as_str());
-                    rules::matches_filter(&[&format!("#{}", n.0), title, branch], f)
+                    matches_filter(&[&format!("#{}", n.0), title, branch], f)
                 })
                 .collect();
             sort::sessions(&mut rows, state.sort.sessions, activity);
@@ -265,4 +264,10 @@ pub fn lead_pr(state: &State, n: IssueNumber) -> Option<&PullRequest> {
 /// A PR whose head branch equals the session branch.
 pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a PullRequest> {
     state.prs.items.iter().find(|p| p.head == session.branch.as_str())
+}
+
+/// Case-insensitive substring match over `#N title labels branch`.
+pub(super) fn matches_filter(haystack_parts: &[&str], needle: &str) -> bool {
+    let needle = needle.trim().to_lowercase();
+    needle.is_empty() || haystack_parts.join(" ").to_lowercase().contains(&needle)
 }

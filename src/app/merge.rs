@@ -5,8 +5,8 @@ use super::msg::{Cmd, Job};
 use super::sessions::goto_session;
 use super::toast::say;
 use crate::domain::{BranchName, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest};
-use crate::merge::{MergeOutcome, MergeRun};
-use crate::rules::{self, MergePlan, MergeProblem};
+use crate::merge::job::{MergeOutcome, MergeRun};
+use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::session::SessionState;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use std::fmt::Write as _;
@@ -99,9 +99,9 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     {
         return start_fix(state, req.clone());
     }
-    let (new_session_ok, ready_ok, expect) = match (rules::merge_plan(pr), fixer(state, pr)) {
+    let (new_session_ok, ready_ok, expect) = match (plan::merge_plan(pr), fixer(state, pr)) {
         (MergePlan::Handoff(problem), fix) => {
-            let sentence = rules::problem_sentence(n, &pr.base, problem);
+            let sentence = plan::problem_sentence(n, &pr.base, problem);
             match fix {
                 Ok(Fixer::Agent(i)) => {
                     (false, false, format!("{sentence} Press m again to ask #{}'s agent to fix and merge it.", i.0))
@@ -151,7 +151,7 @@ pub(super) fn fix_request(
         issue,
         branch,
         mode: Mode::Implement,
-        prompt: rules::fix_session_prompt(pr.number, &pr.base, problem, method),
+        prompt: plan::fix_session_prompt(pr.number, &pr.base, problem, method),
         from: StartFrom::Origin,
     })
 }
@@ -223,13 +223,13 @@ pub(super) fn handoff(
     problem: MergeProblem,
     method: MergeMethod,
 ) -> Vec<Cmd> {
-    let sentence = rules::problem_sentence(pr.number, &pr.base, problem);
+    let sentence = plan::problem_sentence(pr.number, &pr.base, problem);
     let issue = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
             say(state, format!("{sentence} Asking #{}'s agent to fix it.", i.0));
             return vec![Cmd::Job(Job::Send {
                 issue: i,
-                text: rules::handoff_prompt(pr.number, &pr.base, problem, method),
+                text: plan::handoff_prompt(pr.number, &pr.base, problem, method),
             })];
         }
         Ok(Fixer::NewSession(i)) => i,

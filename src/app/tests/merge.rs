@@ -102,10 +102,7 @@ fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
         (req.issue, req.branch.as_str(), req.mode, req.from),
         (IssueNumber(3), "fix/3-x", Mode::Implement, StartFrom::Origin)
     );
-    assert_eq!(
-        req.prompt,
-        rules::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase)
-    );
+    assert_eq!(req.prompt, plan::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
     assert!(state.starting.contains(&IssueNumber(3)));
     assert_eq!((state.tab, state.selected.session), (Tab::Sessions, Some(IssueNumber(3))));
     assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
@@ -222,7 +219,7 @@ fn a_problem_pr_sends_the_running_agent_a_prompt_with_the_problem_and_method() {
     let (mut state, _) = app();
     state.sessions.insert(IssueNumber(3), session(3, Some((true, false))));
     let cmds = press(&mut state, handoff(MergeProblem::ChecksFailing));
-    let prompt = rules::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
+    let prompt = plan::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
     assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
     assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
     assert_eq!(toast(&state), "PR #10 has failing checks. Asking #3's agent to fix it.");

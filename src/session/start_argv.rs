@@ -5,9 +5,9 @@
 use super::herdr;
 use super::mux::Mux;
 use super::request::Launch;
+use super::worktree::WORKTREES_DIR;
 use crate::config::ClaudeCommand;
 use crate::domain::{IssueNumber, Mode};
-use crate::rules;
 
 /// The start dialog's "Runs" preview.
 #[derive(Clone, Debug)]
@@ -27,7 +27,7 @@ impl StartPreview {
         prompt: &str,
         launch: &Launch,
     ) -> Vec<Vec<String>> {
-        let dir = format!("{}/{}", rules::WORKTREES_DIR, issue.0);
+        let dir = format!("{}/{}", WORKTREES_DIR, issue.0);
         let base = Some(self.base.as_str());
         let (program, args) = match &self.mux {
             Mux::Tmux(_) | Mux::Hc(_) => ("git", worktree_add_args(&dir, branch, base)),
@@ -60,7 +60,7 @@ impl Default for StartPreview {
 }
 
 pub(super) fn claude_argv(claude: &ClaudeCommand, hooks: Option<&str>, mode: Mode, prompt: &str) -> Vec<String> {
-    claude.argv(&rules::claude_args(mode, prompt, hooks))
+    claude.argv(&claude_args(mode, prompt, hooks))
 }
 
 /// `git` argv after the program name.
@@ -86,4 +86,29 @@ pub(super) fn herdr_worktree_create_args(
     let label = herdr::label(issue);
     args.extend(["--path", dir, "--label", label.as_str(), "--no-focus"]);
     args.into_iter().map(str::to_string).collect()
+}
+
+/// `claude` argv after the program name. Built as argv, never as a shell
+/// string, so the prompt needs no quoting (tmux execs multi-arg commands
+/// directly, without `sh -c`).
+pub(super) fn claude_args(mode: Mode, prompt: &str, hooks_json: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if mode == Mode::PlanFirst {
+        args.extend(["--permission-mode".to_string(), "plan".to_string()]);
+    }
+    args.extend(settings_args(hooks_json));
+    args.push(prompt.to_string());
+    args
+}
+
+/// `claude` argv after the program name, to continue the last conversation
+/// in the worktree.
+pub(super) fn continue_args(hooks_json: Option<&str>) -> Vec<String> {
+    let mut args = vec!["--continue".to_string()];
+    args.extend(settings_args(hooks_json));
+    args
+}
+
+fn settings_args(hooks_json: Option<&str>) -> Vec<String> {
+    hooks_json.map_or_else(Vec::new, |json| vec!["--settings".to_string(), json.to_string()])
 }

@@ -8,7 +8,7 @@ use crate::session::request::StartFrom;
 use crate::session::{WindowId, WindowObs, git};
 use std::path::PathBuf;
 
-/// `rules::worktree_dir_for` of `layout().repo_root` and issue 142.
+/// `worktree_dir_for` of `layout().repo_root` and issue 142.
 const TARGET: &str = "/a/orbit/.claude/worktrees/142";
 
 fn layout() -> Layout {

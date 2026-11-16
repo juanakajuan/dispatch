@@ -1,8 +1,8 @@
 //! The second `m`: look at the PR again, because the list can be a minute
 //! old, then merge it here or hand it to the session's agent.
 
+use super::plan::{self, MergePlan, MergeProblem};
 use crate::domain::{MergeMethod, PrNumber, PrState, PullRequest};
-use crate::rules::{self, MergePlan, MergeProblem};
 use crate::{github, proc};
 use std::path::Path;
 
@@ -42,7 +42,7 @@ pub fn merge(repo_root: &Path, pr: PrNumber, ready_ok: bool) -> MergeRun {
 
 fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) -> Result<MergeOutcome, String> {
     let mut fresh = github::view_pr(repo_root, pr).map_err(|e| e.to_string())?;
-    let mut plan = rules::merge_plan(&fresh);
+    let mut plan = plan::merge_plan(&fresh);
     if plan == MergePlan::MarkReady {
         if !ready_ok {
             return Ok(MergeOutcome::Refused(format!(
@@ -53,7 +53,7 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
         github::mark_ready(repo_root, pr).map_err(|e| e.to_string())?;
         *marked_ready = true;
         fresh = github::view_pr(repo_root, pr).map_err(|e| e.to_string())?;
-        plan = rules::merge_plan(&fresh);
+        plan = plan::merge_plan(&fresh);
     }
     let problem = match plan {
         MergePlan::Refuse(why) => return Ok(MergeOutcome::Refused(why)),
@@ -62,7 +62,7 @@ fn run(repo_root: &Path, pr: PrNumber, ready_ok: bool, marked_ready: &mut bool) 
         MergePlan::Handoff(problem) => Some(problem),
     };
     let allowed = github::allowed_merge_methods(repo_root).map_err(|e| e.to_string())?;
-    let method = rules::merge_method(configured_method(repo_root)?, &allowed)?;
+    let method = plan::merge_method(configured_method(repo_root)?, &allowed)?;
     match problem {
         None => {
             github::merge_pr(repo_root, &fresh, method).map_err(|e| e.to_string())?;

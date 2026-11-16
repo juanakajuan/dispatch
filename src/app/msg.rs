@@ -2,7 +2,7 @@ use super::merge::MergeAsk;
 use crate::config::Config;
 use crate::config::settings::Setting;
 use crate::domain::{GithubRef, Issue, IssueNumber, PullRequest};
-use crate::merge::MergeRun;
+use crate::merge::job::MergeRun;
 use crate::session::request::{Launch, StartRequest};
 use crate::session::{Sessions, StartOutcome, WindowId};
 use crossterm::event::{KeyEvent, MouseEvent};

@@ -24,12 +24,12 @@ mod plan;
 pub mod request;
 mod start_argv;
 mod tmux;
+mod worktree;
 
 pub use start_argv::StartPreview;
 
 use crate::config::Multiplexer;
 use crate::domain::{BranchName, IssueNumber, WorktreePath};
-use crate::rules;
 use error::{SessionError, SetupError};
 use join::join;
 use mux::{Mux, MuxEnv, detect_mux};
@@ -37,6 +37,7 @@ use plan::{Layout, StartObservation, StartPlan, Step, plan_start};
 use request::{Launch, StartRequest};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use worktree::{WORKTREES_DIR, WORKTREES_EXCLUDE, worktree_dir_for};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum WindowId {
@@ -174,7 +175,7 @@ impl Workspace {
             sessions: join(&worktrees, &markers, &windows),
             worktrees,
             markers,
-            target_dir_exists: rules::worktree_dir_for(&self.repo_root, req.issue).exists(),
+            target_dir_exists: worktree_dir_for(&self.repo_root, req.issue).exists(),
             branch_exists: git::branch_exists(&self.repo_root, &req.branch)?,
         })
     }
@@ -219,8 +220,8 @@ impl Workspace {
                     }
                 }
                 Step::AddWorktree { dir, branch, from } => {
-                    if let Err(e) = git::ensure_excluded(&self.git_common_dir, rules::WORKTREES_EXCLUDE) {
-                        warnings.push(format!("{} still shows in git status: {e}", rules::WORKTREES_DIR));
+                    if let Err(e) = git::ensure_excluded(&self.git_common_dir, WORKTREES_EXCLUDE) {
+                        warnings.push(format!("{WORKTREES_DIR} still shows in git status: {e}"));
                     }
                     match &self.mux {
                         Mux::Tmux(_) | Mux::Hc(_) => {
@@ -261,7 +262,7 @@ impl Workspace {
         let Some(session) = self.observe()?.remove(&issue) else {
             return Err(SessionError::Command(format!("no session for #{}", issue.0)));
         };
-        let argv = launch.claude.argv(&rules::continue_args(self.mux.hooks(launch)));
+        let argv = launch.claude.argv(&start_argv::continue_args(self.mux.hooks(launch)));
         match &session.window {
             Some(w) if w.alive => Ok(()),
             Some(w) => match &w.id {

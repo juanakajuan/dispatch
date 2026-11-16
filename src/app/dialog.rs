@@ -4,7 +4,7 @@ use super::sessions::goto_session;
 use super::toast::say;
 use super::{Focus, State};
 use crate::domain::{BranchName, Issue, IssueNumber, Mode};
-use crate::rules::{self};
+use crate::session::request::start_defaults;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -29,7 +29,7 @@ pub enum DialogField {
 pub(super) const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, DialogField::Prompt];
 
 pub(super) fn open_dialog(issue: &Issue) -> StartDialog {
-    let defaults = rules::start_defaults(issue);
+    let defaults = start_defaults(issue);
     let mut branch = tui_textarea::TextArea::new(vec![defaults.branch.as_str().to_string()]);
     branch.move_cursor(tui_textarea::CursorMove::End);
     let prompt = tui_textarea::TextArea::new(defaults.prompt.split('\n').map(str::to_string).collect());
