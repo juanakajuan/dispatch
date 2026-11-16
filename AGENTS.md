@@ -4,7 +4,7 @@ The checks hold most rules. This file holds only what the code cannot say.
 
 ## Before you commit
 
-- Run `scripts/check.sh`. CI runs the same script.
+- Run `scripts/check.sh`. There is no CI, so this is the only gate.
 - If you change what a user sees or does (keys, screens, toasts, start, attach, stop, merge), prove it in the real app with the `verify` skill. `cargo test` alone is not proof.
 - If you change a key, a screen, or a flow, update its recipe in `.claude/skills/verify/features/` in the same commit. No check catches a stale recipe.
 - Ask before you add a dependency.
