@@ -130,6 +130,14 @@ if [[ \${1:-} != --continue ]]; then
   project="$RUN/claude/projects/\${PWD//[^a-zA-Z0-9]/-}"
   mkdir -p "\$project" && echo '{"type":"user"}' >"\$project/fake.jsonl"
 fi
+# Real claude asks to trust a new folder before any hook runs. Touch \$RUN/ask-trust to get the question.
+if [[ \${1:-} != --continue ]]; then
+  if [[ -e "$RUN/ask-trust" ]]; then
+    echo "FAKE-CLAUDE Accessing workspace: do you trust this folder? (type yes)"
+    IFS= read -r _
+  fi
+  hook SessionStart
+fi
 echo "FAKE-CLAUDE started in \$PWD on branch \$(git branch --show-current)"
 hook UserPromptSubmit; echo "FAKE-CLAUDE working"; sleep 2
 hook Stop; echo "FAKE-CLAUDE waiting for input (type exit to quit)"

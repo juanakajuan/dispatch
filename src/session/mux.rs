@@ -114,7 +114,12 @@ pub(super) fn hooks<M: Mux>(mux: &M, launch: &Launch) -> Option<&'static str> {
 /// Claude hooks passed with `--settings` when `detect_waiting` is on.
 /// `$TMUX_PANE` is in every pane's environment, and hooks inherit it.
 /// Notification and Stop set the flag; `UserPromptSubmit` and `PreToolUse` clear it.
+/// tmux sets the flag when it opens a window with these hooks, and
+/// `SessionStart` on a new start clears it. No hook runs while Claude asks
+/// to trust the folder, so the session shows `needs you` until Claude starts.
+/// `--continue` is a `resume` start: the flag stays until you type.
 pub(super) const WAITING_HOOKS: &str = r#"{"hooks":{
+  "SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" -u @dispatch-waiting"}]}],
   "Notification":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
   "Stop":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
   "UserPromptSubmit":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" -u @dispatch-waiting"}]}],
