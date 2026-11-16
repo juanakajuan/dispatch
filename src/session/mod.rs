@@ -14,20 +14,28 @@
 //! tmux server restart, and a reboot. `git branch -D` deletes the `branch.<b>`
 //! section, so a deleted branch leaves no stale marker.
 
+mod error;
 mod git;
 mod hc;
 mod herdr;
+mod join;
+mod mux;
+mod plan;
+pub mod request;
 mod start_argv;
 mod tmux;
 
 pub use start_argv::StartPreview;
-use start_argv::claude_argv;
 
-use crate::config::{ClaudeCommand, Config, Multiplexer};
-use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
+use crate::config::Multiplexer;
+use crate::domain::{BranchName, IssueNumber, WorktreePath};
 use crate::rules;
+use error::{SessionError, SetupError};
+use join::join;
+use mux::{Mux, MuxEnv, detect_mux};
+use plan::{Layout, StartObservation, StartPlan, Step, plan_start};
+use request::{Launch, StartRequest};
 use std::collections::BTreeMap;
-use std::fmt;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -57,21 +65,6 @@ struct WindowObs {
     worktree: WorktreePath,
     dead: bool,
     waiting: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Mux {
-    Tmux(tmux::Place),
-    Herdr(herdr::Place),
-    /// The herdr app. hc finds its core itself, so the only fact is whether
-    /// dispatch runs inside the app.
-    Hc(hc::Place),
-}
-
-impl Mux {
-    fn hooks(&self, launch: &Launch) -> Option<&'static str> {
-        (launch.detect_waiting && matches!(self, Mux::Tmux(_))).then_some(WAITING_HOOKS)
-    }
 }
 
 /// One issue being worked in one worktree. Derived, never stored.
@@ -115,79 +108,12 @@ impl Session {
 /// At most one session per issue, by construction of the map.
 pub type Sessions = BTreeMap<IssueNumber, Session>;
 
-/// What the start dialog hands over after validation.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StartRequest {
-    pub issue: IssueNumber,
-    pub branch: BranchName,
-    pub mode: Mode,
-    pub prompt: String,
-    pub from: StartFrom,
-}
-
-/// Where a new branch starts. Used only when `branch` does not exist locally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum StartFrom {
-    /// The default branch, for new work on an issue.
-    Base,
-    /// The branch of the same name on origin, for work on an open PR.
-    Origin,
-}
-
 /// A converged start. `warnings` hold non-fatal problems, such as a failed
 /// `git fetch` that fell back to the local base.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartOutcome {
     pub session: Session,
     pub warnings: Vec<String>,
-}
-
-#[derive(Debug)]
-pub enum SessionError {
-    /// The request can not converge without the user deciding something.
-    Conflict(StartConflict),
-    Command(String),
-}
-
-impl fmt::Display for SessionError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SessionError::Conflict(c) => c.fmt(f),
-            SessionError::Command(m) => f.write_str(m),
-        }
-    }
-}
-
-impl From<String> for SessionError {
-    fn from(message: String) -> SessionError {
-        SessionError::Command(message)
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum StartConflict {
-    /// `branch` is already checked out in a worktree that is not this issue's.
-    BranchCheckedOut { branch: BranchName, path: PathBuf },
-    /// `branch` carries a marker for a different issue.
-    BranchBelongsTo { branch: BranchName, issue: IssueNumber },
-    /// The deterministic worktree dir exists and is not a git worktree.
-    PathTaken(PathBuf),
-}
-
-impl fmt::Display for StartConflict {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            StartConflict::BranchCheckedOut { branch, path } => {
-                write!(f, "branch {} is already checked out in {}", branch.as_str(), path.display())
-            }
-            StartConflict::BranchBelongsTo { branch, issue } => {
-                write!(f, "branch {} already belongs to issue #{}", branch.as_str(), issue.0)
-            }
-            StartConflict::PathTaken(path) => {
-                write!(f, "{} exists and is not a git worktree. Move it away and start again.", path.display())
-            }
-        }
-    }
 }
 
 /// How the shell attaches. Pure data, so the choice is unit tested.
@@ -206,86 +132,6 @@ pub struct Workspace {
     /// `origin/main` from `git symbolic-ref --short refs/remotes/origin/HEAD`.
     base: String,
     mux: Mux,
-}
-
-/// The config that shapes a start or resume. It is a value the caller passes
-/// per call, so a settings change reaches the next session with no shared
-/// state.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Launch {
-    pub detect_waiting: bool,
-    pub claude: ClaudeCommand,
-}
-
-impl Launch {
-    pub fn from_config(config: &Config) -> Launch {
-        Launch { detect_waiting: config.detect_waiting, claude: config.claude_command.clone() }
-    }
-}
-
-#[derive(Debug)]
-pub enum SetupError {
-    NotARepo(String),
-    NoOriginHead(String),
-    ProgramMissing(&'static str),
-    Command(String),
-}
-
-impl fmt::Display for SetupError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SetupError::NotARepo(m) => write!(f, "dispatch must run inside a git repository: {m}"),
-            SetupError::NoOriginHead(m) => write!(f, "cannot find the default branch of origin: {m}"),
-            SetupError::ProgramMissing(program) => write!(f, "{program} is not installed or not on PATH"),
-            SetupError::Command(m) => f.write_str(m),
-        }
-    }
-}
-
-fn require(program: &'static str, version_flag: &str, cwd: &std::path::Path) -> Result<(), SetupError> {
-    crate::proc::run(program, [version_flag], cwd).map(|_| ()).map_err(|e| match e {
-        crate::proc::ProcError::Spawn { .. } => SetupError::ProgramMissing(program),
-        other => SetupError::Command(other.to_string()),
-    })
-}
-
-#[derive(Clone, Debug, Default)]
-struct MuxEnv {
-    herdr_env: Option<String>,
-    herdr_workspace: Option<String>,
-    tmux: Option<String>,
-    hc_socket: Option<String>,
-}
-
-impl MuxEnv {
-    fn from_process() -> MuxEnv {
-        let var = |name| std::env::var(name).ok();
-        MuxEnv {
-            herdr_env: var("HERDR_ENV"),
-            herdr_workspace: var("HERDR_WORKSPACE_ID"),
-            tmux: var("TMUX"),
-            hc_socket: var("HC_TERMINAL_SOCKET"),
-        }
-    }
-}
-
-fn detect_mux(choice: Multiplexer, env: &MuxEnv, repo_root: &std::path::Path) -> Result<Mux, SetupError> {
-    let inside_herdr = env.herdr_env.as_deref() == Some("1");
-    let dir_name = repo_root.file_name().map_or_else(|| "repo".to_string(), |n| n.to_string_lossy().into_owned());
-    let inside_app = env.hc_socket.as_deref().is_some_and(|s| !s.is_empty());
-    if choice == Multiplexer::HerdrApp || (choice == Multiplexer::Auto && !inside_herdr && inside_app) {
-        require("hc", "--version", repo_root)?;
-        return Ok(Mux::Hc(if inside_app { hc::Place::App } else { hc::Place::Outside }));
-    }
-    if choice == Multiplexer::Herdr || (choice == Multiplexer::Auto && inside_herdr) {
-        require("herdr", "--version", repo_root)?;
-        let place = herdr::Place::detect(env.herdr_env.as_deref(), env.herdr_workspace.as_deref(), &dir_name)
-            .map_err(SetupError::Command)?;
-        return Ok(Mux::Herdr(place));
-    }
-    require("tmux", "-V", repo_root)?;
-    let place = tmux::Place::detect(env.tmux.as_deref(), &dir_name).map_err(SetupError::Command)?;
-    Ok(Mux::Tmux(place))
 }
 
 impl Workspace {
@@ -481,162 +327,6 @@ fn tmux_attach_plan(place: &tmux::Place, window: &tmux::WindowId) -> AttachPlan 
     };
     plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
 }
-
-// ---- pure core -------------------------------------------------------------
-
-/// Joins the three observations. Pure; the main unit-test target.
-/// - A worktree is a session only if its branch has a valid `dispatch-issue`.
-/// - A marker with an unparseable value is ignored (boundary rule).
-/// - Two worktrees marked with one issue: the first by path wins, so the map
-///   invariant holds even after manual meddling.
-/// - A tagged window whose worktree is gone is ignored; it is not a session.
-/// - Two windows tagged for one worktree: a live one wins.
-fn join(worktrees: &[git::Worktree], markers: &git::Markers, windows: &[WindowObs]) -> Sessions {
-    let mut by_path: Vec<&git::Worktree> = worktrees.iter().collect();
-    by_path.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut sessions = Sessions::new();
-    for w in by_path {
-        let Some(branch) = &w.branch else { continue };
-        let Some(&issue) = markers.get(branch) else { continue };
-        let window = windows.iter().filter(|o| o.worktree == w.path).min_by_key(|o| o.dead).map(|o| Window {
-            id: o.id.clone(),
-            alive: !o.dead,
-            waiting: o.waiting,
-        });
-        sessions.entry(issue).or_insert_with(|| Session {
-            issue,
-            branch: branch.clone(),
-            worktree: w.path.clone(),
-            window,
-        });
-    }
-    sessions
-}
-
-/// Everything `plan_start` needs. Gathered by `observe_for_start`.
-struct StartObservation {
-    sessions: Sessions,
-    worktrees: Vec<git::Worktree>,
-    markers: git::Markers,
-    /// The deterministic dir (`rules::worktree_dir_for`) exists on disk.
-    target_dir_exists: bool,
-    /// `req.branch` exists as a local branch.
-    branch_exists: bool,
-}
-
-struct Layout {
-    repo_root: PathBuf,
-    /// `origin/main`.
-    base: String,
-    hooks: Option<&'static str>,
-    claude: ClaudeCommand,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum StartPlan {
-    AlreadyRunning(Session),
-    Steps(Vec<Step>),
-}
-
-/// One subprocess-level action. Each is idempotent on its own or guarded by
-/// the plan, so a crash between any two steps leaves a state that the next
-/// `plan_start` recognizes and finishes.
-#[derive(Debug, PartialEq, Eq)]
-enum Step {
-    /// `git fetch origin <branch>` for a remote ref such as `origin/main`, so
-    /// the new branch starts from fresh commits.
-    Fetch(String),
-    /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
-    /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
-    AddWorktree { dir: PathBuf, branch: BranchName, from: Option<String> },
-    /// `git config branch.<b>.dispatch-issue N`.
-    /// Overwrites, so running it twice is harmless.
-    Mark { branch: BranchName, issue: IssueNumber },
-    /// Two tmux calls: new-window (or new-session when the detached session
-    /// is missing) with argv `claude ...`, then set-option for
-    /// `@dispatch-worktree` and `remain-on-exit on` on that window id.
-    OpenWindow { dir: WorktreePath, name: String, argv: Vec<String> },
-}
-
-/// Pure. Decision table, tested row by row:
-///
-/// | observed                                              | plan                              |
-/// |-------------------------------------------------------|-----------------------------------|
-/// | session for issue, window alive                       | `AlreadyRunning`                    |
-/// | session for issue, no window or dead window           | [`OpenWindow`]                      |
-/// | a branch marked for issue, no worktree (crash)        | [`AddWorktree` create=false, Mark, `OpenWindow`] using that branch |
-/// | worktree at target dir, branch unmarked (crash)       | [Mark, `OpenWindow`]                |
-/// | target dir exists, not a worktree                     | Conflict `PathTaken`                |
-/// | req.branch marked for another issue                   | Conflict `BranchBelongsTo`          |
-/// | req.branch checked out elsewhere                      | Conflict `BranchCheckedOut`         |
-/// | req.branch exists, unmarked, free                     | [`AddWorktree` create=false, Mark, `OpenWindow`] |
-/// | nothing exists                                        | [Fetch, `AddWorktree` create=true, Mark, `OpenWindow`] |
-///
-/// A created branch starts from the default branch, or from `origin/<branch>`
-/// when `req.from` is `StartFrom::Origin`.
-///
-/// A marked branch for this issue wins over `req.branch`, so a retry with an
-/// edited branch name can not make a second branch for one issue.
-fn plan_start(obs: &StartObservation, req: &StartRequest, layout: &Layout) -> Result<StartPlan, StartConflict> {
-    let target = rules::worktree_dir_for(&layout.repo_root, req.issue);
-    let open = |dir: WorktreePath| Step::OpenWindow {
-        dir,
-        name: format!("#{}", req.issue.0),
-        argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
-    };
-    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
-    let add = |branch: BranchName, from: Option<String>| Step::AddWorktree { dir: target.clone(), branch, from };
-    let planned = WorktreePath::planned(target.clone());
-
-    if let Some(s) = obs.sessions.get(&req.issue) {
-        return Ok(match &s.window {
-            Some(w) if w.alive => StartPlan::AlreadyRunning(s.clone()),
-            _ => StartPlan::Steps(vec![open(s.worktree.clone())]),
-        });
-    }
-    if let Some(w) = obs.worktrees.iter().find(|w| w.path.as_path() == target) {
-        let Some(branch) = &w.branch else { return Err(StartConflict::PathTaken(target)) };
-        if let Some(&issue) = obs.markers.get(branch) {
-            return Err(StartConflict::BranchBelongsTo { branch: branch.clone(), issue });
-        }
-        return Ok(StartPlan::Steps(vec![mark(branch.clone()), open(w.path.clone())]));
-    }
-    if obs.target_dir_exists {
-        return Err(StartConflict::PathTaken(target));
-    }
-    if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.issue) {
-        return Ok(StartPlan::Steps(vec![add(branch.clone(), None), mark(branch.clone()), open(planned)]));
-    }
-    if let Some(&issue) = obs.markers.get(&req.branch) {
-        return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue });
-    }
-    if let Some(w) = obs.worktrees.iter().find(|w| w.branch.as_ref() == Some(&req.branch)) {
-        return Err(StartConflict::BranchCheckedOut {
-            branch: req.branch.clone(),
-            path: w.path.as_path().to_path_buf(),
-        });
-    }
-    let mut steps = Vec::new();
-    let from = (!obs.branch_exists).then(|| match req.from {
-        StartFrom::Base => layout.base.clone(),
-        StartFrom::Origin => format!("origin/{}", req.branch.as_str()),
-    });
-    if let Some(remote_ref) = &from {
-        steps.push(Step::Fetch(remote_ref.clone()));
-    }
-    steps.extend([add(req.branch.clone(), from), mark(req.branch.clone()), open(planned)]);
-    Ok(StartPlan::Steps(steps))
-}
-
-/// Claude hooks passed with `--settings` when `detect_waiting` is on.
-/// `$TMUX_PANE` is in every pane's environment, and hooks inherit it.
-/// Notification and Stop set the flag; `UserPromptSubmit` and `PreToolUse` clear it.
-const WAITING_HOOKS: &str = r#"{"hooks":{
-  "Notification":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
-  "Stop":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" @dispatch-waiting 1"}]}],
-  "UserPromptSubmit":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" -u @dispatch-waiting"}]}],
-  "PreToolUse":[{"hooks":[{"type":"command","command":"tmux set-option -w -t \"$TMUX_PANE\" -u @dispatch-waiting"}]}]
-}}"#;
 
 #[cfg(test)]
 mod tests;

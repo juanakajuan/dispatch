@@ -1,7 +1,8 @@
 use super::{GitWorld, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
-use crate::session::{AttachPlan, Mux, SessionState, WindowId, Workspace, herdr};
+use crate::session::mux::Mux;
+use crate::session::{AttachPlan, SessionState, WindowId, Workspace, herdr};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;

@@ -111,9 +111,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
 
 /// A write job, run in order on the writer thread.
 enum WriteJob {
-    Start(session::StartRequest, session::Launch),
+    Start(session::request::StartRequest, session::request::Launch),
     Stop(domain::IssueNumber),
-    Resume(domain::IssueNumber, session::Launch),
+    Resume(domain::IssueNumber, session::request::Launch),
     SaveConfig { setting: config::Setting, config: config::Config },
     Send { issue: domain::IssueNumber, text: String },
     Merge(app::MergeAsk),

@@ -11,7 +11,7 @@ use crate::app::{
 use crate::config::{Config, SETTINGS};
 use crate::domain::{Checks, Issue, IssueNumber, Mode, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::session::{Launch, Session, SessionState};
+use crate::session::{Session, SessionState, request::Launch};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;

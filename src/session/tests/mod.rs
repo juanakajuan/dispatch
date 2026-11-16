@@ -8,7 +8,9 @@ mod join;
 mod plan;
 mod tmux;
 
-use super::{Launch, Mux, StartFrom, StartRequest, WindowId, WindowObs, Workspace, git, tmux as tmux_backend};
+use super::mux::Mux;
+use super::request::{Launch, StartFrom, StartRequest};
+use super::{WindowId, WindowObs, Workspace, git, tmux as tmux_backend};
 use crate::config::ClaudeCommand;
 use crate::domain::{BranchName, IssueNumber, Mode, WorktreePath};
 use crate::proc::{ProcError, fake};

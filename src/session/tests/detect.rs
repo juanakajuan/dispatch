@@ -1,6 +1,8 @@
 use crate::config::Multiplexer;
 use crate::proc::fake;
-use crate::session::{Mux, MuxEnv, SetupError, detect_mux, hc, herdr, tmux};
+use crate::session::error::SetupError;
+use crate::session::mux::{Mux, MuxEnv, detect_mux};
+use crate::session::{hc, herdr, tmux};
 
 #[test]
 fn a_missing_multiplexer_is_named_in_the_setup_error() {

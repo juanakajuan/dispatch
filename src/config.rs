@@ -143,7 +143,7 @@ impl Multiplexer {
 pub struct Config {
     pub github_refresh: Duration,
     /// On by default. Sessions get Claude hooks that flag "waiting for you"
-    /// on their tmux window (see `session::WAITING_HOOKS`). Turn it off if the
+    /// on their tmux window (see `session::mux::WAITING_HOOKS`). Turn it off if the
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
     pub claude_command: ClaudeCommand,

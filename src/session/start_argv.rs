@@ -2,7 +2,9 @@
 //! `herdr.rs`, `plan_start`) and the start dialog preview both build argv
 //! here, so the preview cannot drift from a real start (cbee386).
 
-use super::{Launch, Mux, herdr};
+use super::herdr;
+use super::mux::Mux;
+use super::request::Launch;
 use crate::config::ClaudeCommand;
 use crate::domain::{IssueNumber, Mode};
 use crate::rules;

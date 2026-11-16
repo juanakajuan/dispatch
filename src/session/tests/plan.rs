@@ -1,9 +1,11 @@
 use super::{br, markers, req, win, wp, wt};
 use crate::config::ClaudeCommand;
 use crate::domain::{IssueNumber, Mode, WorktreePath};
-use crate::session::{
-    Layout, StartConflict, StartFrom, StartObservation, StartPlan, Step, WindowId, WindowObs, git, join, plan_start,
-};
+use crate::session::error::StartConflict;
+use crate::session::join::join;
+use crate::session::plan::{Layout, StartObservation, StartPlan, Step, plan_start};
+use crate::session::request::StartFrom;
+use crate::session::{WindowId, WindowObs, git};
 use std::path::PathBuf;
 
 /// `rules::worktree_dir_for` of `layout().repo_root` and issue 142.

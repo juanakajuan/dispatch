@@ -1,6 +1,7 @@
 use super::{br, markers, win, wt};
 use crate::domain::IssueNumber;
-use crate::session::{SessionState, join};
+use crate::session::SessionState;
+use crate::session::join::join;
 
 #[test]
 fn join_live_window_is_running_and_waiting_flag_needs_you() {
