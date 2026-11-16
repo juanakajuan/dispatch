@@ -1,6 +1,8 @@
 use super::State;
 use super::msg::{Cmd, GITHUB_COOLDOWN, Job, SESSIONS_EVERY, TOAST_FOR};
 use super::toast::say;
+use crate::github::GhError;
+use crate::session::error::SessionError;
 use crate::session::{SessionState, Sessions};
 use std::time::Instant;
 
@@ -15,7 +17,7 @@ pub struct Feed<T> {
 pub enum FeedStatus {
     Loading,
     Fresh { at: Instant },
-    Failed { error: String, at: Instant },
+    Failed { error: GhError, at: Instant },
 }
 
 /// One flag per job kind. The tick only schedules a job whose flag is clear,
@@ -56,7 +58,7 @@ pub(super) fn observe_now(state: &mut State) -> Vec<Cmd> {
     vec![Cmd::Job(Job::ObserveSessions)]
 }
 
-pub(super) fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, String>, at: Instant) {
+pub(super) fn apply_feed<T>(feed: &mut Feed<T>, result: Result<Vec<T>, GhError>, at: Instant) {
     match result {
         Ok(items) => {
             feed.items = items;
@@ -104,7 +106,7 @@ pub(super) fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
     }
 }
 
-pub(super) fn observed(state: &mut State, result: Result<Sessions, String>) -> Vec<Cmd> {
+pub(super) fn observed(state: &mut State, result: Result<Sessions, SessionError>) -> Vec<Cmd> {
     state.inflight.sessions = false;
     match result {
         Ok(sessions) => {

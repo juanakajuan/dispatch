@@ -37,6 +37,10 @@ for f in $(find src -name '*.rs' | sort); do
   esac
 done
 
+if grep -rnE 'Result<.*,[[:space:]]*String[[:space:]]*>|impl[[:space:]<].*From<String>' src; then
+  echo "A String error loses which failure happened, so no caller can match on it. Return a typed error enum with a Display impl instead."; fail=1
+fi
+
 awk '$1 != "banners" { print $1 }' "$allow" | while read -r f; do
   [ -f "$f" ] || { echo "$allow lists $f, which does not exist. Delete its line."; exit 1; }
 done || fail=1

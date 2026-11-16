@@ -1,7 +1,7 @@
 use crate::domain::{IssueNumber, OriginRef};
 use crate::proc::fake;
 use crate::session::error::{
-    FsAction, FsError, GitError, MuxError, SessionError, SetupError, StartConflict, StartWarning,
+    AttachError, FsAction, FsError, GitError, MuxError, SessionError, SetupError, StartConflict, StartWarning,
 };
 use crate::session::tmux::WindowId;
 use std::path::Path;
@@ -64,6 +64,25 @@ fn each_error_and_warning_keeps_its_sentence() {
             "cannot find the default branch of origin: git failed with code 128: boom\nrun `git remote set-head origin --auto` first",
         ),
         (SetupError::Mux(MuxError::NoHerdrWorkspace).to_string(), "HERDR_ENV is set but HERDR_WORKSPACE_ID is not"),
+    ];
+    for (got, want) in cases {
+        assert_eq!(got, want);
+    }
+}
+
+#[test]
+fn each_attach_error_keeps_its_sentence() {
+    use std::os::unix::process::ExitStatusExt;
+    let status = std::process::ExitStatus::from_raw(256);
+    let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory (os error 2)");
+    let cases = [
+        (AttachError::EmptyCommand.to_string(), "empty attach command"),
+        (AttachError::Exited { program: "tmux".into(), status }.to_string(), "tmux exited with exit status: 1"),
+        (
+            AttachError::Run(crate::proc::ProcError::spawn("herdr", &missing)).to_string(),
+            "cannot run herdr: No such file or directory (os error 2)",
+        ),
+        (AttachError::Session(SessionError::NotRunning(IssueNumber(7))).to_string(), "#7 has no running session"),
     ];
     for (got, want) in cases {
         assert_eq!(got, want);

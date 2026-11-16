@@ -80,10 +80,11 @@ fn o_over_ssh_copies_the_url_instead_of_opening_a_browser() {
 fn a_failed_url_lookup_or_copy_shows_the_error() {
     let (mut state, _) = app();
     let target = GithubRef::Pr(PrNumber(10));
-    assert!(press(&mut state, Msg::PageUrl { target, result: Err("gh down".to_string()) }).is_empty());
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: gh down"));
-    press(&mut state, Msg::Copied { target, result: Err("no tmux".to_string()) });
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Copy PR #10 URL failed: no tmux"));
+    assert!(press(&mut state, Msg::PageUrl { target, result: Err(gh_error("gh down")) }).is_empty());
+    assert_eq!(toast(&state), "Copy PR #10 URL failed: gh failed with code 1: gh down");
+    let no_tmux = crate::clipboard::CopyError::Tmux(crate::proc::fake::fail("tmux", 1, "no tmux"));
+    press(&mut state, Msg::Copied { target, result: Err(no_tmux) });
+    assert_eq!(toast(&state), "Copy PR #10 URL failed: tmux failed with code 1: no tmux");
 }
 
 #[test]
@@ -92,6 +93,6 @@ fn a_failed_open_shows_the_error_and_a_success_is_quiet() {
     let target = GithubRef::Pr(PrNumber(10));
     assert!(press(&mut state, Msg::Opened { target, result: Ok(()) }).is_empty());
     assert!(state.toast.is_none());
-    press(&mut state, Msg::Opened { target, result: Err("no browser".to_string()) });
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Open PR #10 failed: no browser"));
+    press(&mut state, Msg::Opened { target, result: Err(gh_error("no browser")) });
+    assert_eq!(toast(&state), "Open PR #10 failed: gh failed with code 1: no browser");
 }

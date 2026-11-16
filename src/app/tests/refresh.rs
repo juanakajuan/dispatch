@@ -35,9 +35,11 @@ fn issues_error_keeps_the_old_items_and_stamps_the_failure() {
     let (mut state, now) = app();
     state.inflight.issues = true;
     let failed = now + Duration::from_secs(5);
-    press(&mut state, Msg::Issues { result: Err("offline".to_string()), at: failed });
+    press(&mut state, Msg::Issues { result: Err(gh_error("offline")), at: failed });
     assert_eq!(state.issues.items.len(), 3);
-    assert!(matches!(&state.issues.status, FeedStatus::Failed { error, at } if error == "offline" && *at == failed));
+    assert!(
+        matches!(&state.issues.status, FeedStatus::Failed { error, at } if *error == gh_error("offline") && *at == failed)
+    );
     assert!(!state.inflight.issues);
     let arrived = now + Duration::from_secs(9);
     press(&mut state, Msg::Issues { result: Ok(vec![issue(9, "new", &[])]), at: arrived });
@@ -103,7 +105,7 @@ fn a_start_or_a_stop_refreshes_github() {
     assert_triggers_one_refresh(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
 
     let (mut state, now) = app();
-    press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+    press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err(git_error("boom")) });
     assert_eq!(
         github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN))),
         0,

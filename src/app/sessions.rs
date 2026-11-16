@@ -6,6 +6,7 @@ use super::toast::say;
 use super::{Focus, State};
 use crate::domain::IssueNumber;
 use crate::session::StartOutcome;
+use crate::session::error::{AttachError, SessionError};
 use crate::session::request::Launch;
 
 /// `s` or Enter on an issue, or a double-click on one.
@@ -57,7 +58,7 @@ pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
     Vec::new()
 }
 
-pub(super) fn started(state: &mut State, issue: IssueNumber, result: Result<StartOutcome, String>) -> Vec<Cmd> {
+pub(super) fn started(state: &mut State, issue: IssueNumber, result: Result<StartOutcome, SessionError>) -> Vec<Cmd> {
     state.starting.remove(&issue);
     match result {
         Ok(outcome) => {
@@ -74,7 +75,7 @@ pub(super) fn started(state: &mut State, issue: IssueNumber, result: Result<Star
     observe_now(state)
 }
 
-pub(super) fn stopped(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
+pub(super) fn stopped(state: &mut State, issue: IssueNumber, result: Result<(), SessionError>) -> Vec<Cmd> {
     state.due.github_soon = true;
     match result {
         Ok(()) => say(state, format!("Stopped {issue}")),
@@ -83,7 +84,7 @@ pub(super) fn stopped(state: &mut State, issue: IssueNumber, result: Result<(), 
     observe_now(state)
 }
 
-pub(super) fn resumed(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
+pub(super) fn resumed(state: &mut State, issue: IssueNumber, result: Result<(), SessionError>) -> Vec<Cmd> {
     match result {
         Ok(()) => say(state, format!("Resumed {issue}. Press a to attach.")),
         Err(e) => say(state, format!("Resume {issue} failed: {e}")),
@@ -91,14 +92,14 @@ pub(super) fn resumed(state: &mut State, issue: IssueNumber, result: Result<(), 
     observe_now(state)
 }
 
-pub(super) fn attached(state: &mut State, result: Result<(), String>) -> Vec<Cmd> {
+pub(super) fn attached(state: &mut State, result: Result<(), AttachError>) -> Vec<Cmd> {
     if let Err(e) = result {
         say(state, format!("attach failed: {e}"));
     }
     observe_now(state)
 }
 
-pub(super) fn sent(state: &mut State, issue: IssueNumber, result: Result<(), String>) -> Vec<Cmd> {
+pub(super) fn sent(state: &mut State, issue: IssueNumber, result: Result<(), SessionError>) -> Vec<Cmd> {
     match result {
         Ok(()) => say(state, format!("Asked {issue}'s agent to fix and merge its PR")),
         Err(e) => say(state, format!("Merge request to {issue} failed: {e}")),

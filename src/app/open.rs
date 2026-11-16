@@ -2,7 +2,9 @@ use super::list::selected_row;
 use super::msg::{Cmd, Job};
 use super::toast::say;
 use super::{OpenWith, State};
+use crate::clipboard::CopyError;
 use crate::domain::GithubRef;
+use crate::github::GhError;
 
 /// `o`: the target is fixed at the key press, so a refresh before the job
 /// runs can not change what opens.
@@ -23,14 +25,14 @@ pub(super) fn open_key(state: &mut State) -> Vec<Cmd> {
     }
 }
 
-pub(super) fn opened(state: &mut State, target: GithubRef, result: Result<(), String>) -> Vec<Cmd> {
+pub(super) fn opened(state: &mut State, target: GithubRef, result: Result<(), GhError>) -> Vec<Cmd> {
     if let Err(e) = result {
         say(state, format!("Open {target} failed: {e}"));
     }
     Vec::new()
 }
 
-pub(super) fn page_url(state: &mut State, target: GithubRef, result: Result<String, String>) -> Vec<Cmd> {
+pub(super) fn page_url(state: &mut State, target: GithubRef, result: Result<String, GhError>) -> Vec<Cmd> {
     match result {
         Ok(text) => vec![Cmd::Copy { target, text }],
         Err(e) => {
@@ -40,7 +42,7 @@ pub(super) fn page_url(state: &mut State, target: GithubRef, result: Result<Stri
     }
 }
 
-pub(super) fn copied(state: &mut State, target: GithubRef, result: Result<String, String>) -> Vec<Cmd> {
+pub(super) fn copied(state: &mut State, target: GithubRef, result: Result<String, CopyError>) -> Vec<Cmd> {
     match result {
         Ok(url) => say(state, format!("Copied {url}")),
         Err(e) => say(state, format!("Copy {target} URL failed: {e}")),

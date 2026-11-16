@@ -1,6 +1,6 @@
 use super::*;
+use crate::app::merge::{CannotFix, NoTarget};
 use crate::domain::{PrBranch, Unusable};
-use crate::github::GhError;
 use crate::merge::job::DraftStep;
 use crate::merge::plan::MergeRefusal;
 use crate::merge::{Consent, MergeAsk, MergeError};
@@ -18,7 +18,7 @@ const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly }
 const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::StartFixSession };
 
 fn gh_failed(stderr: &str) -> MergeError {
-    MergeError::Gh(GhError::Run(crate::proc::fake::fail("gh", 1, stderr)))
+    MergeError::Gh(gh_error(stderr))
 }
 
 fn ran(result: Result<MergeOutcome, MergeError>) -> MergeRun {
@@ -372,4 +372,28 @@ fn m_explains_why_it_can_not_merge() {
         assert!(press(&mut state, key('m')).is_empty());
     }
     assert_eq!(toast(&state), "#3 has no PR yet.");
+}
+
+#[test]
+fn each_reason_m_can_not_act_keeps_its_sentence() {
+    let (pr, issue) = (PrNumber(10), IssueNumber(3));
+    let unusable = CannotFix::UnusableHead { pr, raw: "a..b".to_string(), why: Unusable::InFork };
+    let cases = [
+        (NoTarget::NothingSelected.to_string(), "Nothing is selected."),
+        (NoTarget::NotListed(pr).to_string(), "PR #10 is not in the list."),
+        (NoTarget::NoPr(issue).to_string(), "#3 has no PR yet."),
+        (NoTarget::NotOpen(pr).to_string(), "PR #10 is not open."),
+        (
+            CannotFix::ClosesNoIssue(pr).to_string(),
+            "PR #10 closes no issue, so dispatch can not start a session for it.",
+        ),
+        (
+            CannotFix::EachIssueBusy(pr).to_string(),
+            "Each issue that PR #10 closes already has a session on another branch.",
+        ),
+        (unusable.to_string(), "PR #10 has the branch name \"a..b\": the branch is in a fork"),
+    ];
+    for (got, want) in cases {
+        assert_eq!(got, want);
+    }
 }

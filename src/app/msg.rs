@@ -1,8 +1,11 @@
-use crate::config::Config;
+use crate::clipboard::CopyError;
 use crate::config::settings::Setting;
+use crate::config::{Config, ConfigError};
 use crate::domain::{GithubRef, Issue, IssueNumber, PullRequest};
+use crate::github::GhError;
 use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
+use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
 use crate::session::{Sessions, StartOutcome};
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -16,49 +19,49 @@ pub enum Msg {
     Tick(Instant),
     /// `at` is stamped by the worker when `gh` returns.
     Issues {
-        result: Result<Vec<Issue>, String>,
+        result: Result<Vec<Issue>, GhError>,
         at: Instant,
     },
     Prs {
-        result: Result<Vec<PullRequest>, String>,
+        result: Result<Vec<PullRequest>, GhError>,
         at: Instant,
     },
-    Sessions(Result<Sessions, String>),
+    Sessions(Result<Sessions, SessionError>),
     Started {
         issue: IssueNumber,
-        result: Result<StartOutcome, String>,
+        result: Result<StartOutcome, SessionError>,
     },
     Stopped {
         issue: IssueNumber,
-        result: Result<(), String>,
+        result: Result<(), SessionError>,
     },
     Resumed {
         issue: IssueNumber,
-        result: Result<(), String>,
+        result: Result<(), SessionError>,
     },
-    Attached(Result<(), String>),
+    Attached(Result<(), AttachError>),
     Opened {
         target: GithubRef,
-        result: Result<(), String>,
+        result: Result<(), GhError>,
     },
     PageUrl {
         target: GithubRef,
-        result: Result<String, String>,
+        result: Result<String, GhError>,
     },
     Copied {
         target: GithubRef,
-        result: Result<String, String>,
+        result: Result<String, CopyError>,
     },
     Sent {
         issue: IssueNumber,
-        result: Result<(), String>,
+        result: Result<(), SessionError>,
     },
     Merged {
         ask: MergeAsk,
         run: MergeRun,
     },
     /// A setting reached the config file.
-    Saved(Result<(), String>),
+    Saved(Result<(), ConfigError>),
     /// The terminal got focus back, often after a merge or comment in the browser.
     FocusGained,
 }

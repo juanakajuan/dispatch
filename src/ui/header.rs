@@ -45,7 +45,7 @@ pub(super) fn since(at: Instant, now: Instant) -> String {
 pub(super) fn feed_failure<T>(feed: &app::feed::Feed<T>) -> Option<String> {
     let FeedStatus::Failed { error, .. } = &feed.status else { return None };
     let kept = if feed.items.is_empty() { "" } else { ", showing old data" };
-    Some(format!("gh failed{kept}: {}", one_line(error)))
+    Some(format!("gh failed{kept}: {}", one_line(&error.to_string())))
 }
 
 pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &Icons, hits: &mut HitMap) {

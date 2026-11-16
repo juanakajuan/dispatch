@@ -3,18 +3,34 @@
 //! OSC 52 to its client, and it does so with tmux's default `set-clipboard`.
 //! Outside tmux, dispatch writes OSC 52 itself.
 
-use crate::proc;
+use crate::proc::{self, ProcError};
+use std::fmt;
 use std::io::Write;
 use std::path::Path;
 
+#[derive(Debug)]
+pub enum CopyError {
+    Tmux(ProcError),
+    Terminal(std::io::Error),
+}
+
+impl fmt::Display for CopyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CopyError::Tmux(e) => e.fmt(f),
+            CopyError::Terminal(e) => e.fmt(f),
+        }
+    }
+}
+
 /// `inside_tmux` is `$TMUX` being set. Call it on the main thread only: a
 /// write from another thread can land inside a frame's escape sequence.
-pub fn copy(text: &str, inside_tmux: bool, cwd: &Path) -> Result<(), String> {
+pub fn copy(text: &str, inside_tmux: bool, cwd: &Path) -> Result<(), CopyError> {
     if inside_tmux {
-        return proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(|e| e.to_string());
+        return proc::run("tmux", ["set-buffer", "-w", text], cwd).map(|_| ()).map_err(CopyError::Tmux);
     }
     let mut out = std::io::stdout().lock();
-    out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(|e| e.to_string())
+    out.write_all(osc52(text).as_bytes()).and_then(|()| out.flush()).map_err(CopyError::Terminal)
 }
 
 fn osc52(text: &str) -> String {

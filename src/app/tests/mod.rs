@@ -11,9 +11,11 @@ use crate::config::Config;
 use crate::config::settings::{SETTINGS, Setting};
 use crate::domain::{BranchName, GithubRef, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest};
 use crate::domain::{Mergeability, WorktreePath};
+use crate::github::GhError;
 use crate::glyphs::IconSet;
 use crate::merge::job::{MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergeProblem};
+use crate::session::error::SessionError;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use crate::session::{Session, SessionState, StartOutcome};
 use crate::sort::{Cycle, IssueSort};
@@ -112,4 +114,12 @@ pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
 
 pub(super) fn toast(state: &State) -> String {
     state.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+}
+
+fn gh_error(stderr: &str) -> GhError {
+    GhError::Run(crate::proc::fake::fail("gh", 1, stderr))
+}
+
+fn git_error(stderr: &str) -> SessionError {
+    SessionError::Git(crate::proc::fake::fail("git", 128, stderr))
 }

@@ -189,10 +189,11 @@ fn frame(state: &mut State, w: u16, h: u16) -> Buffer {
 #[test]
 fn a_failed_feed_shows_on_the_message_row_above_the_prompt() {
     let mut state = full_state();
-    state.issues.status = FeedStatus::Failed { error: "rate limited".to_string(), at: Instant::now() };
+    let error = crate::github::GhError::Run(crate::proc::fake::fail("gh", 1, "rate limited"));
+    state.issues.status = FeedStatus::Failed { error, at: Instant::now() };
     let screen = text(&render(&state, 100, 20));
     let lines: Vec<&str> = screen.lines().collect();
-    let at = lines.iter().position(|l| l.contains("gh failed, showing old data: rate limited"));
+    let at = lines.iter().position(|l| l.contains("gh failed, showing old data: gh failed with code 1: rate limited"));
     let at = at.unwrap_or_else(|| panic!("missing failure in\n{screen}"));
     assert!(lines[at + 1].contains("────") && lines[at + 2].contains("❯ /"), "not above the prompt:\n{screen}");
 }
@@ -243,7 +244,8 @@ fn the_header_shows_how_old_the_list_is_and_each_fetch_state() {
     assert_eq!(freshness_on_screen(&state), ("refreshing…".to_string(), palette::DIM));
 
     state.inflight.issues = false;
-    state.issues.status = FeedStatus::Failed { error: "offline".to_string(), at: ago(40) };
+    let error = crate::github::GhError::Run(crate::proc::fake::fail("gh", 1, "offline"));
+    state.issues.status = FeedStatus::Failed { error, at: ago(40) };
     assert_eq!(freshness_on_screen(&state), ("refresh failed 40s ago".to_string(), palette::WARN));
 
     state.prs.status = FeedStatus::Fresh { at: ago(125) };

@@ -37,7 +37,7 @@ fn x_stops_only_a_live_session_by_issue_number() {
 fn results_of_writes_clear_starting_toast_and_ask_for_an_observation() {
     let (mut state, _) = app();
     state.starting.insert(IssueNumber(3));
-    let cmds = press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err("boom".to_string()) });
+    let cmds = press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err(git_error("boom")) });
     assert!(state.starting.is_empty());
     assert!(state.toast.as_ref().is_some_and(|t| t.text.contains("boom")));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::ObserveSessions)]));
@@ -76,6 +76,6 @@ fn a_sent_result_shows_a_toast() {
     let (mut state, _) = app();
     press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
     assert!(state.toast.as_ref().is_some_and(|t| t.text == "Asked #3's agent to fix and merge its PR"));
-    press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Err("gone".to_string()) });
-    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Merge request to #3 failed: gone"));
+    press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Err(SessionError::NotRunning(IssueNumber(3))) });
+    assert!(state.toast.as_ref().is_some_and(|t| t.text == "Merge request to #3 failed: #3 has no running session"));
 }

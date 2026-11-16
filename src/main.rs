@@ -34,7 +34,9 @@ mod ui;
 use app::msg::{Cmd, Job, Msg};
 use app::{Context, OpenWith};
 use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
+use session::error::{AttachError, SetupError};
 use session::{AttachPlan, Workspace};
+use std::fmt;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -51,29 +53,49 @@ fn main() -> ExitCode {
     }
 }
 
-fn run() -> Result<(), String> {
-    let config = config::load().map_err(|e| e.to_string())?;
-    let cwd = std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
-    let ws = Workspace::discover(&cwd, config.multiplexer).map_err(|e| e.to_string())?;
+/// Why dispatch stopped with an error line instead of the TUI.
+#[derive(Debug)]
+enum RunError {
+    Config(config::ConfigError),
+    Cwd(std::io::Error),
+    Setup(SetupError),
+    Terminal(std::io::Error),
+}
+
+impl fmt::Display for RunError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RunError::Config(e) => e.fmt(f),
+            RunError::Cwd(e) => write!(f, "cannot read the current directory: {e}"),
+            RunError::Setup(e) => e.fmt(f),
+            RunError::Terminal(e) => e.fmt(f),
+        }
+    }
+}
+
+fn run() -> Result<(), RunError> {
+    let config = config::load().map_err(RunError::Config)?;
+    let cwd = std::env::current_dir().map_err(RunError::Cwd)?;
+    let ws = Workspace::discover(&cwd, config.multiplexer).map_err(RunError::Setup)?;
 
     let mut terminal = ratatui::init();
     // A crashed earlier run can leave the alternate screen dirty, and the
     // first draw only writes non-blank cells.
-    terminal.clear().map_err(|e| e.to_string())?;
+    terminal.clear().map_err(RunError::Terminal)?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
         previous_hook(info);
     }));
     let result = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange)
-        .map_err(|e| e.to_string())
-        .and_then(|()| event_loop(&mut terminal, &ws, config));
+        .and_then(|()| event_loop(&mut terminal, &ws, config))
+        .map_err(RunError::Terminal);
     let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
     ratatui::restore();
     result
 }
 
-fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: config::Config) -> Result<(), String> {
+fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: config::Config) -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<Msg>();
     let writer = spawn_writer(ws.clone(), tx.clone());
     let repo_name = ws.repo_root().file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -96,7 +118,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
             }
         }
         let mut hits = app::mouse::HitMap::default();
-        terminal.draw(|frame| hits = ui::draw(frame, &state)).map_err(|e| e.to_string())?;
+        terminal.draw(|frame| hits = ui::draw(frame, &state))?;
         state.hits = hits;
 
         let mut msgs: Vec<Msg> = drain(&rx);
@@ -124,19 +146,11 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
     std::thread::spawn(move || {
         for job in jobs {
             let msg = match job {
-                WriteJob::Start(req, launch) => {
-                    Msg::Started { issue: req.issue, result: ws.start(&req, &launch).map_err(|e| e.to_string()) }
-                }
-                WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue).map_err(|e| e.to_string()) },
-                WriteJob::Resume(issue, launch) => {
-                    Msg::Resumed { issue, result: ws.resume(issue, &launch).map_err(|e| e.to_string()) }
-                }
-                WriteJob::SaveConfig { setting, config } => {
-                    Msg::Saved(config::settings::save(setting, &config).map_err(|e| e.to_string()))
-                }
-                WriteJob::Send { issue, text } => {
-                    Msg::Sent { issue, result: ws.send(issue, &text).map_err(|e| e.to_string()) }
-                }
+                WriteJob::Start(req, launch) => Msg::Started { issue: req.issue, result: ws.start(&req, &launch) },
+                WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue) },
+                WriteJob::Resume(issue, launch) => Msg::Resumed { issue, result: ws.resume(issue, &launch) },
+                WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),
+                WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text) },
                 WriteJob::Merge(ask) => Msg::Merged { ask, run: merge::job::merge(ws.repo_root(), ask) },
             };
             if tx.send(msg).is_err() {
@@ -168,17 +182,17 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
             let _ = writer.send(WriteJob::Merge(ask));
         }
         Job::FetchIssues => spawn_read(ws, tx, |ws| {
-            let result = github::fetch_issues(ws.repo_root()).map_err(|e| e.to_string());
+            let result = github::fetch_issues(ws.repo_root());
             Msg::Issues { result, at: Instant::now() }
         }),
         Job::FetchPrs => spawn_read(ws, tx, |ws| {
-            let result = github::fetch_prs(ws.repo_root()).map_err(|e| e.to_string());
+            let result = github::fetch_prs(ws.repo_root());
             Msg::Prs { result, at: Instant::now() }
         }),
         Job::ObserveSessions => {
             let (ws, tx) = (ws.clone(), tx.clone());
             std::thread::spawn(move || {
-                let result = ws.observe().map_err(|e| e.to_string());
+                let result = ws.observe();
                 let summaries = result.as_ref().ok().map(|sessions| {
                     sessions
                         .values()
@@ -193,12 +207,11 @@ fn dispatch_job(ws: &Workspace, job: Job, tx: &Sender<Msg>, writer: &Sender<Writ
         }
         Job::Open(target) => spawn_read(ws, tx, move |ws| Msg::Opened {
             target,
-            result: github::open_in_browser(ws.repo_root(), target).map_err(|e| e.to_string()),
+            result: github::open_in_browser(ws.repo_root(), target),
         }),
-        Job::FetchPageUrl(target) => spawn_read(ws, tx, move |ws| Msg::PageUrl {
-            target,
-            result: github::page_url(ws.repo_root(), target).map_err(|e| e.to_string()),
-        }),
+        Job::FetchPageUrl(target) => {
+            spawn_read(ws, tx, move |ws| Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) });
+        }
     }
 }
 
@@ -213,24 +226,28 @@ fn spawn_read(ws: &Workspace, tx: &Sender<Msg>, job: impl FnOnce(&Workspace) -> 
 
 /// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
 /// inherited stdio and wait, then restore the TUI.
-fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, issue: domain::IssueNumber) -> Result<(), String> {
-    match ws.attach_plan(issue).map_err(|e| e.to_string())? {
+fn attach(
+    terminal: &mut ratatui::DefaultTerminal,
+    ws: &Workspace,
+    issue: domain::IssueNumber,
+) -> Result<(), AttachError> {
+    match ws.attach_plan(issue).map_err(AttachError::Session)? {
         AttachPlan::Switch(command) => {
-            let (program, args) = command.split_first().ok_or("empty attach command")?;
-            proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(|e| e.to_string())
+            let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
+            proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(AttachError::Run)
         }
         AttachPlan::Suspend(command) => {
-            let (program, args) = command.split_first().ok_or("empty attach command")?;
+            let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange);
             ratatui::restore();
             let status = std::process::Command::new(program).args(args).status();
             *terminal = ratatui::init();
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableFocusChange);
-            terminal.clear().map_err(|e| e.to_string())?;
+            terminal.clear().map_err(AttachError::Terminal)?;
             match status {
                 Ok(s) if s.success() => Ok(()),
-                Ok(s) => Err(format!("{program} exited with {s}")),
-                Err(e) => Err(format!("cannot run {program}: {e}")),
+                Ok(status) => Err(AttachError::Exited { program: program.clone(), status }),
+                Err(e) => Err(AttachError::Run(proc::ProcError::spawn(program, &e))),
             }
         }
     }
@@ -241,11 +258,11 @@ fn drain(rx: &Receiver<Msg>) -> Vec<Msg> {
 }
 
 /// Waits up to `timeout` for input, then takes everything that is queued.
-fn poll_input(timeout: Duration) -> Result<Vec<Msg>, String> {
+fn poll_input(timeout: Duration) -> std::io::Result<Vec<Msg>> {
     let mut msgs = Vec::new();
     let mut wait = timeout;
-    while event::poll(wait).map_err(|e| e.to_string())? {
-        match event::read().map_err(|e| e.to_string())? {
+    while event::poll(wait)? {
+        match event::read()? {
             Event::Key(key) => msgs.push(Msg::Key(key)),
             Event::Mouse(mouse) => msgs.push(Msg::Mouse(mouse, Instant::now())),
             Event::FocusGained => msgs.push(Msg::FocusGained),
@@ -254,4 +271,18 @@ fn poll_input(timeout: Duration) -> Result<Vec<Msg>, String> {
         wait = Duration::ZERO;
     }
     Ok(msgs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RunError;
+
+    #[test]
+    fn a_missing_current_directory_keeps_its_sentence() {
+        let gone = std::io::Error::new(std::io::ErrorKind::NotFound, "No such file or directory (os error 2)");
+        assert_eq!(
+            RunError::Cwd(gone).to_string(),
+            "cannot read the current directory: No such file or directory (os error 2)"
+        );
+    }
 }

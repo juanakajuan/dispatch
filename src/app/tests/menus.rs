@@ -213,6 +213,10 @@ fn a_failed_save_toasts_and_a_good_one_does_not() {
     let (mut state, _) = app();
     assert!(press(&mut state, Msg::Saved(Ok(()))).is_empty());
     assert!(state.toast.is_none());
-    press(&mut state, Msg::Saved(Err("disk full".to_string())));
-    assert_eq!(state.toast.as_ref().map(|t| t.text.as_str()), Some("Saving settings failed: disk full"));
+    let source = std::io::Error::other("disk full");
+    press(&mut state, Msg::Saved(Err(crate::config::ConfigError::Write { path: "/c/dispatch.json".into(), source })));
+    assert_eq!(
+        state.toast.as_ref().map(|t| t.text.as_str()),
+        Some("Saving settings failed: cannot write /c/dispatch.json: disk full")
+    );
 }

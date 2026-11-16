@@ -203,3 +203,30 @@ impl fmt::Display for SetupError {
         }
     }
 }
+
+/// Why dispatch could not show a session's window.
+#[derive(Debug)]
+pub enum AttachError {
+    Session(SessionError),
+    EmptyCommand,
+    Run(ProcError),
+    /// The attach command of a suspended TUI exited with a failure.
+    Exited {
+        program: String,
+        status: std::process::ExitStatus,
+    },
+    /// The terminal did not come back after the attach.
+    Terminal(std::io::Error),
+}
+
+impl fmt::Display for AttachError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AttachError::Session(e) => e.fmt(f),
+            AttachError::EmptyCommand => f.write_str("empty attach command"),
+            AttachError::Run(e) => e.fmt(f),
+            AttachError::Exited { program, status } => write!(f, "{program} exited with {status}"),
+            AttachError::Terminal(e) => e.fmt(f),
+        }
+    }
+}

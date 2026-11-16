@@ -4,12 +4,12 @@ use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
 use super::msg::{Cmd, Job};
 use super::sessions::goto_session;
 use super::toast::say;
-use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest};
+use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest, Unusable};
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::merge::{Consent, MergeAsk, MergeError};
 use crate::session::request::{Launch, StartFrom, StartRequest};
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Armed {
@@ -29,42 +29,82 @@ pub(super) enum Fixer {
     NewSession(IssueNumber),
 }
 
+/// Why `m` has no PR to act on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NoTarget {
+    NothingSelected,
+    NotListed(PrNumber),
+    NoPr(IssueNumber),
+    NotOpen(PrNumber),
+}
+
+impl fmt::Display for NoTarget {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            NoTarget::NothingSelected => f.write_str("Nothing is selected."),
+            NoTarget::NotListed(n) => write!(f, "PR {n} is not in the list."),
+            NoTarget::NoPr(n) => write!(f, "{n} has no PR yet."),
+            NoTarget::NotOpen(n) => write!(f, "PR {n} is not open."),
+        }
+    }
+}
+
+/// Why no session can fix a PR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum CannotFix {
+    ClosesNoIssue(PrNumber),
+    EachIssueBusy(PrNumber),
+    UnusableHead { pr: PrNumber, raw: String, why: Unusable },
+}
+
+impl fmt::Display for CannotFix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CannotFix::ClosesNoIssue(n) => {
+                write!(f, "PR {n} closes no issue, so dispatch can not start a session for it.")
+            }
+            CannotFix::EachIssueBusy(n) => {
+                write!(f, "Each issue that PR {n} closes already has a session on another branch.")
+            }
+            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why}"),
+        }
+    }
+}
+
 /// The PR `m` acts on: the selected PR, or the PR of the selected issue or
 /// session. No session is needed.
-pub(super) fn merge_target(state: &State) -> Result<&PullRequest, String> {
-    let (pr, missing) = match selected_row(state).ok_or("Nothing is selected.")? {
-        RowKey::Pr(n) => (state.prs.items.iter().find(|p| p.number == n), format!("PR {n} is not in the list.")),
+pub(super) fn merge_target(state: &State) -> Result<&PullRequest, NoTarget> {
+    let (pr, missing) = match selected_row(state).ok_or(NoTarget::NothingSelected)? {
+        RowKey::Pr(n) => (state.prs.items.iter().find(|p| p.number == n), NoTarget::NotListed(n)),
         RowKey::Issue(n) => (
             state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).or_else(|| lead_pr(state, n)),
-            format!("{n} has no PR yet."),
+            NoTarget::NoPr(n),
         ),
-        RowKey::Session(n) => {
-            (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), format!("{n} has no PR yet."))
-        }
+        RowKey::Session(n) => (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), NoTarget::NoPr(n)),
     };
     let pr = pr.ok_or(missing)?;
     match pr.state {
         PrState::Open | PrState::Draft => Ok(pr),
-        PrState::Merged | PrState::Closed => Err(format!("PR {} is not open.", pr.number)),
+        PrState::Merged | PrState::Closed => Err(NoTarget::NotOpen(pr.number)),
     }
 }
 
 /// A running session on the PR's branch fixes it. Else a new session does:
 /// for the issue of an exited session on that branch, or else for the first
 /// issue the PR closes that has no session yet.
-pub(super) fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, String> {
+pub(super) fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, CannotFix> {
     if let Some(s) = state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)) {
         return Ok(if s.state.is_live() { Fixer::Agent(s.issue) } else { Fixer::NewSession(s.issue) });
     }
     let n = pr.number;
     if pr.closes.is_empty() {
-        return Err(format!("PR {n} closes no issue, so dispatch can not start a session for it."));
+        return Err(CannotFix::ClosesNoIssue(n));
     }
     pr.closes
         .iter()
         .find(|i| !state.sessions.contains_key(i) && !state.starting.contains(i))
         .map(|&i| Fixer::NewSession(i))
-        .ok_or_else(|| format!("Each issue that PR {n} closes already has a session on another branch."))
+        .ok_or(CannotFix::EachIssueBusy(n))
 }
 
 /// `m`: the first press arms, the next press on the same PR acts. Merging
@@ -75,7 +115,7 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let pr = match merge_target(state) {
         Ok(pr) => pr,
         Err(why) => {
-            say(state, why);
+            say(state, why.to_string());
             return Vec::new();
         }
     };
@@ -131,11 +171,11 @@ pub(super) fn fix_request(
     pr: &PullRequest,
     problem: MergeProblem,
     method: MergeMethod,
-) -> Result<StartRequest, String> {
+) -> Result<StartRequest, CannotFix> {
     let branch = match &pr.head {
         PrBranch::Valid(name) => name.clone(),
         PrBranch::Unusable { raw, why } => {
-            return Err(format!("PR {} has the branch name {raw:?}: {why}", pr.number));
+            return Err(CannotFix::UnusableHead { pr: pr.number, raw: raw.clone(), why: why.clone() });
         }
     };
     Ok(StartRequest {
