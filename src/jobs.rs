@@ -6,18 +6,21 @@ use crate::app::msg::{Job, Msg, Observation, ReadJob, WriteJob};
 use crate::session::Workspace;
 use crate::{config, github, merge, transcript};
 use std::sync::mpsc::{self, Sender};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 pub struct Jobs {
     ws: Workspace,
     tx: Sender<Msg>,
     writer: Sender<WriteJob>,
+    /// One observe runs at a time (`Poll`), so the lock never waits.
+    transcripts: Arc<Mutex<transcript::Reader>>,
 }
 
 impl Jobs {
     pub fn new(ws: &Workspace, tx: Sender<Msg>) -> Self {
         let writer = spawn_writer(ws.clone(), tx.clone());
-        Jobs { ws: ws.clone(), tx, writer }
+        Jobs { ws: ws.clone(), tx, writer, transcripts: Arc::default() }
     }
 
     pub fn run(&self, job: Job) {
@@ -26,15 +29,15 @@ impl Jobs {
                 let _ = self.writer.send(job);
             }
             Job::Read(job) => {
-                let (ws, tx) = (self.ws.clone(), self.tx.clone());
-                std::thread::spawn(move || read(&ws, &tx, job));
+                let (ws, tx, transcripts) = (self.ws.clone(), self.tx.clone(), Arc::clone(&self.transcripts));
+                std::thread::spawn(move || read(&ws, &tx, &transcripts, job));
             }
         }
     }
 }
 
 /// A closed channel means the app is quitting, so a dropped result is correct.
-fn read(ws: &Workspace, tx: &Sender<Msg>, job: ReadJob) {
+fn read(ws: &Workspace, tx: &Sender<Msg>, transcripts: &Mutex<transcript::Reader>, job: ReadJob) {
     let msg = match job {
         ReadJob::FetchIssues => {
             let result = github::fetch_issues(ws.repo_root());
@@ -45,8 +48,8 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, job: ReadJob) {
             Msg::Prs { result, at: Instant::now() }
         }
         ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
-            let transcripts =
-                sessions.values().filter_map(|s| Some((s.issue, transcript::read(s.worktree.as_path())?))).collect();
+            let mut reader = transcripts.lock().unwrap_or_else(PoisonError::into_inner);
+            let transcripts = reader.read(sessions.values().map(|s| (s.issue, s.worktree.as_path())));
             Observation { sessions, transcripts }
         })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
