@@ -1,10 +1,12 @@
 use super::palette;
-use super::text::{cells, fit, span};
+use super::text::{cells, fit, span, wrap};
 use crate::app::keys::{Action, Key};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::config::Config;
 use crate::config::settings::SETTINGS;
+use crate::domain::IssueNumber;
+use crate::transcript::SummaryKind;
 use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -38,20 +40,9 @@ pub(super) fn keybinds_lines() -> Vec<(Line<'static>, Option<Action>)> {
 pub(super) fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap) -> u16 {
     let entries = keybinds_lines();
     let wanted: u16 = entries.len().try_into().unwrap_or(u16::MAX);
-    let width = screen.width.min(64);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
-    let area = Rect::new(screen.x + (screen.width - width) / 2, screen.y + (screen.height - height) / 2, width, height);
-    frame.render_widget(Clear, area);
-    frame.buffer_mut().set_style(area, palette::PLAIN);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(palette::DIM)
-        .title(span(" Keys ", palette::HEADING))
-        .padding(Padding::new(2, 2, 1, 0));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    draw_close(frame, area, hits);
+    let inner = draw_box(frame, centered(screen, 64, height), " Keys ".to_string(), hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     let scroll = scroll.min(max_scroll);
     for (row, (_, action)) in (0..).zip(&entries) {
@@ -73,24 +64,8 @@ pub(super) fn draw_settings(
     menu: &app::menus::SettingsMenu,
     hits: &mut HitMap,
 ) {
-    let width = screen.width.min(76);
     let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
-    let area = Rect::new(
-        screen.x + (screen.width - width) / 2,
-        screen.y + (screen.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, area);
-    frame.buffer_mut().set_style(area, palette::PLAIN);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(palette::DIM)
-        .title(span(" Settings ", palette::HEADING))
-        .padding(Padding::new(2, 2, 1, 0));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    draw_close(frame, area, hits);
+    let inner = draw_box(frame, centered(screen, 76, height), " Settings ".to_string(), hits);
     let default = Config::default();
     let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -127,6 +102,63 @@ pub(super) fn draw_settings(
     )));
     lines.push(Line::from(span("Saved to config.json", palette::DIM)));
     frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// All of what the session's Claude last said, word-wrapped and scrolled down
+/// by `scroll` lines. Returns how far it can scroll at this size.
+pub(super) fn draw_summary(
+    frame: &mut Frame,
+    screen: Rect,
+    state: &State,
+    issue: IssueNumber,
+    scroll: u16,
+    hits: &mut HitMap,
+) -> u16 {
+    let said = state.transcripts.get(&issue).and_then(|t| t.said.as_ref());
+    let title = match said.map(|s| s.kind) {
+        Some(SummaryKind::Recap) => format!(" {issue} recap "),
+        Some(SummaryKind::Message) | None => format!(" {issue} last message "),
+    };
+    let width = screen.width.min(84);
+    let text_width = usize::from(width.saturating_sub(6)).max(1);
+    let lines: Vec<Line<'static>> = said
+        .map_or("", |s| s.text.as_str())
+        .lines()
+        .flat_map(|line| {
+            let rows = wrap(line, text_width);
+            if rows.is_empty() { vec![String::new()] } else { rows }
+        })
+        .map(|row| Line::from(span(row, palette::PLAIN)))
+        .collect();
+    let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
+    // The margin keeps the footer and its `esc to close` in view.
+    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let inner = draw_box(frame, centered(screen, width, height), title, hits);
+    let max_scroll = wanted.saturating_sub(inner.height);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
+    max_scroll
+}
+
+/// A box of at most `width` by `height`, centered on the screen.
+fn centered(screen: Rect, width: u16, height: u16) -> Rect {
+    let (width, height) = (screen.width.min(width), screen.height.min(height));
+    Rect::new(screen.x + (screen.width - width) / 2, screen.y + (screen.height - height) / 2, width, height)
+}
+
+/// Clears `area`, draws a titled overlay border with its close control, and
+/// returns the area inside the padding.
+fn draw_box(frame: &mut Frame, area: Rect, title: String, hits: &mut HitMap) -> Rect {
+    frame.render_widget(Clear, area);
+    frame.buffer_mut().set_style(area, palette::PLAIN);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(palette::DIM)
+        .title(span(title, palette::HEADING))
+        .padding(Padding::new(2, 2, 1, 0));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    draw_close(frame, area, hits);
+    inner
 }
 
 const CLOSE: &str = " esc ✕ ";

@@ -6,6 +6,7 @@ use super::msg::Cmd;
 use super::open::open_key;
 use super::remove::{removable, remove_key};
 use super::sessions::{attach_key, start_key, stop_key};
+use super::summary::summary_key;
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
 use crate::session::SessionState;
@@ -36,6 +37,7 @@ pub enum Action {
     Sort,
     Settings,
     Keybinds,
+    Summary,
     Quit,
 }
 
@@ -74,6 +76,8 @@ pub enum When {
     OnSessions,
     SessionLive,
     SessionExited,
+    /// The selected session's Claude has said something.
+    Said,
     /// The session exited, or its PR is merged.
     Removable,
     /// The selection has an open or draft PR.
@@ -194,6 +198,13 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("x", "stop", When::SessionLive)],
     },
     Binding {
+        keys: &[Key::Char('i')],
+        action: Action::Summary,
+        group: KeyGroup::Sessions,
+        desc: "show all of what Claude last said",
+        bar: &[bar("i", "read summary", When::Said)],
+    },
+    Binding {
         keys: &[Key::Char('D')],
         action: Action::Remove,
         group: KeyGroup::Sessions,
@@ -288,14 +299,18 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
         Focus::Settings(_) => {
             vec![hint("j/k", "move", Key::Char('j')), hint("enter", "change", enter), hint("esc", "close", esc)]
         }
-        Focus::Keybinds { .. } => vec![hint("j/k", "scroll", Key::Char('j')), hint("esc", "close", esc)],
+        Focus::Keybinds { .. } | Focus::Summary { .. } => {
+            vec![hint("j/k", "scroll", Key::Char('j')), hint("esc", "close", esc)]
+        }
         Focus::List => key_bar(state),
     }
 }
 
 /// The key bar for the list. A click on an entry presses its binding's first key.
 pub(super) fn key_bar(state: &State) -> Vec<Hint> {
-    let session = current_session(state).map(|s| s.state);
+    let current = current_session(state);
+    let session = current.map(|s| s.state);
+    let said = current.and_then(|s| state.transcripts.get(&s.issue)).is_some_and(|t| t.said.is_some());
     let shown = |when: When| match when {
         When::Always => true,
         When::OnIssues => state.tab == Tab::Issues,
@@ -303,6 +318,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
         When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
         When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),
+        When::Said => said,
         When::Removable => removable(state),
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,
@@ -365,6 +381,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         }
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
+        Action::Summary => return summary_key(state),
         Action::Quit => return vec![Cmd::Quit],
     }
     Vec::new()

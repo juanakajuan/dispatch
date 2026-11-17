@@ -22,7 +22,7 @@ pub(super) fn keybinds_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     let Focus::Keybinds { scroll } = &mut state.focus else { return Vec::new() };
     match key_of(ev) {
         Some(Key::Char('j') | Key::Code(KeyCode::Down)) => {
-            *scroll = scroll.saturating_add(1).min(state.hits.keybinds_max_scroll);
+            *scroll = scroll.saturating_add(1).min(state.hits.max_scroll);
         }
         Some(Key::Char('k') | Key::Code(KeyCode::Up)) => *scroll = scroll.saturating_sub(1),
         Some(Key::Code(KeyCode::Esc) | Key::Char('?')) => state.focus = Focus::List,

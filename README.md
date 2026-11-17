@@ -85,6 +85,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
+| `i` | Show all of what the session's Claude said last. `j` / `k` scroll it. `i` or Esc closes it. See [What Claude said](#what-claude-said) |
 | `D` | Remove the worktree and the branch of a session that has exited or whose PR is merged. Press `D` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
@@ -190,6 +191,15 @@ An invalid file stops dispatch at start with a message. Unknown fields are error
 Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons` and `multiplexer`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
 
 Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` applies at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
+
+## What Claude said
+
+A session row shows the first line of what its Claude said last, after the title. Press `i` to read all of it in a box. dispatch reads it from the newest transcript of the worktree, at `~/.claude/projects/<worktree path>/<session>.jsonl` (or under `CLAUDE_CONFIG_DIR`). The path has each character that is not a letter or a digit changed to `-`. The newest of these two entries shows:
+
+- A recap, which Claude Code writes when you step away. The row shows it after `※`, and the box title is `#N recap`. dispatch removes the `(disable recaps in /config)` note.
+- The text of an assistant message. Tool calls, thinking, and subagent messages do not count. The box title is `#N last message`.
+
+dispatch reads only the last 512 KB of the transcript. It reads the file again only when its size or its modification time changes, so an idle session costs one `stat` each 2 seconds.
 
 ## How sessions are tracked
 

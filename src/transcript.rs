@@ -199,7 +199,10 @@ mod tests {
     #[test]
     fn the_text_blocks_of_one_message_join_and_blank_ones_are_skipped() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First."},{"type":"thinking","thinking":"hm"},{"type":"text","text":"  "},{"type":"text","text":"Second."}]}}"#;
-        assert_eq!(parse_latest(line), Some(Summary { kind: SummaryKind::Message, text: "First. Second.".to_string() }));
+        assert_eq!(
+            parse_latest(line),
+            Some(Summary { kind: SummaryKind::Message, text: "First. Second.".to_string() })
+        );
     }
 
     #[test]

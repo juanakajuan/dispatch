@@ -66,7 +66,7 @@ fn a_short_terminal_scrolls_the_keybinds_menu_with_j_and_k() {
     let screen = draw_into(&mut state, 100, 16);
     assert!(screen.contains("Navigation"), "the menu starts at the top\n{screen}");
     assert!(!screen.contains("show all keys"), "the end is below the menu\n{screen}");
-    let max = state.hits.keybinds_max_scroll;
+    let max = state.hits.max_scroll;
     assert!(max > 0);
     for _ in 0..u32::from(max) + 5 {
         send(&mut state, KeyCode::Char('j'));
@@ -160,7 +160,7 @@ fn a_scrolled_out_keybinds_entry_has_no_target() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char('?'));
     draw_into(&mut state, 100, 16);
-    let max = state.hits.keybinds_max_scroll;
+    let max = state.hits.max_scroll;
     for _ in 0..u32::from(max) + 5 {
         send(&mut state, KeyCode::Char('j'));
     }
@@ -176,4 +176,35 @@ fn a_scrolled_out_keybinds_entry_has_no_target() {
     let (y, hit) = binding_row(&state, &screen, *last.keys.first().expect("key")).expect("the last entry shows");
     assert_eq!(hit, Some(HitTarget::Binding(last.action)));
     assert!(entries.contains(&y));
+}
+
+#[test]
+fn the_summary_shows_all_of_what_claude_said_wrapped_and_scrolled() {
+    use crate::transcript::{Summary, SummaryKind, Transcript};
+    let mut state = full_state();
+    let long = "word ".repeat(40);
+    let text = format!("Fixed the retry queue.\n\n{long}\nEnd of the recap.");
+    let said = Summary { kind: SummaryKind::Recap, text };
+    state.transcripts.insert(IssueNumber(3), Transcript { said: Some(said) });
+    send(&mut state, KeyCode::Char('3'));
+    send(&mut state, KeyCode::Char('i'));
+    let screen = draw_into(&mut state, 60, 40);
+    for want in [" #3 recap ", "Fixed the retry queue.", "End of the recap.", "esc ✕", "j/k to scroll · esc to close"]
+    {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+    assert_eq!(state.hits.max_scroll, 0, "it fits");
+
+    let screen = draw_into(&mut state, 60, 9);
+    assert!(screen.contains("Fixed the retry queue."), "it starts at the top\n{screen}");
+    assert!(!screen.contains("End of the recap."), "the end is below the box\n{screen}");
+    let max = state.hits.max_scroll;
+    assert!(max > 0);
+    for _ in 0..max {
+        send(&mut state, KeyCode::Char('j'));
+    }
+    let screen = draw_into(&mut state, 60, 9);
+    assert!(screen.contains("End of the recap."), "j scrolls to the end\n{screen}");
+    send(&mut state, KeyCode::Esc);
+    assert!(matches!(state.focus, Focus::List));
 }
