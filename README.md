@@ -65,7 +65,7 @@ An issue row without a session shows the state of the pull request that closes i
 | `●` white | Open PR, no checks |
 | `✓` purple | Merged PR |
 
-If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. dispatch loads the 100 newest PRs in any state, so an older merged PR does not show. Press `r` to refresh.
+If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. Press `r` to refresh.
 
 dispatch loads issues and PRs again every 60 seconds and when you press `r`. It also loads them a few seconds after these events, because they often change GitHub data:
 

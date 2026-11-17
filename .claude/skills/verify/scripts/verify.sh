@@ -98,6 +98,9 @@ echo "\$line" >>"$RUN/evidence/gh-calls.log"
 blocked() { echo "BLOCKED \$line" >>"$RUN/evidence/gh-blocked.log"; echo "blocked by dispatch verify guard: gh \$*" >&2; exit 1; }
 case "\${1:-} \${2:-}" in
   "issue list"|"pr list"|"issue view"|"pr view"|"repo view"|"auth status") exec "$real_gh" "\$@" ;;
+  "api graphql") # a read only when every query is a query, never a mutation
+    for a in "\$@"; do [[ \$a == query=* && \$a != query=query* ]] && blocked "\$@"; done
+    exec "$real_gh" "\$@" ;;
   "pr merge") if [[ $allow_merge == 1 ]]; then exec "$real_gh" "\$@"; fi; blocked "\$@" ;;
   *) blocked "\$@" ;;
 esac

@@ -239,6 +239,40 @@ struct WireIssueRef {
     number: u32,
 }
 
+/// An open issue and the PRs GitHub links to it, from `gh issue list`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WireIssueLinks {
+    url: String,
+    closed_by_pull_requests_references: Vec<WireLinkedPr>,
+}
+
+#[derive(serde::Deserialize)]
+struct WireLinkedPr {
+    number: u32,
+    url: String,
+}
+
+/// The PRs that close the issues, once each, in number order. A PR in
+/// another repo is left out: `gh pr view` looks only in this repo, so its
+/// number would name a different PR.
+pub(super) fn linked_prs(wire: Vec<WireIssueLinks>) -> Vec<PrNumber> {
+    let mut prs: Vec<PrNumber> = wire
+        .into_iter()
+        .flat_map(|issue| {
+            let repo = issue.url.rsplit_once("/issues/").map(|(repo, _)| format!("{repo}/pull/"));
+            issue
+                .closed_by_pull_requests_references
+                .into_iter()
+                .filter(move |pr| repo.as_ref().is_some_and(|repo| pr.url.starts_with(repo.as_str())))
+                .map(|pr| PrNumber(pr.number))
+        })
+        .collect();
+    prs.sort_unstable();
+    prs.dedup();
+    prs
+}
+
 /// Real output mixes two shapes, told apart by `__typename`:
 /// `CheckRun` {status: "`COMPLETED"|"IN_PROGRESS`"|.., conclusion: "SUCCESS"|"FAILURE"|""}
 /// `StatusContext` {state: "SUCCESS"|"PENDING"|"FAILURE"|"ERROR"}.
@@ -345,6 +379,21 @@ mod tests {
         let bad = PRS.replacen("\"state\": \"MERGED\"", "\"state\": \"WEIRD\"", 1);
         let err = parse_prs(&bad).expect_err("must fail");
         assert_eq!(err.to_string(), r#"PR #1002 has unknown state "WEIRD""#);
+    }
+
+    #[test]
+    fn linked_prs_keep_this_repo_once_each_in_order() {
+        let json = r#"[
+            {"url":"https://github.com/o/r/issues/5","closedByPullRequestsReferences":[
+                {"number":9,"url":"https://github.com/o/r/pull/9"},
+                {"number":3,"url":"https://github.com/o/r/pull/3"}]},
+            {"url":"https://github.com/o/r/issues/6","closedByPullRequestsReferences":[
+                {"number":9,"url":"https://github.com/o/r/pull/9"},
+                {"number":4,"url":"https://github.com/other/r/pull/4"},
+                {"number":7,"url":"https://github.com/o/r2/pull/7"}]},
+            {"url":"https://github.com/o/r/issues/8","closedByPullRequestsReferences":[]}]"#;
+        let wire = decode(json, "gh issue list").expect("parses");
+        assert_eq!(linked_prs(wire), [PrNumber(3), PrNumber(9)]);
     }
 
     #[test]
