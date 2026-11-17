@@ -69,7 +69,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 WriteJob::Remove(issue) => Msg::Removed { issue, result: ws.remove(issue) },
                 WriteJob::Resume(issue, launch) => Msg::Resumed { issue, result: ws.resume(issue, &launch) },
                 WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),
-                WriteJob::Send { issue, text } => Msg::Sent { issue, result: ws.send(issue, &text) },
+                WriteJob::Send { issue, kind, text } => Msg::Sent { issue, kind, result: ws.send(issue, &text) },
                 WriteJob::Merge(ask) => Msg::Merged { ask, run: merge::job::merge(ws.repo_root(), ask) },
             };
             if tx.send(msg).is_err() {

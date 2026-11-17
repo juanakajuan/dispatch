@@ -69,7 +69,7 @@ fn wheel(state: &mut State, step: Move) -> Vec<Cmd> {
         Focus::List | Focus::Filter => move_selection(state, step),
         Focus::Keybinds { .. } | Focus::Summary { .. } => return press_key(state, wheel_key(step)),
         Focus::Settings(menu) if menu.edit.is_none() => return press_key(state, wheel_key(step)),
-        Focus::Settings(_) | Focus::Dialog(_) => {}
+        Focus::Settings(_) | Focus::Dialog(_) | Focus::Message { .. } => {}
     }
     Vec::new()
 }

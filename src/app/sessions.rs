@@ -113,11 +113,3 @@ pub(super) fn attached(state: &mut State, result: Result<(), AttachError>) -> Ve
     }
     observe_now(state)
 }
-
-pub(super) fn sent(state: &mut State, issue: IssueNumber, result: Result<(), SessionError>) -> Vec<Cmd> {
-    match result {
-        Ok(()) => toast::info(state, format!("Asked {issue}'s agent to fix and merge its PR")),
-        Err(e) => toast::error(state, format!("Merge request to {issue} failed: {e}")),
-    }
-    Vec::new()
-}

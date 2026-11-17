@@ -93,7 +93,7 @@ fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
         Focus::Summary { issue, scroll } => {
             hits.max_scroll = draw_summary(frame, frame.area(), state, *issue, *scroll, hits);
         }
-        Focus::List | Focus::Filter => {}
+        Focus::List | Focus::Filter | Focus::Message { .. } => {}
     }
 }
 

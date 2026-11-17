@@ -4,7 +4,7 @@ A user presses `,` to open the settings menu and `?` to open the keys menu. The 
 
 ## Sub-features
 
-- `keys-bar` shows `<key> to <action>` pairs joined by ` · `, for the selected row only. `? to keys` is always first and `q to quit` last. `m to merge` shows only for a row with an open or draft PR, `x to stop` only for a live session, `a to resume` only for an exited one.
+- `keys-bar` shows `<key> to <action>` pairs joined by ` · `, for the selected row only. `? to keys` is always first and `q to quit` last. `m to merge` shows only for a row with an open or draft PR, `x to stop` and `t to send message` only for a live session, `a to resume` only for an exited one.
 - `keys-menu` (`?`) shows a box titled ` Keys ` with the groups `Navigation`, `Sessions`, `Pull requests`, `View`, `App`, one row per binding, for example `j / down    move down`. `j`/`k` scroll. Every other key is swallowed, so `q` does not quit. `Esc` or `?` closes it.
 - `settings-menu` (`,`) shows a box titled ` Settings ` with one row per setting: `<key>  <value>   default: <default>`. The selected row starts with `›`. A note under the rows says when the change applies. `Esc` or `,` closes it.
 - `settings-toggle` changes `detect_waiting` (on, off) or `icons` (unicode, nerdfont), or cycles `multiplexer` (`auto`, `tmux`, `herdr`, `herdr-app`), on Enter.
@@ -23,7 +23,7 @@ Preconditions:
 
 - A run is up and doctor shows no `FAIL`. Set `CFG=$RUN/xdg/dispatch/config.json` and save `jq -c . "$CFG"`. It has `claude_command` and `"multiplexer":"tmux"`.
 
-- **Key bar.** Press `1`. Run `$V wait "$RUN" '\? to keys · s to start session'`. The bar ends with `q to quit`. Press `3` with a live session selected: the bar has `a to attach · x to stop`. Run `$V shot "$RUN" keybar`.
+- **Key bar.** Press `1`. Run `$V wait "$RUN" '\? to keys · s to start session'`. The bar ends with `q to quit`. Press `3` with a live session selected: the bar has `a to attach · x to stop · t to send message`. Run `$V shot "$RUN" keybar`.
 - **Keys menu.** Press `?`. Run `$V keys "$RUN" '?'` and `$V wait "$RUN" ' Keys '`. The screen shows `Navigation`, `Pull requests`, `j / down +move down`, `q / ctrl\+c +quit`, `, +open the settings menu`, and the key bar `j/k to scroll · esc to close`. Run `$V shot "$RUN" keybinds`. Press `q`: the menu stays open. Press `Escape`: ` Keys ` is gone. Open it again with `?` and close it with `?`.
 - **Settings menu.** Press `,`. Run `$V keys "$RUN" ,` and `$V wait "$RUN" ' Settings '`. The rows are `› detect_waiting  on   default: on`, `icons  unicode   default: unicode`, `multiplexer  tmux   default: auto`, and `claude_command  $RUN/bin/fake-claude…   default: claude`. The note is `Applies to sessions you start or resume after this change.` The box ends with `j/k move · enter change · esc close` and `Saved to config.json`. Run `$V shot "$RUN" settings`.
 - **Toggle and save.** Press Enter. `$V wait "$RUN" 'detect_waiting +off'`. Poll the file with a bounded loop: `for i in $(seq 50); do jq -e '.detect_waiting == false' "$CFG" && break; sleep 0.1; done`. `claude_command` and `multiplexer` stay. Press Enter again: `detect_waiting +on`, and the key is gone from the file (`jq 'has("detect_waiting")'` prints `false`).
