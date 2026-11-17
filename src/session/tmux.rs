@@ -199,6 +199,7 @@ fn escape_argv(argv: &[String]) -> Vec<String> {
 /// Detached: the same with `-t =<name>:`, or `new-session -d -s <name>` when
 ///           `has-session -t =<name>` fails.
 /// Then:     tmux set-option -w -t <id> @dispatch-worktree <dir> ; set-option -w -t <id> remain-on-exit on
+///           and `; set_waiting` when the argv has the waiting hooks.
 ///
 /// A crash between the calls leaves an untagged window. That is accepted.
 /// Returns the new window id from `-P -F`.
@@ -223,16 +224,38 @@ fn open_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]
     tags.extend([dir_text, ";".to_string()]);
     tags.extend(tag(["set-option", "-w", "-t", id.as_str(), "remain-on-exit"]));
     tags.push("on".to_string());
+    if runs_waiting_hooks(command) {
+        tags.push(";".to_string());
+        tags.extend(set_waiting(&id));
+    }
     if let Err(error) = tmux(&tags) {
         return Err(MuxError::Untagged { window: id, error });
     }
     Ok(id)
 }
 
-/// For `Workspace::resume` on a dead pane: tmux respawn-window -k -t <id> -c <dir> -- <argv..>.
+/// True when `argv` passes the waiting hooks, so a hook clears the flag
+/// that `set_waiting` sets. Without them, nothing would clear it.
+fn runs_waiting_hooks(argv: &[String]) -> bool {
+    argv.iter().any(|a| a == WAITING_HOOKS)
+}
+
+/// The window waits for you until Claude starts: Claude can ask to trust
+/// the folder first, and no hook runs during that question.
+fn set_waiting(id: &WindowId) -> [String; 6] {
+    ["set-option", "-w", "-t", id.as_str(), "@dispatch-waiting", "1"].map(String::from)
+}
+
+/// For `Workspace::resume` on a dead pane: tmux respawn-window -k -t <id> -c <dir> -- <argv..>,
+/// after `set_waiting` when the argv has the waiting hooks.
 /// Keeps the window id and its tags.
 fn respawn(id: &WindowId, dir: &WorktreePath, command: &[String]) -> Result<(), MuxError> {
-    let mut args: Vec<String> = ["respawn-window", "-k", "-t", id.as_str(), "-c"].map(String::from).to_vec();
+    let mut args: Vec<String> = Vec::new();
+    if runs_waiting_hooks(command) {
+        args.extend(set_waiting(id));
+        args.push(";".to_string());
+    }
+    args.extend(["respawn-window", "-k", "-t", id.as_str(), "-c"].map(String::from));
     args.push(dir.as_path().to_string_lossy().into_owned());
     args.push("--".to_string());
     args.extend(escape_argv(command));
@@ -325,6 +348,40 @@ mod tests {
             calls[1],
             format!("tmux set-option -w -t @7 @dispatch-worktree {tmp} ; set-option -w -t @7 remain-on-exit on")
         );
+    }
+
+    fn hooked_argv() -> Vec<String> {
+        ["claude", "--settings", WAITING_HOOKS, "go"].map(String::from).to_vec()
+    }
+
+    #[test]
+    fn a_window_with_the_waiting_hooks_waits_until_claude_starts() {
+        let dir = WorktreePath::from_observed("/tmp").expect("tmp exists");
+        fake::install(|call| Ok(if call.contains("new-window") { "@7\n".to_string() } else { String::new() }));
+        let place = Place::Inside { session_id: "$3".to_string() };
+        open_window(&place, &dir, "#142", &hooked_argv()).expect("ok");
+        assert!(
+            fake::calls()[1].ends_with("remain-on-exit on ; set-option -w -t @7 @dispatch-waiting 1"),
+            "{:?}",
+            fake::calls()
+        );
+        let id = WindowId::parse("@7").expect("id");
+        fake::install(|_| Ok(String::new()));
+        respawn(&id, &dir, &hooked_argv()).expect("ok");
+        assert!(
+            fake::calls()[0].starts_with("tmux set-option -w -t @7 @dispatch-waiting 1 ; respawn-window -k -t @7"),
+            "the flag is set before the new Claude can clear it: {:?}",
+            fake::calls()
+        );
+    }
+
+    #[test]
+    fn a_new_claude_clears_the_flag_and_a_resumed_one_does_not() {
+        let hooks: serde_json::Value = serde_json::from_str(WAITING_HOOKS).expect("valid JSON");
+        let start = &hooks["hooks"]["SessionStart"][0];
+        assert_eq!(start["matcher"], "startup", "--continue is a resume start; it waits for you");
+        let command = start["hooks"][0]["command"].as_str().expect("a command");
+        assert!(command.ends_with("-u @dispatch-waiting"), "{command}");
     }
 
     #[test]

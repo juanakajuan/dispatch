@@ -47,7 +47,7 @@ dispatch then does this:
 2. It runs `git worktree add .claude/worktrees/<issue> -b <branch> origin/<default>` in the main checkout. Before the first worktree, it adds `.claude/worktrees/` to `.git/info/exclude`, so `git status` in the main checkout does not show the worktrees. dispatch does not change your `.gitignore`.
 3. It opens a tmux window named `#<issue>` that runs `claude [--permission-mode plan] "<prompt>"` in the worktree. The prompt has no `/skill` prefix. A SessionStart hook, such as pstack's, picks the workflow.
 
-Each worktree is a new directory inside the repo. Claude Code asks if you trust the directory the first time, unless you trusted a parent directory before. If you trusted the repo, the question does not show. Otherwise, attach to the session with `a` to answer. The session does not show `needs you` during this question.
+Each worktree is a new directory inside the repo. Claude Code asks if you trust the directory the first time, unless you trusted a parent directory before. If you trusted the repo, the question does not show. Otherwise, attach to the session with `a` to answer. With tmux and `detect_waiting`, the session shows `needs you` until Claude starts, so it shows `needs you` during this question.
 
 Worktrees that an older dispatch made next to the repo, at `../<repo>-<issue>`, still show as sessions and still resume. Only new worktrees go to `.claude/worktrees/`.
 
@@ -175,7 +175,7 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 }
 ```
 
-- `detect_waiting` is on by default. dispatch passes `--settings` with four hooks to `claude`. They set a flag on the tmux window when Claude waits for you. Set it to `false` if the hooks conflict with yours.
+- `detect_waiting` is on by default. dispatch passes `--settings` with five hooks to `claude`. They set a flag on the tmux window when Claude waits for you. A new window has the flag until Claude starts. Set it to `false` if the hooks conflict with yours.
 - `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
