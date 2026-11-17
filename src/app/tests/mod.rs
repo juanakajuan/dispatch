@@ -34,6 +34,7 @@ mod keys;
 mod list;
 mod menus;
 mod merge;
+mod message;
 mod open;
 mod refresh;
 mod remove;
@@ -121,7 +122,7 @@ pub(super) fn batch(state: &State) -> &BatchStart {
 pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Write(WriteJob::Send { issue, text })) => Some((*issue, text.as_str())),
+            Cmd::Job(Job::Write(WriteJob::Send { issue, text, .. })) => Some((*issue, text.as_str())),
             _ => None,
         })
         .collect()

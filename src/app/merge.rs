@@ -1,7 +1,7 @@
 use super::State;
 use super::feed::refresh_github;
 use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
-use super::msg::{Cmd, Job, WriteJob};
+use super::msg::{Cmd, Job, SendKind, WriteJob};
 use super::sessions::goto_session;
 use super::toast;
 use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest, Unusable};
@@ -265,6 +265,7 @@ pub(super) fn handoff(
             toast::info(state, format!("{sentence} Asking {i}'s agent to fix it."));
             return vec![Cmd::Job(Job::Write(WriteJob::Send {
                 issue: i,
+                kind: SendKind::MergeFix,
                 text: plan::handoff_prompt(pr.number, pr.base.display(), problem, method),
             }))];
         }

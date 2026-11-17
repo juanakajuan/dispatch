@@ -3,6 +3,7 @@ use super::feed::{observe_now, refresh_github};
 use super::list::{Move, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
 use super::menus::SettingsMenu;
 use super::merge::{Armed, merge_key, merge_target};
+use super::message::open_message;
 use super::msg::Cmd;
 use super::open::open_key;
 use super::remove::{removable, remove_key};
@@ -40,6 +41,7 @@ pub enum Action {
     Settings,
     Keybinds,
     Summary,
+    Message,
     Quit,
 }
 
@@ -208,6 +210,13 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("x", "stop", When::SessionLive)],
     },
     Binding {
+        keys: &[Key::Char('t')],
+        action: Action::Message,
+        group: KeyGroup::Sessions,
+        desc: "send a message to the session",
+        bar: &[bar("t", "send message", When::SessionLive)],
+    },
+    Binding {
         keys: &[Key::Char('i')],
         action: Action::Summary,
         group: KeyGroup::Sessions,
@@ -300,6 +309,7 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
     let (enter, esc) = (Key::Code(KeyCode::Enter), Key::Code(KeyCode::Esc));
     match &state.focus {
         Focus::Filter => vec![hint("enter", "keep", enter), hint("esc", "clear", esc)],
+        Focus::Message { .. } => vec![hint("enter", "send", enter), hint("esc", "cancel", esc)],
         Focus::Dialog(_) => vec![
             hint("ctrl-s", "start", Key::Ctrl('s')),
             hint("tab", "next field", Key::Code(KeyCode::Tab)),
@@ -398,6 +408,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
         Action::Summary => return summary_key(state),
+        Action::Message => return open_message(state),
         Action::Quit => return vec![Cmd::Quit],
     }
     Vec::new()

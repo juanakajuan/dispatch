@@ -18,11 +18,12 @@ use keys::{act, action_for};
 use list::{Tab, Tabs, filter_key};
 use menus::{SettingsMenu, keybinds_key, settings_key};
 use merge::{Armed, merged};
+use message::{message_key, sent};
 use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
 use remove::removed;
-use sessions::{attached, resumed, sent, started, stopped};
+use sessions::{attached, resumed, started, stopped};
 use summary::summary_overlay_key;
 use toast::Toast;
 
@@ -33,6 +34,7 @@ pub mod keys;
 pub mod list;
 pub mod menus;
 pub mod merge;
+pub mod message;
 pub mod mouse;
 pub mod msg;
 pub mod open;
@@ -52,6 +54,11 @@ pub enum Focus {
     /// The start dialog for every marked issue.
     Batch(Box<BatchStart>),
     Settings(Box<SettingsMenu>),
+    /// The one-line message field for a running session, from `t`.
+    Message {
+        issue: IssueNumber,
+        text: String,
+    },
     /// The keybinds overlay, scrolled down by `scroll` lines.
     Keybinds {
         scroll: u16,
@@ -162,6 +169,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Focus::Dialog(_) => dialog_key(state, &ev),
             Focus::Batch(_) => batch_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
+            Focus::Message { .. } => message_key(state, &ev),
             Focus::Settings(_) => settings_key(state, &ev),
             Focus::Keybinds { .. } => keybinds_key(state, &ev),
             Focus::Summary { .. } => summary_overlay_key(state, &ev),
@@ -191,7 +199,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Opened { target, result } => opened(state, target, result),
         Msg::PageUrl { target, result } => page_url(state, target, result),
         Msg::Copied { target, result } => copied(state, target, result),
-        Msg::Sent { issue, result } => sent(state, issue, result),
+        Msg::Sent { issue, kind, result } => sent(state, issue, kind, result),
         Msg::Merged { ask, run } => merged(state, ask, run),
         Msg::Attached(result) => attached(state, result),
         Msg::Saved(result) => {

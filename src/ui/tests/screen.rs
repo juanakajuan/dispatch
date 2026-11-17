@@ -371,3 +371,14 @@ fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_t
     let i = state.config.icons.icons();
     assert!(screen.contains(&format!("{}1 {}2", i.uncommitted, i.to_push)), "nerd font work glyphs\n{screen}");
 }
+
+#[test]
+fn the_message_field_shows_in_the_prompt_row_with_its_session() {
+    let mut state = full_state();
+    for key in ['t', 'o', 'k'] {
+        send(&mut state, KeyCode::Char(key));
+    }
+    let screen = text(&render(&state, 100, 30));
+    assert!(screen.contains("❯ message to #3: ok▏"), "missing the field in\n{screen}");
+    assert!(screen.contains("enter to send · esc to cancel"), "missing the hints in\n{screen}");
+}
