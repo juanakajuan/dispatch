@@ -50,7 +50,8 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, transcripts: &Mutex<transcript::Reader
         ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
             let mut reader = transcripts.lock().unwrap_or_else(PoisonError::into_inner);
             let transcripts = reader.read(sessions.values().map(|s| (s.issue, s.worktree.as_path())));
-            Observation { sessions, transcripts }
+            let work = ws.work(&sessions);
+            Observation { sessions, transcripts, work }
         })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
         ReadJob::FetchPageUrl(target) => Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) },

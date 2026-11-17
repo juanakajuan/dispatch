@@ -6,7 +6,7 @@ use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::session::{Checkout, Session, SessionState};
+use crate::session::{Checkout, Push, Session, SessionState, Work};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -82,20 +82,60 @@ pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> 
     Some(v)
 }
 
-/// A worktree that has another branch checked out says so before anything
-/// else: its PR and its `D` still go by the session branch.
+/// A worktree that has another branch checked out says so before its PR or
+/// what Claude said: its PR and its `D` still go by the session branch.
 fn off_branch(s: &Session) -> Option<Vec<Span<'static>>> {
     (s.checkout != Checkout::SessionBranch)
         .then(|| vec![span(format!("on {}, not {}", s.checked_out(), s.branch.as_str()), palette::WARN)])
 }
 
-/// Glyph, name, summary, age. One line per row.
-pub(super) fn row_parts(
-    state: &State,
-    key: RowKey,
-    now: jiff::Timestamp,
-    icons: &Icons,
-) -> (Span<'static>, String, Vec<Span<'static>>, String) {
+/// `±2 ↑1 ↓3`: only the work that needs action. A branch that `origin`
+/// has at the same commit, with nothing uncommitted, shows a green check.
+fn work_spans(w: Work, icons: &Icons) -> Vec<Span<'static>> {
+    let (to_push, to_pull) = match w.push {
+        Push::NotPushed => (w.commits, 0),
+        Push::Pushed => (0, 0),
+        Push::Differs { to_push, to_pull } => (to_push, to_pull),
+    };
+    let mut parts = Vec::new();
+    if w.uncommitted > 0 {
+        parts.push(span(format!("{}{}", icons.uncommitted, w.uncommitted), palette::WARN));
+    }
+    if to_push > 0 {
+        parts.push(span(format!("{}{to_push}", icons.to_push), palette::WARN));
+    }
+    if to_pull > 0 {
+        parts.push(span(format!("{}{to_pull}", icons.to_pull), palette::WARN));
+    }
+    if parts.is_empty() && matches!(w.push, Push::Pushed) && w.commits > 0 {
+        parts.push(span(icons.pushed, palette::PASS));
+    }
+    let mut v = Vec::new();
+    for part in parts {
+        if !v.is_empty() {
+            v.push(Span::raw(" "));
+        }
+        v.push(part);
+    }
+    v
+}
+
+pub(super) struct RowParts {
+    glyph: Span<'static>,
+    name: String,
+    summary: Vec<Span<'static>>,
+    work: Vec<Span<'static>>,
+    age: String,
+}
+
+impl RowParts {
+    fn new(glyph: Span<'static>, name: String, summary: Vec<Span<'static>>, age: String) -> RowParts {
+        RowParts { glyph, name, summary, work: Vec::new(), age }
+    }
+}
+
+/// Glyph, name, summary, work, age. One line per row.
+pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons: &Icons) -> RowParts {
     let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(|s| s.state), state.starting.contains(&n)) {
         _ if app::list::session_merged(state, n) => Some(span(icons.pr_merged, palette::MERGED)),
         (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
@@ -118,7 +158,7 @@ pub(super) fn row_parts(
     match key {
         RowKey::Issue(n) => {
             let Some(i) = issue_of(state, n) else {
-                return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
             };
             let glyph = session_glyph(n).unwrap_or_else(|| {
                 let m = pr_mark(app::list::lead_pr(state, n), icons);
@@ -136,11 +176,11 @@ pub(super) fn row_parts(
                 }
                 (None, None) => vec![span(format!("{} · {} comments", i.author, i.comment_count), palette::DIM)],
             };
-            (glyph, format!("{n} {}", one_line(&i.title)), summary, age(i.updated_at, now))
+            RowParts::new(glyph, format!("{n} {}", one_line(&i.title)), summary, age(i.updated_at, now))
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
-                return (Span::raw(" "), String::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
             };
             let mut summary = vec![
                 span(format!("{} → {}  ", p.head.display(), p.base.display()), palette::DIM),
@@ -159,7 +199,7 @@ pub(super) fn row_parts(
                 PrState::Closed => span(icons.pr_closed, palette::DIM),
                 PrState::Open => checks_span(p.checks, icons),
             };
-            (glyph, format!("{n} {}", one_line(&p.title)), summary, age(p.updated_at, now))
+            RowParts::new(glyph, format!("{n} {}", one_line(&p.title)), summary, age(p.updated_at, now))
         }
         RowKey::Session(n) => {
             let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
@@ -176,7 +216,8 @@ pub(super) fn row_parts(
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
             let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
-            (glyph, format!("{n} {name}"), summary, age)
+            let work = state.work.get(&n).map(|w| work_spans(*w, icons)).unwrap_or_default();
+            RowParts { work, ..RowParts::new(glyph, format!("{n} {name}"), summary, age) }
         }
     }
 }
@@ -197,22 +238,36 @@ pub(super) fn draw_rows(
     let selected = app::list::selected_row(state);
     let age_w = 5;
     let parts: Vec<_> = rows.iter().map(|key| row_parts(state, *key, now, icons)).collect();
-    let (name_w, summary_w) = columns(
-        usize::from(area.width).saturating_sub(age_w + 6),
-        parts.iter().map(|(_, name, _, _)| cells(name)).max().unwrap_or(0),
-        parts.iter().map(|(_, _, summary, _)| summary.iter().map(|s| cells(&s.content)).sum()).max().unwrap_or(0),
-    );
+    let width = |spans: &[Span<'static>]| spans.iter().map(|s| cells(&s.content)).sum::<usize>();
+    let work_w = parts.iter().map(|p| width(&p.work)).max().unwrap_or(0);
+    let work_gap = usize::from(work_w > 0);
+    let avail = usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap);
+    let groups: Vec<Group> = rows.iter().map(|key| app::list::group_of(state, *key)).collect();
+    let in_group = |g: Group| parts.iter().zip(&groups).filter(move |(_, rg)| **rg == g).map(|(p, _)| p);
+    let name_ws: Vec<usize> = groups
+        .iter()
+        .map(|g| {
+            let name_need = in_group(*g).map(|p| cells(&p.name)).max().unwrap_or(0);
+            let summary_need = in_group(*g).map(|p| width(&p.summary)).max().unwrap_or(0);
+            name_width(usize::from(area.width), avail, name_need, summary_need)
+        })
+        .collect();
     let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
     let mut last_group = None;
-    for (key, (glyph, name, summary, age)) in rows.iter().zip(parts) {
-        let group = app::list::group_of(state, *key);
+    for (((key, RowParts { glyph, name, summary, work, age }), group), name_w) in
+        rows.iter().zip(parts).zip(groups.iter().copied()).zip(name_ws)
+    {
+        let summary_w = avail - name_w;
         if last_group != Some(group) {
             if last_group.is_some() {
                 lines.push((None, Line::raw("")));
             }
             let style = group_style(group);
             let n = rows.iter().filter(|k| app::list::group_of(state, **k) == group).count();
-            lines.push((None, Line::from(vec![span(group.name(), style), span(format!(" {n}"), palette::DIM)])));
+            lines.push((
+                None,
+                Line::from(vec![Span::raw("  "), span(group.name(), style), span(format!(" {n}"), palette::DIM)]),
+            ));
             last_group = Some(group);
         }
         let on = selected == Some(*key);
@@ -234,7 +289,8 @@ pub(super) fn draw_rows(
             Span::raw("  "),
         ];
         line.extend(summary_text);
-        line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used))));
+        line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used) + work_gap + work_w - width(&work))));
+        line.extend(work);
         line.push(span(format!("{age:>age_w$}"), palette::DIM));
         lines.push((Some(*key), Line::from(line)));
     }
@@ -250,12 +306,14 @@ pub(super) fn draw_rows(
     }
 }
 
-/// Split `avail` cells between the name and summary columns. The name takes
-/// what it needs first; the summary keeps up to 40% when both cannot fit.
-fn columns(avail: usize, name_need: usize, summary_need: usize) -> (usize, usize) {
-    let summary_floor = summary_need.min(avail * 40 / 100);
-    let name_w = name_need.min(avail.saturating_sub(summary_floor)).max(avail.min(20));
-    (name_w, avail.saturating_sub(name_w))
+/// The name column width of one group: each group sizes its own columns, so
+/// a long summary in one group does not narrow the names of another. It gets at least two fifths of the full row
+/// `width`, less the 4 prefix cells and 2 gap cells, with a floor of 20 cells
+/// on narrow terminals. When the widest summary leaves more of `avail` free,
+/// the name grows into it, up to the widest name.
+fn name_width(width: usize, avail: usize, name_need: usize, summary_need: usize) -> usize {
+    let share = (width * 2 / 5).saturating_sub(6).max(avail.min(20));
+    name_need.min(avail.saturating_sub(summary_need)).max(share).min(avail)
 }
 
 fn group_style(group: Group) -> Style {

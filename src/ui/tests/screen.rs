@@ -262,13 +262,10 @@ fn plain_issues() -> State {
 }
 
 #[test]
-fn a_wide_terminal_shows_the_whole_issue_title_with_author_labels_and_age() {
+fn a_wide_terminal_shows_issue_labels_and_aligns_the_age_and_summary() {
     let state = plain_issues();
-    let title = "Retry queue drops jobs when Redis reconnects after a very long title that must be cut";
     let screen = text(&render(&state, 160, 20));
     let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
-    assert!(row.contains(title), "the title is cut: {row:?}");
-    assert!(!row.contains('…'), "the row truncates: {row:?}");
     assert!(row.contains("bug, p1"), "labels are missing: {row:?}");
     let age_end = |n: &str| {
         let line = screen.lines().find(|l| l.contains(n)).expect("row");
@@ -321,4 +318,56 @@ fn a_session_on_another_branch_says_so_before_its_pr() {
     let screen = text(&buf);
     let (x, y) = find(&screen, "on try-other, not fix/3-x");
     assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
+}
+
+#[test]
+fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_the_age() {
+    use crate::session::{Push, Work};
+    let row = |work: Option<Work>| {
+        let mut state = full_state();
+        if let Some(w) = work {
+            state.work.insert(IssueNumber(3), w);
+        }
+        send(&mut state, KeyCode::Char('3'));
+        let buf = render(&state, 100, 20);
+        let screen = text(&buf);
+        let line = screen.lines().find(|l| l.contains("3 Retry queue")).unwrap_or_default().to_string();
+        (buf, screen, line)
+    };
+    let work_then_age = |line: &str, work: &str| {
+        let rest = line.split_once("PR #10 open").map(|(_, r)| r).unwrap_or_default();
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        assert_eq!(words[..words.len() - 1].join(" "), work, "{line}");
+    };
+
+    let (buf, screen, line) =
+        row(Some(Work { commits: 2, uncommitted: 1, push: Push::Differs { to_push: 1, to_pull: 3 } }));
+    work_then_age(&line, "±1 ↑1 ↓3");
+    let (x, y) = find(&screen, "±1");
+    assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
+
+    let (buf, screen, line) = row(Some(Work { commits: 1, uncommitted: 0, push: Push::Pushed }));
+    work_then_age(&line, "✓");
+    let (x, y) = find(&screen, "✓  56y");
+    assert_eq!(buf[(x, y)].fg, palette::GREEN, "{screen}");
+
+    let (_, _, line) = row(Some(Work { commits: 1, uncommitted: 2, push: Push::Pushed }));
+    work_then_age(&line, "±2");
+
+    let (_, _, line) = row(Some(Work { commits: 3, uncommitted: 0, push: Push::NotPushed }));
+    work_then_age(&line, "↑3");
+
+    let (_, _, line) = row(Some(Work { commits: 0, uncommitted: 0, push: Push::NotPushed }));
+    work_then_age(&line, "");
+
+    let (_, _, line) = row(None);
+    work_then_age(&line, "");
+
+    let mut state = full_state();
+    state.config.icons = IconSet::NerdFont;
+    state.work.insert(IssueNumber(3), Work { commits: 2, uncommitted: 1, push: Push::NotPushed });
+    send(&mut state, KeyCode::Char('3'));
+    let screen = text(&render(&state, 100, 20));
+    let i = state.config.icons.icons();
+    assert!(screen.contains(&format!("{}1 {}2", i.uncommitted, i.to_push)), "nerd font work glyphs\n{screen}");
 }

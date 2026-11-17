@@ -108,6 +108,8 @@ pub struct State {
     /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
     pub transcripts: std::collections::BTreeMap<IssueNumber, crate::transcript::Transcript>,
+    /// What each session committed, left uncommitted, and pushed.
+    pub work: crate::session::Works,
 }
 
 pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>) {
@@ -134,6 +136,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         pointer: None,
         armed: None,
         transcripts: std::collections::BTreeMap::new(),
+        work: crate::session::Works::new(),
         config,
     };
     let cmds = [

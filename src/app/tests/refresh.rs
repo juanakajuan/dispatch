@@ -117,7 +117,7 @@ fn a_start_or_a_stop_refreshes_github() {
 fn a_session_that_goes_idle_or_exits_refreshes_github() {
     let observe = |sessions: Vec<Session>| {
         let sessions = sessions.into_iter().map(|s| (s.issue, s)).collect();
-        Msg::Observed(Ok(Observation { sessions, transcripts: BTreeMap::new() }))
+        Msg::Observed(Ok(Observation { sessions, transcripts: BTreeMap::new(), work: crate::session::Works::new() }))
     };
     let running = || session(3, SessionState::Running);
     let needs_you = || session(3, SessionState::NeedsYou);
