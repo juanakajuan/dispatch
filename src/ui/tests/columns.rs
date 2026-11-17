@@ -17,27 +17,40 @@ fn column_of(screen: &str, anchor: &str, needle: &str) -> usize {
 }
 
 #[test]
-fn the_summary_starts_two_fifths_across_on_every_tab_with_or_without_work() {
+fn every_summary_on_a_tab_starts_in_one_column_and_a_work_column_does_not_cut_it() {
     for w in [90u16, 120, 160] {
-        let want = 2 + usize::from(w - 4) * 2 / 5;
-        assert_eq!(column_of(&on_tab('1', None, w), "#3 ", "PR #10"), want, "issues at {w}");
-        assert_eq!(column_of(&on_tab('2', None, w), "#10 ", "fix/3-x →"), want, "prs at {w}");
-        assert_eq!(column_of(&on_tab('3', None, w), "#3 Retry", "PR #10"), want, "sessions at {w}");
+        let issues = on_tab('1', None, w);
+        assert_eq!(column_of(&issues, "#3 ", "PR #10"), column_of(&issues, "#2 ", "octo"), "issues at {w}\n{issues}");
         let work = Work { commits: 2, uncommitted: 1, push: Push::NotPushed };
         let with_work = on_tab('3', Some(work), w);
-        assert_eq!(column_of(&with_work, "#3 Retry", "PR #10"), want, "sessions with work at {w}\n{with_work}");
+        let row = with_work.lines().find(|l| l.contains("#3 Retry")).expect("row");
+        assert!(row.contains("PR #10 open"), "sessions with work at {w}: {row:?}");
     }
 }
 
 #[test]
-fn a_title_longer_than_its_column_ends_in_an_ellipsis_and_the_age_stays_right_aligned() {
-    let screen = on_tab('1', None, 90);
-    let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
-    assert!(row.contains('…'), "the long title is not cut: {row:?}");
-    assert!(column_of(&screen, "#3 ", "…") < 2 + 86 * 2 / 5, "the cut is inside the name column: {row:?}");
-    let age_end = |n: &str| cells(screen.lines().find(|l| l.contains(n)).expect("row").trim_end());
+fn when_the_summaries_are_short_a_long_title_takes_the_empty_space() {
+    let wide = on_tab('1', None, 160);
+    assert!(wide.contains("a very long title that must be cut  "), "the title is cut on a wide screen:\n{wide}");
+    let narrow = on_tab('1', None, 90);
+    let row = narrow.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{narrow}"));
+    assert!(row.contains('…'), "the long title is not cut at 90: {row:?}");
+    assert!(column_of(&narrow, "#3 ", "PR #10") > 2 + 86 * 2 / 5, "the name took the free space: {row:?}");
+    let age_end = |n: &str| cells(narrow.lines().find(|l| l.contains(n)).expect("row").trim_end());
     assert_eq!(age_end("#3 "), 88, "{row:?}");
     assert_eq!(age_end("#2 "), 88, "a short title keeps the age aligned too");
+}
+
+#[test]
+fn when_a_summary_is_long_the_name_keeps_two_fifths_and_ends_in_an_ellipsis() {
+    let mut state = full_state();
+    let labels: Vec<String> = (0..12).map(|i| format!("label-number-{i}")).collect();
+    let labels: Vec<&str> = labels.iter().map(String::as_str).collect();
+    state.issues.items[1] = crate::testutil::issue(2, "Docs", &labels);
+    let screen = text(&render(&state, 120, 20));
+    let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
+    assert!(row.contains('…'), "the long title is not cut: {row:?}");
+    assert_eq!(column_of(&screen, "#3 ", "PR #10"), 2 + 116 * 2 / 5, "{row:?}\n{screen}");
 }
 
 #[test]

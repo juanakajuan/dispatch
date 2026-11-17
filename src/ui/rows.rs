@@ -241,8 +241,14 @@ pub(super) fn draw_rows(
     let width = |spans: &[Span<'static>]| spans.iter().map(|s| cells(&s.content)).sum::<usize>();
     let work_w = parts.iter().map(|p| width(&p.work)).max().unwrap_or(0);
     let work_gap = usize::from(work_w > 0);
-    let (name_w, summary_w) =
-        columns(usize::from(area.width), usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap));
+    let avail = usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap);
+    let name_w = name_width(
+        usize::from(area.width),
+        avail,
+        parts.iter().map(|p| cells(&p.name)).max().unwrap_or(0),
+        parts.iter().map(|p| width(&p.summary)).max().unwrap_or(0),
+    );
+    let summary_w = avail - name_w;
     let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
     let mut last_group = None;
     for (key, RowParts { glyph, name, summary, work, age }) in rows.iter().zip(parts) {
@@ -295,14 +301,13 @@ pub(super) fn draw_rows(
     }
 }
 
-/// Split `avail` cells between the name and summary columns. The summary
-/// starts two fifths of the way across the full row `width`, whatever the names,
-/// summaries, or work column hold. The name takes the 4 prefix cells and 2 gap
-/// cells out of those two fifths, with a floor of 20 cells on narrow terminals, and
-/// never more than `avail`. The summary gets the rest.
-fn columns(width: usize, avail: usize) -> (usize, usize) {
-    let name_w = (width * 2 / 5).saturating_sub(6).max(avail.min(20)).min(avail);
-    (name_w, avail - name_w)
+/// The name column width. It gets at least two fifths of the full row
+/// `width`, less the 4 prefix cells and 2 gap cells, with a floor of 20 cells
+/// on narrow terminals. When the widest summary leaves more of `avail` free,
+/// the name grows into it, up to the widest name.
+fn name_width(width: usize, avail: usize, name_need: usize, summary_need: usize) -> usize {
+    let share = (width * 2 / 5).saturating_sub(6).max(avail.min(20));
+    name_need.min(avail.saturating_sub(summary_need)).max(share).min(avail)
 }
 
 fn group_style(group: Group) -> Style {
