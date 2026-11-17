@@ -28,7 +28,7 @@ pub(super) fn draw_batch(frame: &mut Frame, screen: Rect, state: &State, batch: 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(palette::DIM)
-        .title(span(format!(" Start {} sessions ", batch.issues.len()), palette::HEADING))
+        .title(span(title(batch.issues.len()), palette::HEADING))
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -51,6 +51,10 @@ pub(super) fn draw_batch(frame: &mut Frame, screen: Rect, state: &State, batch: 
     draw_mode_options(frame, state, batch.mode, mode_options, hits);
     frame.render_widget(Paragraph::new(span("  Each session uses its default branch and prompt.", palette::DIM)), note);
     draw_buttons(frame, buttons, hits);
+}
+
+fn title(count: usize) -> String {
+    if count == 1 { " Start 1 session ".to_string() } else { format!(" Start {count} sessions ") }
 }
 
 /// One line per issue. When they do not all fit, the last line says how many are left out.

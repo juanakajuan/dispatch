@@ -81,3 +81,13 @@ fn a_marked_issue_row_shows_the_mark_and_an_unmarked_one_does_not() {
         send(&mut state, KeyCode::Char('k'));
     }
 }
+
+#[test]
+fn the_batch_dialog_title_counts_one_session_in_the_singular() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('j'));
+    send(&mut state, KeyCode::Char(' '));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = text(&render(&state, 120, 30));
+    assert!(screen.contains(" Start 1 session "), "{screen}");
+}
