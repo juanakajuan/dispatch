@@ -11,6 +11,7 @@ A user selects an open issue and starts a Claude session for it. A dialog shows 
 - `start-trust` shows the session as `needs you` while Claude asks to trust the worktree, and `running` after you answer. dispatch sets the waiting flag on the new window, and Claude's `SessionStart` hook clears it.
 - `start-plan-mode` adds `--permission-mode plan` to the argv when the mode is plan first.
 - `start-idempotent` goes to the existing session instead of making a second worktree. While a start is still running, `s` shows `#N is already starting`.
+- `start-batch`: with issues marked by Space, `s` opens the batch dialog instead. See [Start several sessions](./batch-start.md).
 - `start-cancel` closes the dialog with Esc and changes nothing.
 - `start-mouse`: a click on a field label focuses it, a click on a mode option picks it, a click in a text input puts the cursor there, and the `[ Start ]` and `[ Cancel ]` buttons on the last dialog row act as Ctrl-S and Esc.
 
