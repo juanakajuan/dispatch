@@ -42,7 +42,7 @@ impl World {
 
     fn obs(&self) -> StartObservation {
         StartObservation {
-            sessions: sessions(&join(&self.worktrees, &self.markers, &self.windows)),
+            sessions: sessions(&join(&layout().repo_root, &self.worktrees, &self.markers, &self.windows)),
             worktrees: self.worktrees.clone(),
             markers: self.markers.clone(),
             target_dir: self.target_dir,
@@ -254,4 +254,13 @@ fn plan_converges_after_a_crash_at_any_step() {
             assert!(is_original || is_suffix, "after {} steps got {rest:?}, from {original:?}", k + 1);
         }
     }
+}
+
+#[test]
+fn a_session_whose_worktree_changed_branch_reopens_and_marks_nothing() {
+    let mut w = World::empty();
+    w.worktrees.push(wt(TARGET, Some("try-other")));
+    w.markers = markers(&[("fix/142-x", 142)]);
+    w.target_dir = TargetDir::Taken;
+    assert_eq!(steps(w.plan()), [open_step()]);
 }

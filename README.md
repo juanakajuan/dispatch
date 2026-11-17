@@ -196,12 +196,12 @@ Each change is written to the config file at once. The menu keeps the fields you
 dispatch writes no state file. A session is derived from git and tmux each time:
 
 - A branch that dispatch made has `branch.<name>.dispatch-issue` in `.git/config`.
-- The worktree of that branch is the session's directory.
+- The worktree of that branch is the session's directory. A worktree at `.claude/worktrees/<issue>` is also that issue's session, if a branch is marked for the issue. So the session stays when the worktree has a different branch checked out.
 - A tmux window with the option `@dispatch-worktree` set to that directory is the session's window.
 
 So you can quit dispatch, kill it, or restart the machine, and the sessions are still listed. A start is safe to repeat. dispatch looks at what exists and runs only the missing steps. A second start for the same issue does not make a second worktree.
 
-If a session's window is gone, the session shows as `exited`. If the PR on the session's branch is merged, the session shows a purple `✓` and sits in the `Merged` group, even when its window still runs. Its work is done, and `D` removes it. If you check out another branch inside the worktree, the session disappears from the list until you switch back.
+If a session's window is gone, the session shows as `exited`. If the PR on the session's branch is merged, the session shows a purple `✓` and sits in the `Merged` group, even when its window still runs. Its work is done, and `D` removes it. If you check out another branch inside the worktree, the session stays on the list. Its row shows `on <branch>, not <session branch>` in yellow. The PR and `D` still use the session branch. `D` also refuses while the commit that the worktree has checked out is on no remote.
 
 ## Remove a session's worktree
 

@@ -53,6 +53,7 @@ pub(super) fn full_state() -> State {
         Session {
             issue: IssueNumber(3),
             branch: BranchName::parse("fix/3-x").expect("branch"),
+            checkout: crate::session::Checkout::SessionBranch,
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),
             state: SessionState::NeedsYou,
         },
