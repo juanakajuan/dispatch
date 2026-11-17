@@ -25,6 +25,7 @@ use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod columns;
 mod dialog;
 mod footer;
 mod hover;

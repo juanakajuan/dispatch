@@ -241,22 +241,33 @@ pub(super) fn draw_rows(
     let width = |spans: &[Span<'static>]| spans.iter().map(|s| cells(&s.content)).sum::<usize>();
     let work_w = parts.iter().map(|p| width(&p.work)).max().unwrap_or(0);
     let work_gap = usize::from(work_w > 0);
-    let (name_w, summary_w) = columns(
-        usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap),
-        parts.iter().map(|p| cells(&p.name)).max().unwrap_or(0),
-        parts.iter().map(|p| width(&p.summary)).max().unwrap_or(0),
-    );
+    let avail = usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap);
+    let groups: Vec<Group> = rows.iter().map(|key| app::list::group_of(state, *key)).collect();
+    let in_group = |g: Group| parts.iter().zip(&groups).filter(move |(_, rg)| **rg == g).map(|(p, _)| p);
+    let name_ws: Vec<usize> = groups
+        .iter()
+        .map(|g| {
+            let name_need = in_group(*g).map(|p| cells(&p.name)).max().unwrap_or(0);
+            let summary_need = in_group(*g).map(|p| width(&p.summary)).max().unwrap_or(0);
+            name_width(usize::from(area.width), avail, name_need, summary_need)
+        })
+        .collect();
     let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
     let mut last_group = None;
-    for (key, RowParts { glyph, name, summary, work, age }) in rows.iter().zip(parts) {
-        let group = app::list::group_of(state, *key);
+    for (((key, RowParts { glyph, name, summary, work, age }), group), name_w) in
+        rows.iter().zip(parts).zip(groups.iter().copied()).zip(name_ws)
+    {
+        let summary_w = avail - name_w;
         if last_group != Some(group) {
             if last_group.is_some() {
                 lines.push((None, Line::raw("")));
             }
             let style = group_style(group);
             let n = rows.iter().filter(|k| app::list::group_of(state, **k) == group).count();
-            lines.push((None, Line::from(vec![span(group.name(), style), span(format!(" {n}"), palette::DIM)])));
+            lines.push((
+                None,
+                Line::from(vec![Span::raw("  "), span(group.name(), style), span(format!(" {n}"), palette::DIM)]),
+            ));
             last_group = Some(group);
         }
         let on = selected == Some(*key);
@@ -295,12 +306,14 @@ pub(super) fn draw_rows(
     }
 }
 
-/// Split `avail` cells between the name and summary columns. The name takes
-/// what it needs first; the summary keeps up to 40% when both cannot fit.
-fn columns(avail: usize, name_need: usize, summary_need: usize) -> (usize, usize) {
-    let summary_floor = summary_need.min(avail * 40 / 100);
-    let name_w = name_need.min(avail.saturating_sub(summary_floor)).max(avail.min(20));
-    (name_w, avail.saturating_sub(name_w))
+/// The name column width of one group: each group sizes its own columns, so
+/// a long summary in one group does not narrow the names of another. It gets at least two fifths of the full row
+/// `width`, less the 4 prefix cells and 2 gap cells, with a floor of 20 cells
+/// on narrow terminals. When the widest summary leaves more of `avail` free,
+/// the name grows into it, up to the widest name.
+fn name_width(width: usize, avail: usize, name_need: usize, summary_need: usize) -> usize {
+    let share = (width * 2 / 5).saturating_sub(6).max(avail.min(20));
+    name_need.min(avail.saturating_sub(summary_need)).max(share).min(avail)
 }
 
 fn group_style(group: Group) -> Style {
