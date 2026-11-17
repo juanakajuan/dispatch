@@ -22,6 +22,7 @@ use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
 use remove::removed;
 use sessions::{attached, resumed, sent, started, stopped};
+use summary::summary_overlay_key;
 use toast::Toast;
 
 pub mod dialog;
@@ -35,6 +36,7 @@ pub mod msg;
 pub mod open;
 pub mod remove;
 pub mod sessions;
+pub mod summary;
 #[cfg(test)]
 mod tests;
 pub mod toast;
@@ -48,6 +50,11 @@ pub enum Focus {
     Settings(Box<SettingsMenu>),
     /// The keybinds overlay, scrolled down by `scroll` lines.
     Keybinds {
+        scroll: u16,
+    },
+    /// All of what the session's Claude last said, scrolled down by `scroll` lines.
+    Summary {
+        issue: IssueNumber,
         scroll: u16,
     },
 }
@@ -149,6 +156,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Focus::Filter => filter_key(state, &ev),
             Focus::Settings(_) => settings_key(state, &ev),
             Focus::Keybinds { .. } => keybinds_key(state, &ev),
+            Focus::Summary { .. } => summary_overlay_key(state, &ev),
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {

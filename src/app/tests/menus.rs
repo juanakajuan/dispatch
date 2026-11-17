@@ -280,7 +280,7 @@ fn the_wheel_moves_through_the_settings_and_scrolls_the_keybinds() {
     press(&mut state, code(KeyCode::Esc));
 
     press(&mut state, key('?'));
-    state.hits.keybinds_max_scroll = 5;
+    state.hits.max_scroll = 5;
     press(&mut state, wheel(MouseEventKind::ScrollDown, now));
     press(&mut state, wheel(MouseEventKind::ScrollDown, now));
     assert!(matches!(state.focus, Focus::Keybinds { scroll: 2 }));

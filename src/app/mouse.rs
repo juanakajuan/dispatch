@@ -15,8 +15,8 @@ use std::time::Instant;
 #[derive(Default)]
 pub struct HitMap {
     pub targets: Vec<(Rect, HitTarget)>,
-    /// How far the keybinds overlay can scroll at the last drawn size.
-    pub keybinds_max_scroll: u16,
+    /// How far the open overlay (keys or summary) can scroll at the last drawn size.
+    pub max_scroll: u16,
 }
 
 impl HitMap {
@@ -67,7 +67,7 @@ pub(super) fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<C
 fn wheel(state: &mut State, step: Move) -> Vec<Cmd> {
     match &state.focus {
         Focus::List | Focus::Filter => move_selection(state, step),
-        Focus::Keybinds { .. } => return press_key(state, wheel_key(step)),
+        Focus::Keybinds { .. } | Focus::Summary { .. } => return press_key(state, wheel_key(step)),
         Focus::Settings(menu) if menu.edit.is_none() => return press_key(state, wheel_key(step)),
         Focus::Settings(_) | Focus::Dialog(_) => {}
     }

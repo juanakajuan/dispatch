@@ -37,6 +37,7 @@ mod refresh;
 mod remove;
 mod sessions;
 mod sort;
+mod summary;
 
 pub(super) fn key(c: char) -> Msg {
     Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE))
