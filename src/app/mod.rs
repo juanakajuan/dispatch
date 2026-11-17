@@ -7,6 +7,7 @@ use crate::config::Config;
 use crate::domain::{Issue, IssueNumber, PullRequest};
 use crate::session::Sessions;
 use crossterm::event::KeyEventKind;
+use ratatui::layout::Position;
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -92,6 +93,10 @@ pub struct State {
     pub due: Due,
     pub hits: HitMap,
     pub last_click: Option<(HitTarget, Instant)>,
+    /// The cell under the mouse pointer, from the last mouse event. `None`
+    /// until the mouse moves, and after the terminal loses focus. The view
+    /// tints the target under it.
+    pub pointer: Option<Position>,
     /// Set by an `m` or `D` that waits for one more press of the same key on
     /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
@@ -119,6 +124,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         },
         hits: HitMap::default(),
         last_click: None,
+        pointer: None,
         armed: None,
         transcripts: std::collections::BTreeMap::new(),
         config,
@@ -177,6 +183,10 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         }
         Msg::FocusGained => {
             state.due.github_soon = true;
+            Vec::new()
+        }
+        Msg::FocusLost => {
+            state.pointer = None;
             Vec::new()
         }
     }

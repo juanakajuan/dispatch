@@ -1,6 +1,7 @@
 //! The whole palette. No other module builds a `Style`.
 //! Rule: Gruvbox (dark) foregrounds, and a background color only on the tab
-//! number badges, so the terminal's own background shows through elsewhere.
+//! number badges and under the pointer (hover), so the terminal's own
+//! background shows through elsewhere.
 //! One accent (blue) marks what is active: the tab, the selected row, the
 //! focused field, the keys. The other colors carry state only.
 
@@ -15,6 +16,7 @@ pub const BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
 pub const PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
 pub const AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
 pub const BG0: Color = Color::Rgb(0x28, 0x28, 0x28);
+pub const BG1: Color = Color::Rgb(0x3c, 0x38, 0x36);
 pub const BG2: Color = Color::Rgb(0x50, 0x49, 0x45);
 
 pub const PLAIN: Style = Style::new().fg(FG);
@@ -25,6 +27,9 @@ pub const ACTIVE: Style = Style::new().fg(BLUE).add_modifier(Modifier::BOLD);
 /// The number badge of the shown tab, and of the other tabs.
 pub const TAB_KEY_ON: Style = Style::new().fg(BG0).bg(BLUE).add_modifier(Modifier::BOLD);
 pub const TAB_KEY_OFF: Style = Style::new().fg(FG).bg(BG2);
+/// The clickable target under the pointer. Only a background, so it never
+/// looks like the selection (an accent marker and bold text).
+pub const HOVER: Style = Style::new().bg(BG1);
 pub const CURSOR: Style = Style::new().add_modifier(Modifier::REVERSED);
 pub const RUNNING: Style = Style::new().fg(GREEN);
 pub const NEEDS_YOU: Style = Style::new().fg(YELLOW).add_modifier(Modifier::BOLD);
