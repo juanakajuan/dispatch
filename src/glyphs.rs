@@ -29,6 +29,12 @@ pub struct Icons {
     pub idle: &'static str,
     pub radio_on: &'static str,
     pub radio_off: &'static str,
+    /// Files that are not committed, then commits to push or pull, then a
+    /// branch that `origin` has at the same commit.
+    pub uncommitted: &'static str,
+    pub to_push: &'static str,
+    pub to_pull: &'static str,
+    pub pushed: &'static str,
 }
 
 pub const UNICODE: Icons = Icons {
@@ -47,6 +53,10 @@ pub const UNICODE: Icons = Icons {
     idle: "·",
     radio_on: "●",
     radio_off: "○",
+    uncommitted: "±",
+    to_push: "↑",
+    to_pull: "↓",
+    pushed: "✓",
 };
 
 pub const NERD_FONT: Icons = Icons {
@@ -65,6 +75,10 @@ pub const NERD_FONT: Icons = Icons {
     idle: "\u{f48b}",          // nf-oct-dash
     radio_on: "\u{f043e}",     // nf-md-radiobox_marked
     radio_off: "\u{f043d}",    // nf-md-radiobox_blank
+    uncommitted: "\u{f459}",   // nf-oct-diff_modified
+    to_push: "\u{f431}",       // nf-oct-arrow_up
+    to_pull: "\u{f433}",       // nf-oct-arrow_down
+    pushed: "\u{f42e}",        // nf-oct-check
 };
 
 impl IconSet {
@@ -114,6 +128,10 @@ mod tests {
                 i.idle,
                 i.radio_on,
                 i.radio_off,
+                i.uncommitted,
+                i.to_push,
+                i.to_pull,
+                i.pushed,
             ] {
                 assert_eq!(crate::ui::text::cells(g), 1, "{set:?} glyph {g:?}");
             }

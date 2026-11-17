@@ -324,7 +324,7 @@ fn a_session_on_another_branch_says_so_before_its_pr() {
 }
 
 #[test]
-fn a_session_row_shows_its_commits_uncommitted_files_and_push_state() {
+fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_the_age() {
     use crate::session::{Push, Work};
     let row = |work: Option<Work>| {
         let mut state = full_state();
@@ -332,29 +332,46 @@ fn a_session_row_shows_its_commits_uncommitted_files_and_push_state() {
             state.work.insert(IssueNumber(3), w);
         }
         send(&mut state, KeyCode::Char('3'));
-        let buf = render(&state, 220, 20);
+        let buf = render(&state, 100, 20);
         let screen = text(&buf);
         let line = screen.lines().find(|l| l.contains("3 Retry queue")).unwrap_or_default().to_string();
         (buf, screen, line)
     };
+    let work_then_age = |line: &str, work: &str| {
+        let rest = line.split_once("PR #10 open").map(|(_, r)| r).unwrap_or_default();
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        assert_eq!(words[..words.len() - 1].join(" "), work, "{line}");
+    };
 
     let (buf, screen, line) =
         row(Some(Work { commits: 2, uncommitted: 1, push: Push::Differs { to_push: 1, to_pull: 3 } }));
-    assert!(line.contains("2 commits · 1 uncommitted · 1 to push · 3 to pull · PR #10 open"), "{line}");
-    let (x, y) = find(&screen, "1 uncommitted");
+    work_then_age(&line, "±1 ↑1 ↓3");
+    let (x, y) = find(&screen, "±1");
     assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
 
     let (buf, screen, line) = row(Some(Work { commits: 1, uncommitted: 0, push: Push::Pushed }));
-    assert!(line.contains("1 commit · pushed · PR #10"), "{line}");
-    let (x, y) = find(&screen, "pushed");
+    work_then_age(&line, "✓");
+    let (x, y) = find(&screen, "open ✓");
+    let x = x + 5;
     assert_eq!(buf[(x, y)].fg, palette::GREEN, "{screen}");
 
+    let (_, _, line) = row(Some(Work { commits: 1, uncommitted: 2, push: Push::Pushed }));
+    work_then_age(&line, "±2");
+
     let (_, _, line) = row(Some(Work { commits: 3, uncommitted: 0, push: Push::NotPushed }));
-    assert!(line.contains("3 commits · not pushed · PR #10"), "{line}");
+    work_then_age(&line, "↑3");
 
     let (_, _, line) = row(Some(Work { commits: 0, uncommitted: 0, push: Push::NotPushed }));
-    assert!(line.contains("no commits · PR #10"), "{line}");
+    work_then_age(&line, "");
 
     let (_, _, line) = row(None);
-    assert!(line.contains("  PR #10 open"), "a session that git could not read shows no work state\n{line}");
+    work_then_age(&line, "");
+
+    let mut state = full_state();
+    state.config.icons = IconSet::NerdFont;
+    state.work.insert(IssueNumber(3), Work { commits: 2, uncommitted: 1, push: Push::NotPushed });
+    send(&mut state, KeyCode::Char('3'));
+    let screen = text(&render(&state, 100, 20));
+    let i = state.config.icons.icons();
+    assert!(screen.contains(&format!("{}1 {}2", i.uncommitted, i.to_push)), "nerd font work glyphs\n{screen}");
 }
