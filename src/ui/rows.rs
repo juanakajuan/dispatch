@@ -6,7 +6,7 @@ use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
 use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
 use crate::glyphs::Icons;
-use crate::session::{Checkout, Session, SessionState};
+use crate::session::{Checkout, Push, Session, SessionState, Work};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -82,11 +82,51 @@ pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> 
     Some(v)
 }
 
-/// A worktree that has another branch checked out says so before anything
-/// else: its PR and its `D` still go by the session branch.
+/// A worktree that has another branch checked out says so before its PR or
+/// what Claude said: its PR and its `D` still go by the session branch.
 fn off_branch(s: &Session) -> Option<Vec<Span<'static>>> {
     (s.checkout != Checkout::SessionBranch)
         .then(|| vec![span(format!("on {}, not {}", s.checked_out(), s.branch.as_str()), palette::WARN)])
+}
+
+fn plural(n: u32, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// `3 commits · 2 uncommitted · pushed`. A part with nothing to say is left
+/// out; "not pushed" only shows once there is a commit to push.
+fn work_spans(w: Work) -> Vec<Span<'static>> {
+    let mut parts = Vec::new();
+    if w.commits > 0 {
+        parts.push(span(plural(w.commits, "commit", "commits"), palette::PLAIN));
+    }
+    if w.uncommitted > 0 {
+        parts.push(span(format!("{} uncommitted", w.uncommitted), palette::WARN));
+    }
+    match w.push {
+        Push::NotPushed if w.commits > 0 => parts.push(span("not pushed", palette::WARN)),
+        Push::NotPushed => {}
+        Push::Pushed => parts.push(span("pushed", palette::PASS)),
+        Push::Differs { to_push, to_pull } => {
+            if to_push > 0 {
+                parts.push(span(format!("{to_push} to push"), palette::WARN));
+            }
+            if to_pull > 0 {
+                parts.push(span(format!("{to_pull} to pull"), palette::WARN));
+            }
+        }
+    }
+    if parts.is_empty() {
+        parts.push(span("no commits", palette::DIM));
+    }
+    let mut v = Vec::new();
+    for part in parts {
+        if !v.is_empty() {
+            v.push(span(" · ", palette::DIM));
+        }
+        v.push(part);
+    }
+    v
 }
 
 /// Glyph, name, summary, age. One line per row.
@@ -169,12 +209,21 @@ pub(super) fn row_parts(
                 .map(|i| one_line(&i.title))
                 .or_else(|| session.map(|s| s.branch.as_str().to_string()))
                 .unwrap_or_default();
-            let summary = session
+            let rest = session
                 .and_then(off_branch)
                 .or_else(|| said(state, n))
                 .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
+            let summary = match state.work.get(&n) {
+                Some(w) => {
+                    let mut v = work_spans(*w);
+                    v.push(span(" · ", palette::DIM));
+                    v.extend(rest);
+                    v
+                }
+                None => rest,
+            };
             let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
             (glyph, format!("{n} {name}"), summary, age)
         }

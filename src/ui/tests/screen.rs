@@ -322,3 +322,39 @@ fn a_session_on_another_branch_says_so_before_its_pr() {
     let (x, y) = find(&screen, "on try-other, not fix/3-x");
     assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
 }
+
+#[test]
+fn a_session_row_shows_its_commits_uncommitted_files_and_push_state() {
+    use crate::session::{Push, Work};
+    let row = |work: Option<Work>| {
+        let mut state = full_state();
+        if let Some(w) = work {
+            state.work.insert(IssueNumber(3), w);
+        }
+        send(&mut state, KeyCode::Char('3'));
+        let buf = render(&state, 220, 20);
+        let screen = text(&buf);
+        let line = screen.lines().find(|l| l.contains("3 Retry queue")).unwrap_or_default().to_string();
+        (buf, screen, line)
+    };
+
+    let (buf, screen, line) =
+        row(Some(Work { commits: 2, uncommitted: 1, push: Push::Differs { to_push: 1, to_pull: 3 } }));
+    assert!(line.contains("2 commits · 1 uncommitted · 1 to push · 3 to pull · PR #10 open"), "{line}");
+    let (x, y) = find(&screen, "1 uncommitted");
+    assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
+
+    let (buf, screen, line) = row(Some(Work { commits: 1, uncommitted: 0, push: Push::Pushed }));
+    assert!(line.contains("1 commit · pushed · PR #10"), "{line}");
+    let (x, y) = find(&screen, "pushed");
+    assert_eq!(buf[(x, y)].fg, palette::GREEN, "{screen}");
+
+    let (_, _, line) = row(Some(Work { commits: 3, uncommitted: 0, push: Push::NotPushed }));
+    assert!(line.contains("3 commits · not pushed · PR #10"), "{line}");
+
+    let (_, _, line) = row(Some(Work { commits: 0, uncommitted: 0, push: Push::NotPushed }));
+    assert!(line.contains("no commits · PR #10"), "{line}");
+
+    let (_, _, line) = row(None);
+    assert!(line.contains("  PR #10 open"), "a session that git could not read shows no work state\n{line}");
+}

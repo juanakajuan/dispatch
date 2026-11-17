@@ -120,12 +120,13 @@ pub(super) fn refresh_github(state: &mut State, cmds: &mut Vec<Cmd>) {
 pub(super) fn observed(state: &mut State, result: Result<Observation, SessionError>) -> Vec<Cmd> {
     state.observe.done();
     match result {
-        Ok(Observation { sessions, transcripts }) => {
+        Ok(Observation { sessions, transcripts, work }) => {
             if state.sessions.iter().any(|(n, s)| went_idle(s.state, sessions.get(n).map(|s| s.state))) {
                 state.due.github_soon = true;
             }
             state.sessions = sessions;
             state.transcripts = transcripts;
+            state.work = work;
         }
         Err(e) => toast::error(state, format!("sessions: {e}")),
     }

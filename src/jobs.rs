@@ -47,7 +47,8 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, job: ReadJob) {
         ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
             let transcripts =
                 sessions.values().filter_map(|s| Some((s.issue, transcript::read(s.worktree.as_path())?))).collect();
-            Observation { sessions, transcripts }
+            let work = ws.work(&sessions);
+            Observation { sessions, transcripts, work }
         })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
         ReadJob::FetchPageUrl(target) => Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) },

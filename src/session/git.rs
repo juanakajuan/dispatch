@@ -165,6 +165,66 @@ pub(super) fn unpushed_count(worktree: &Path, branch: &BranchName) -> Result<u32
     out.trim().parse().map_err(|_| SessionError::NotACount(out.trim().to_string()))
 }
 
+/// One ref from `tips`: its commit, and how many commits it has that the
+/// base does not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Tip {
+    pub commit: String,
+    pub ahead_of_base: u32,
+}
+
+/// Full ref name -> tip. A ref that does not exist is not in the map.
+pub(super) type Tips = BTreeMap<String, Tip>;
+
+/// `refs/heads/<b>` and `refs/remotes/origin/<b>` of each branch, in one
+/// `for-each-ref`. Without branches it runs nothing: `for-each-ref` with no
+/// pattern lists every ref.
+pub(super) fn tips(root: &Path, base: &OriginRef, branches: &[&BranchName]) -> Result<Tips, ProcError> {
+    if branches.is_empty() {
+        return Ok(Tips::new());
+    }
+    let format = format!("--format=%(refname) %(objectname) %(ahead-behind:refs/remotes/{base})");
+    let refs = branches.iter().flat_map(|b| [local_ref(b), origin_ref(b)]);
+    git(root, ["for-each-ref".to_string(), format].into_iter().chain(refs)).map(|t| parse_tips(&t))
+}
+
+pub(super) fn local_ref(branch: &BranchName) -> String {
+    format!("refs/heads/{}", branch.as_str())
+}
+
+pub(super) fn origin_ref(branch: &BranchName) -> String {
+    format!("refs/remotes/origin/{}", branch.as_str())
+}
+
+/// Lines like `refs/heads/fix/3-x <sha> 2 0`: ref, commit, ahead, behind.
+/// A line that does not parse is dropped.
+fn parse_tips(text: &str) -> Tips {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split(' ');
+            let (name, commit, ahead) = (fields.next()?, fields.next()?, fields.next()?);
+            Some((name.to_string(), Tip { commit: commit.to_string(), ahead_of_base: ahead.parse().ok()? }))
+        })
+        .collect()
+}
+
+/// How many paths `git status --porcelain` lists, untracked ones included.
+/// `--no-optional-locks`, so the poll never takes the index lock that the
+/// session's own git commands need.
+pub(super) fn uncommitted_count(worktree: &Path) -> Result<u32, ProcError> {
+    let out = git(worktree, ["--no-optional-locks", "status", "--porcelain"])?;
+    Ok(u32::try_from(out.lines().filter(|l| !l.is_empty()).count()).unwrap_or(u32::MAX))
+}
+
+/// Commits only in `left`, and commits only in `right`.
+pub(super) fn left_right(root: &Path, left: &str, right: &str) -> Result<(u32, u32), SessionError> {
+    let range = format!("{left}...{right}");
+    let out = git(root, ["rev-list", "--left-right", "--count", range.as_str()]).map_err(SessionError::Git)?;
+    let bad = || SessionError::NotACount(out.trim().to_string());
+    let (l, r) = out.trim().split_once('\t').ok_or_else(bad)?;
+    Ok((l.parse().map_err(|_| bad())?, r.parse().map_err(|_| bad())?))
+}
+
 /// No `--force`: git itself refuses a worktree with changes.
 pub(super) fn remove_worktree(root: &Path, worktree: &Path) -> Result<(), ProcError> {
     git(root, ["worktree".as_ref(), "remove".as_ref(), worktree.as_os_str()]).map(|_| ())

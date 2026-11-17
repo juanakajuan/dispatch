@@ -27,9 +27,11 @@ mod plan;
 pub mod request;
 mod start_argv;
 mod tmux;
+mod work;
 mod worktree;
 
 pub use start_argv::StartPreview;
+pub use work::{Push, Work, Works};
 
 use crate::config::Multiplexer;
 use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
@@ -157,6 +159,12 @@ impl Workspace {
     /// A missing multiplexer server is an empty window list.
     pub fn observe(&self) -> Result<Sessions, SessionError> {
         each_backend!(&self.mux, mux => ops::observe(self, mux))
+    }
+
+    /// Commits, uncommitted files, and push state of each session. Read
+    /// with git only; see `work`.
+    pub fn work(&self, sessions: &Sessions) -> Works {
+        work::read(self, sessions)
     }
 
     /// Converges to "a live window runs Claude in this issue's worktree".

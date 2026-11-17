@@ -7,7 +7,7 @@ use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{RemoveOutcome, Sessions, StartOutcome};
+use crate::session::{RemoveOutcome, Sessions, StartOutcome, Works};
 use crate::transcript::Transcript;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
@@ -77,6 +77,8 @@ pub struct Observation {
     pub sessions: Sessions,
     /// Only sessions that have a conversation.
     pub transcripts: BTreeMap<IssueNumber, Transcript>,
+    /// Only sessions whose git reads worked.
+    pub work: Works,
 }
 
 /// Work for the shell.
