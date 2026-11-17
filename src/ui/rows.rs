@@ -78,7 +78,7 @@ pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> 
     if s.kind == crate::transcript::SummaryKind::Recap {
         v.push(span("※ ", palette::ACCENT));
     }
-    v.push(span(one_line(&s.text), palette::PLAIN));
+    v.push(span(one_line(&s.text), palette::DIM));
     Some(v)
 }
 
