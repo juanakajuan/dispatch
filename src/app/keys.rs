@@ -1,3 +1,4 @@
+use super::batch::mark_key;
 use super::feed::{observe_now, refresh_github};
 use super::list::{Move, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
 use super::menus::SettingsMenu;
@@ -26,6 +27,7 @@ pub enum Action {
     Down,
     Up,
     Start,
+    Mark,
     Enter,
     Attach,
     Stop,
@@ -115,6 +117,7 @@ impl Key {
     /// How the keybinds menu writes the key: `j`, `down`, `ctrl+c`.
     pub fn label(self) -> String {
         match self {
+            Self::Char(' ') => "space".to_string(),
             Self::Char(c) => c.to_string(),
             Self::Ctrl(c) => format!("ctrl+{c}"),
             Self::Code(code) => code.to_string().to_lowercase(),
@@ -177,6 +180,13 @@ pub static BINDINGS: &[Binding] = &[
         group: KeyGroup::Sessions,
         desc: "start a session for the issue",
         bar: &[bar("s", "start session", When::OnIssues)],
+    },
+    Binding {
+        keys: &[Key::Char(' ')],
+        action: Action::Mark,
+        group: KeyGroup::Sessions,
+        desc: "mark the issue to start several at once",
+        bar: &[bar("space", "mark", When::OnIssues)],
     },
     Binding {
         keys: &[Key::Code(KeyCode::Enter)],
@@ -305,6 +315,11 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
             hint("tab", "next field", Key::Code(KeyCode::Tab)),
             hint("esc", "cancel", esc),
         ],
+        Focus::Batch(_) => vec![
+            hint("ctrl-s", "start", Key::Ctrl('s')),
+            hint("space", "mode", Key::Char(' ')),
+            hint("esc", "cancel", esc),
+        ],
         Focus::Settings(menu) if menu.edit.is_some() => vec![hint("enter", "save", enter), hint("esc", "cancel", esc)],
         Focus::Settings(_) => {
             vec![hint("j/k", "move", Key::Char('j')), hint("enter", "change", enter), hint("esc", "close", esc)]
@@ -364,6 +379,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         Action::Down => move_selection(state, Move::Down),
         Action::Up => move_selection(state, Move::Up),
         Action::Start => return start_key(state),
+        Action::Mark => mark_key(state),
         Action::Enter => match state.tab {
             Tab::Issues => return start_key(state),
             Tab::Prs => go_to_issue_of_pr(state),

@@ -161,6 +161,9 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
             };
             let glyph = session_glyph(n).unwrap_or_else(|| {
+                if state.marked.contains(&n) {
+                    return span(icons.marked, palette::ACCENT);
+                }
                 let m = pr_mark(app::list::lead_pr(state, n), icons);
                 if m.content.trim().is_empty() {
                     span(icons.idle, palette::DIM)

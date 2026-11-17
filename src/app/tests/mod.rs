@@ -1,3 +1,4 @@
+use super::batch::*;
 use super::dialog::*;
 use super::feed::*;
 use super::keys::*;
@@ -26,6 +27,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod batch;
 mod dialog;
 mod hover;
 mod keys;
@@ -108,6 +110,13 @@ pub(super) fn starts(cmds: &[Cmd]) -> Vec<&StartRequest> {
             _ => None,
         })
         .collect()
+}
+
+pub(super) fn batch(state: &State) -> &BatchStart {
+    match &state.focus {
+        Focus::Batch(b) => b,
+        _ => panic!("no batch dialog is open"),
+    }
 }
 
 pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {

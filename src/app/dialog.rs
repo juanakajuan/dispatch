@@ -1,12 +1,12 @@
 use super::keys::{Key, key_of};
 use super::mouse::HitTarget;
-use super::msg::{Cmd, Job, WriteJob};
-use super::sessions::goto_session;
+use super::msg::Cmd;
+use super::sessions::{begin_start, goto_session};
 use super::toast;
 use super::{Focus, State};
 use crate::domain::{BranchName, Issue, IssueNumber, Mode};
 use crate::session::request::start_defaults;
-use crate::session::request::{Launch, StartFrom, StartRequest};
+use crate::session::request::{StartFrom, StartRequest};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub struct StartDialog {
@@ -103,11 +103,11 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     }
     let req = StartRequest { issue: dialog.issue, branch, mode: dialog.mode, prompt, from: StartFrom::Base };
     let n = req.issue;
-    state.starting.insert(n);
+    let cmd = begin_start(state, req);
     state.focus = Focus::List;
     goto_session(state, n);
     toast::info(state, format!("Starting {n}"));
-    vec![Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))]
+    vec![cmd]
 }
 
 /// A click inside the start dialog. `at` is the click's offset in the target's rect.

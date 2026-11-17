@@ -12,10 +12,11 @@ struct Footer {
 /// Every tab in every focus: the footer line at `width`, with the hints the
 /// state offers.
 fn footers(width: u16) -> Vec<Footer> {
-    let focuses: [(&str, &[KeyCode]); 6] = [
+    let focuses: [(&str, &[KeyCode]); 7] = [
         ("list", &[]),
         ("filter", &[KeyCode::Char('/')]),
         ("dialog", &[KeyCode::Char('j'), KeyCode::Char('s')]),
+        ("batch", &[KeyCode::Char(' '), KeyCode::Char('s')]),
         ("settings", &[KeyCode::Char(',')]),
         ("keybinds", &[KeyCode::Char('?')]),
         ("message", &[KeyCode::Char('t')]),

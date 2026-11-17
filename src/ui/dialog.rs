@@ -126,27 +126,10 @@ pub(super) fn draw_dialog(
     hits.targets.push((branch_l, HitTarget::Field(DialogField::Branch)));
     hits.targets.push(text_target(&d.branch, DialogField::Branch, indent(branch)));
 
-    let icons = state.config.icons.icons();
-    let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
-        if on {
-            vec![span(format!("{} ", icons.radio_on), palette::ACCENT), Span::raw(text.to_string())]
-        } else {
-            vec![span(format!("{} {text}", icons.radio_off), palette::DIM)]
-        }
-    };
-    let mut modes = vec![Span::raw("  ")];
-    modes.extend(radio(d.mode == Mode::PlanFirst, PLAN_FIRST));
-    modes.push(Span::raw("    "));
-    modes.extend(radio(d.mode == Mode::Implement, IMPLEMENT));
-    frame.render_widget(Paragraph::new(vec![field_label("Mode", focus(DialogField::Mode)), Line::from(modes)]), mode);
+    let [mode_l, mode_options] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(mode);
+    frame.render_widget(Paragraph::new(field_label("Mode", focus(DialogField::Mode))), mode_l);
     hits.targets.push((mode, HitTarget::Field(DialogField::Mode)));
-    let mut option_x = 2;
-    for (m, text) in [(Mode::PlanFirst, PLAN_FIRST), (Mode::Implement, IMPLEMENT)] {
-        let w = spans_width(&radio(d.mode == m, text));
-        let rect = Rect::new(mode.x.saturating_add(option_x), mode.y + 1, u16::try_from(w).unwrap_or(0), 1);
-        hits.targets.push((rect.intersection(mode), HitTarget::Mode(m)));
-        option_x = option_x.saturating_add(u16::try_from(w + 4).unwrap_or(0));
-    }
+    draw_mode_options(frame, state, d.mode, mode_options, hits);
     frame.render_widget(Paragraph::new(field_label("Prompt", focus(DialogField::Prompt))), prompt_l);
     frame.render_widget(&styled_input(&d.prompt, focus(DialogField::Prompt)), indent(prompt));
     hits.targets.push((prompt_l, HitTarget::Field(DialogField::Prompt)));
@@ -159,11 +142,35 @@ pub(super) fn draw_dialog(
     draw_buttons(frame, buttons, hits);
 }
 
+/// The two mode radios on one row, each a click target for its mode.
+pub(super) fn draw_mode_options(frame: &mut Frame, state: &State, current: Mode, row: Rect, hits: &mut HitMap) {
+    let icons = state.config.icons.icons();
+    let radio = |on: bool, text: &str| -> Vec<Span<'static>> {
+        if on {
+            vec![span(format!("{} ", icons.radio_on), palette::ACCENT), Span::raw(text.to_string())]
+        } else {
+            vec![span(format!("{} {text}", icons.radio_off), palette::DIM)]
+        }
+    };
+    let mut modes = vec![Span::raw("  ")];
+    modes.extend(radio(current == Mode::PlanFirst, PLAN_FIRST));
+    modes.push(Span::raw("    "));
+    modes.extend(radio(current == Mode::Implement, IMPLEMENT));
+    frame.render_widget(Paragraph::new(Line::from(modes)), row);
+    let mut option_x = 2;
+    for (m, text) in [(Mode::PlanFirst, PLAN_FIRST), (Mode::Implement, IMPLEMENT)] {
+        let w = spans_width(&radio(current == m, text));
+        let rect = Rect::new(row.x.saturating_add(option_x), row.y, u16::try_from(w).unwrap_or(0), 1);
+        hits.targets.push((rect.intersection(row), HitTarget::Mode(m)));
+        option_x = option_x.saturating_add(u16::try_from(w + 4).unwrap_or(0));
+    }
+}
+
 const PLAN_FIRST: &str = "Plan first, then wait for approval";
 const IMPLEMENT: &str = "Implement directly";
 
 /// `[ Start ]` presses ctrl-s and `[ Cancel ]` presses esc.
-fn draw_buttons(frame: &mut Frame, row: Rect, hits: &mut HitMap) {
+pub(super) fn draw_buttons(frame: &mut Frame, row: Rect, hits: &mut HitMap) {
     let (start, cancel) = ("[ Start ]", "[ Cancel ]");
     let start_w = u16::try_from(cells(start)).unwrap_or(0);
     let cancel_w = u16::try_from(cells(cancel)).unwrap_or(0);

@@ -1,3 +1,4 @@
+use super::batch::click_batch;
 use super::dialog::{DialogField, click_dialog};
 use super::keys::{Action, Key, act};
 use super::list::{Move, RowKey, Tab, move_selection, select};
@@ -69,7 +70,7 @@ fn wheel(state: &mut State, step: Move) -> Vec<Cmd> {
         Focus::List | Focus::Filter => move_selection(state, step),
         Focus::Keybinds { .. } | Focus::Summary { .. } => return press_key(state, wheel_key(step)),
         Focus::Settings(menu) if menu.edit.is_none() => return press_key(state, wheel_key(step)),
-        Focus::Settings(_) | Focus::Dialog(_) | Focus::Message { .. } => {}
+        Focus::Settings(_) | Focus::Dialog(_) | Focus::Batch(_) | Focus::Message { .. } => {}
     }
     Vec::new()
 }
@@ -100,11 +101,11 @@ fn click(state: &mut State, column: u16, row: u16, now: Instant) -> Vec<Cmd> {
             }
         }
         HitTarget::Tab(_) | HitTarget::Row(_) => {}
-        HitTarget::Field(_) | HitTarget::Mode(_) | HitTarget::Text { .. } => {
-            if let Focus::Dialog(dialog) = &mut state.focus {
-                click_dialog(dialog, target, (column - rect.x, row - rect.y));
-            }
-        }
+        HitTarget::Field(_) | HitTarget::Mode(_) | HitTarget::Text { .. } => match &mut state.focus {
+            Focus::Dialog(dialog) => click_dialog(dialog, target, (column - rect.x, row - rect.y)),
+            Focus::Batch(batch) => click_batch(batch, target),
+            _ => {}
+        },
         HitTarget::Setting(setting) => return click_setting(state, setting),
         HitTarget::Binding(action) => {
             if matches!(state.focus, Focus::Keybinds { .. }) {

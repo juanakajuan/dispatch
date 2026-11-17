@@ -60,6 +60,7 @@ fn every_key_bar_entry_carries_the_first_key_of_its_binding() {
         [
             ("?", Key::Char('?')),
             ("s", Key::Char('s')),
+            ("space", Key::Char(' ')),
             ("m", Key::Char('m')),
             ("o", Key::Char('o')),
             ("q", Key::Char('q'))

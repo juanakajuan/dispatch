@@ -4,6 +4,7 @@
 //! line each), the message row (only when there is a message), the prompt
 //! between two rules, and the footer keys. The dialog is a centered overlay.
 
+mod batch;
 mod dialog;
 mod footer;
 mod header;
@@ -14,6 +15,7 @@ pub(crate) mod text;
 
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{Focus, State};
+use batch::draw_batch;
 use dialog::draw_dialog;
 use footer::{draw_footer, draw_prompt, message};
 use header::draw_header;
@@ -88,6 +90,7 @@ fn draw_hover(frame: &mut Frame, hits: &HitMap, pointer: Option<Position>) {
 fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
     match &state.focus {
         Focus::Dialog(dialog) => draw_dialog(frame, frame.area(), state, dialog, hits),
+        Focus::Batch(batch) => draw_batch(frame, frame.area(), state, batch, hits),
         Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu, hits),
         Focus::Keybinds { scroll } => hits.max_scroll = draw_keybinds(frame, frame.area(), *scroll, hits),
         Focus::Summary { issue, scroll } => {
