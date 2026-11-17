@@ -29,6 +29,8 @@ pub struct Icons {
     pub idle: &'static str,
     pub radio_on: &'static str,
     pub radio_off: &'static str,
+    /// An issue marked for a batch start.
+    pub marked: &'static str,
     /// Files that are not committed, then commits to push or pull, then a
     /// branch that `origin` has at the same commit.
     pub uncommitted: &'static str,
@@ -53,6 +55,7 @@ pub const UNICODE: Icons = Icons {
     idle: "·",
     radio_on: "●",
     radio_off: "○",
+    marked: "◆",
     uncommitted: "±",
     to_push: "↑",
     to_pull: "↓",
@@ -75,6 +78,7 @@ pub const NERD_FONT: Icons = Icons {
     idle: "\u{f48b}",          // nf-oct-dash
     radio_on: "\u{f043e}",     // nf-md-radiobox_marked
     radio_off: "\u{f043d}",    // nf-md-radiobox_blank
+    marked: "\u{f14a}",        // nf-fa-check_square
     uncommitted: "\u{f459}",   // nf-oct-diff_modified
     to_push: "\u{f431}",       // nf-oct-arrow_up
     to_pull: "\u{f433}",       // nf-oct-arrow_down
@@ -128,6 +132,7 @@ mod tests {
                 i.idle,
                 i.radio_on,
                 i.radio_off,
+                i.marked,
                 i.uncommitted,
                 i.to_push,
                 i.to_pull,

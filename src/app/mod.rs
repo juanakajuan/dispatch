@@ -11,6 +11,7 @@ use ratatui::layout::Position;
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+use batch::{BatchStart, batch_key};
 use dialog::{StartDialog, dialog_key};
 use feed::{Due, Feed, Poll, observed, tick};
 use keys::{act, action_for};
@@ -25,6 +26,7 @@ use sessions::{attached, resumed, sent, started, stopped};
 use summary::summary_overlay_key;
 use toast::Toast;
 
+pub mod batch;
 pub mod dialog;
 pub mod feed;
 pub mod keys;
@@ -47,6 +49,8 @@ pub enum Focus {
     List,
     Filter,
     Dialog(Box<StartDialog>),
+    /// The start dialog for every marked issue.
+    Batch(Box<BatchStart>),
     Settings(Box<SettingsMenu>),
     /// The keybinds overlay, scrolled down by `scroll` lines.
     Keybinds {
@@ -93,6 +97,8 @@ pub struct State {
     /// Issues with a `WriteJob::Start` in flight. The only session-ish state the
     /// app owns; it covers the gap before the next observation shows the window.
     pub starting: BTreeSet<IssueNumber>,
+    /// Issues marked with Space for a batch start.
+    pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
     pub filter: String,
     pub focus: Focus,
@@ -121,6 +127,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         sessions: Sessions::new(),
         observe: Poll::default(),
         starting: BTreeSet::new(),
+        marked: BTreeSet::new(),
         tabs: Tabs::default(),
         filter: String::new(),
         focus: Focus::List,
@@ -153,6 +160,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Key(ev) if ev.kind == KeyEventKind::Release => Vec::new(),
         Msg::Key(ev) => match &state.focus {
             Focus::Dialog(_) => dialog_key(state, &ev),
+            Focus::Batch(_) => batch_key(state, &ev),
             Focus::Filter => filter_key(state, &ev),
             Focus::Settings(_) => settings_key(state, &ev),
             Focus::Keybinds { .. } => keybinds_key(state, &ev),

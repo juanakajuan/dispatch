@@ -1,3 +1,4 @@
+use super::batch::open_batch;
 use super::dialog::open_dialog;
 use super::feed::observe_now;
 use super::list::{RowKey, Tab, current_session, selected_row};
@@ -7,13 +8,17 @@ use super::{Focus, State};
 use crate::domain::IssueNumber;
 use crate::session::StartOutcome;
 use crate::session::error::{AttachError, SessionError};
-use crate::session::request::Launch;
+use crate::session::request::{Launch, StartRequest};
 
 /// `s` or Enter on an issue, or a double-click on one.
 pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
     let Some(RowKey::Issue(n)) = selected_row(state).filter(|_| state.tab == Tab::Issues) else {
         return Vec::new();
     };
+    if !state.marked.is_empty() {
+        open_batch(state);
+        return Vec::new();
+    }
     start_issue(state, n);
     Vec::new()
 }
@@ -26,6 +31,13 @@ pub(super) fn start_issue(state: &mut State, n: IssueNumber) {
     } else if let Some(issue) = state.issues.items.iter().find(|i| i.number == n) {
         state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
     }
+}
+
+/// Registers a start and returns its job. The issue is no longer marked.
+pub(super) fn begin_start(state: &mut State, req: StartRequest) -> Cmd {
+    state.starting.insert(req.issue);
+    state.marked.remove(&req.issue);
+    Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))
 }
 
 pub(super) fn goto_session(state: &mut State, n: IssueNumber) {
