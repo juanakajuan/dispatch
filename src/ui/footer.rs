@@ -42,6 +42,11 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.push(Span::raw(state.filter.clone()));
             spans.push(span("▏", palette::ACCENT));
         }
+        (Focus::Message { issue, text }, _) => {
+            spans.push(span(format!("message to {issue}: "), palette::LABEL));
+            spans.push(Span::raw(text.clone()));
+            spans.push(span("▏", palette::ACCENT));
+        }
         (_, false) => spans.push(span(format!("/{}", state.filter), palette::LABEL)),
         (_, true) => spans.push(span(
             match state.tab {

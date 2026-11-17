@@ -101,8 +101,9 @@ fn toast_is_stamped_then_expires() {
 #[test]
 fn a_sent_result_shows_a_toast() {
     let (mut state, _) = app();
-    press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Ok(()) });
+    press(&mut state, Msg::Sent { issue: IssueNumber(3), kind: SendKind::MergeFix, result: Ok(()) });
     assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Asked #3's agent to fix and merge its PR"));
-    press(&mut state, Msg::Sent { issue: IssueNumber(3), result: Err(SessionError::NotRunning(IssueNumber(3))) });
+    let result = Err(SessionError::NotRunning(IssueNumber(3)));
+    press(&mut state, Msg::Sent { issue: IssueNumber(3), kind: SendKind::MergeFix, result });
     assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Merge request to #3 failed: #3 has no running session"));
 }

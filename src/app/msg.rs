@@ -58,6 +58,7 @@ pub enum Msg {
     },
     Sent {
         issue: IssueNumber,
+        kind: SendKind,
         result: Result<(), SessionError>,
     },
     Merged {
@@ -137,10 +138,20 @@ pub enum WriteJob {
     /// Type a line into the session's Claude prompt and submit it.
     Send {
         issue: IssueNumber,
+        kind: SendKind,
         text: String,
     },
     /// Check the PR again, then merge it or report what the agent must fix.
     Merge(MergeAsk),
+}
+
+/// Who wrote the line a `WriteJob::Send` types, so its result toast can say so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendKind {
+    /// The merge check asks the agent to fix its PR.
+    MergeFix,
+    /// The user typed it with `t`.
+    Message,
 }
 
 pub const SESSIONS_EVERY: Duration = Duration::from_secs(2);
