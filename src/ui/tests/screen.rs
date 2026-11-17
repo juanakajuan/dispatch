@@ -262,13 +262,10 @@ fn plain_issues() -> State {
 }
 
 #[test]
-fn a_wide_terminal_shows_the_whole_issue_title_with_author_labels_and_age() {
+fn a_wide_terminal_shows_issue_labels_and_aligns_the_age_and_summary() {
     let state = plain_issues();
-    let title = "Retry queue drops jobs when Redis reconnects after a very long title that must be cut";
     let screen = text(&render(&state, 160, 20));
     let row = screen.lines().find(|l| l.contains("#3 ")).unwrap_or_else(|| panic!("no #3 in\n{screen}"));
-    assert!(row.contains(title), "the title is cut: {row:?}");
-    assert!(!row.contains('…'), "the row truncates: {row:?}");
     assert!(row.contains("bug, p1"), "labels are missing: {row:?}");
     let age_end = |n: &str| {
         let line = screen.lines().find(|l| l.contains(n)).expect("row");
@@ -351,8 +348,7 @@ fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_t
 
     let (buf, screen, line) = row(Some(Work { commits: 1, uncommitted: 0, push: Push::Pushed }));
     work_then_age(&line, "✓");
-    let (x, y) = find(&screen, "open ✓");
-    let x = x + 5;
+    let (x, y) = find(&screen, "✓  56y");
     assert_eq!(buf[(x, y)].fg, palette::GREEN, "{screen}");
 
     let (_, _, line) = row(Some(Work { commits: 1, uncommitted: 2, push: Push::Pushed }));

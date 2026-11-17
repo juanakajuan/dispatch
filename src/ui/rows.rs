@@ -241,11 +241,8 @@ pub(super) fn draw_rows(
     let width = |spans: &[Span<'static>]| spans.iter().map(|s| cells(&s.content)).sum::<usize>();
     let work_w = parts.iter().map(|p| width(&p.work)).max().unwrap_or(0);
     let work_gap = usize::from(work_w > 0);
-    let (name_w, summary_w) = columns(
-        usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap),
-        parts.iter().map(|p| cells(&p.name)).max().unwrap_or(0),
-        parts.iter().map(|p| width(&p.summary)).max().unwrap_or(0),
-    );
+    let (name_w, summary_w) =
+        columns(usize::from(area.width), usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap));
     let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
     let mut last_group = None;
     for (key, RowParts { glyph, name, summary, work, age }) in rows.iter().zip(parts) {
@@ -256,7 +253,10 @@ pub(super) fn draw_rows(
             }
             let style = group_style(group);
             let n = rows.iter().filter(|k| app::list::group_of(state, **k) == group).count();
-            lines.push((None, Line::from(vec![span(group.name(), style), span(format!(" {n}"), palette::DIM)])));
+            lines.push((
+                None,
+                Line::from(vec![Span::raw("  "), span(group.name(), style), span(format!(" {n}"), palette::DIM)]),
+            ));
             last_group = Some(group);
         }
         let on = selected == Some(*key);
@@ -295,12 +295,14 @@ pub(super) fn draw_rows(
     }
 }
 
-/// Split `avail` cells between the name and summary columns. The name takes
-/// what it needs first; the summary keeps up to 40% when both cannot fit.
-fn columns(avail: usize, name_need: usize, summary_need: usize) -> (usize, usize) {
-    let summary_floor = summary_need.min(avail * 40 / 100);
-    let name_w = name_need.min(avail.saturating_sub(summary_floor)).max(avail.min(20));
-    (name_w, avail.saturating_sub(name_w))
+/// Split `avail` cells between the name and summary columns. The summary
+/// starts two fifths of the way across the full row `width`, whatever the names,
+/// summaries, or work column hold. The name takes the 4 prefix cells and 2 gap
+/// cells out of those two fifths, with a floor of 20 cells on narrow terminals, and
+/// never more than `avail`. The summary gets the rest.
+fn columns(width: usize, avail: usize) -> (usize, usize) {
+    let name_w = (width * 2 / 5).saturating_sub(6).max(avail.min(20)).min(avail);
+    (name_w, avail - name_w)
 }
 
 fn group_style(group: Group) -> Style {
