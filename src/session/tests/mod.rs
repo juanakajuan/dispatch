@@ -11,6 +11,7 @@ mod remove;
 mod request;
 mod start_argv;
 mod tmux;
+mod work;
 mod worktree;
 
 use super::mux::{Backend, Liveness, Observed};
