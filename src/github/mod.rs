@@ -8,7 +8,7 @@ use crate::proc::{self, ProcError};
 use serde::de::DeserializeOwned;
 use std::fmt;
 use std::path::Path;
-use wire::{WireRepoMerge, decode, issues_from_wire, pr_from_wire, prs_from_wire};
+use wire::{WireIssueLinks, WireRepoMerge, decode, issues_from_wire, linked_prs, pr_from_wire, prs_from_wire};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GhError {
@@ -70,10 +70,44 @@ const ISSUE_FIELDS: &str = "number,title,labels,author,createdAt,updatedAt,comme
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
 const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,isCrossRepository,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
 
+/// The 100 newest PRs in any state, plus each older PR that closes an open
+/// issue. A refresh runs every 60 s, so it costs at most three calls: the
+/// list, the open issues' links, and one query for all older linked PRs.
 pub fn fetch_prs(repo_root: &Path) -> Result<Vec<PullRequest>, GhError> {
     let args = ["pr", "list", "--state", "all", "--limit", "100", "--json", PR_FIELDS];
-    gh_json(repo_root, args, "gh pr list").and_then(prs_from_wire)
+    let mut prs = gh_json(repo_root, args, "gh pr list").and_then(prs_from_wire)?;
+    let args = ["issue", "list", "--state", "open", "--limit", "200", "--json", LINK_FIELDS];
+    let links: Vec<WireIssueLinks> = gh_json(repo_root, args, "gh issue list")?;
+    let older: Vec<PrNumber> = linked_prs(links).into_iter().filter(|n| !prs.iter().any(|p| p.number == *n)).collect();
+    if !older.is_empty() {
+        let query = prs_query(&older);
+        let args = ["api", "graphql", "-F", "owner={owner}", "-F", "repo={repo}", "-f", &query, "--jq", AS_PR_LIST];
+        prs.extend(gh_json(repo_root, args, "gh api graphql").and_then(prs_from_wire)?);
+    }
+    Ok(prs)
 }
+
+/// The fields that link an open issue to the PRs that close it.
+const LINK_FIELDS: &str = "url,closedByPullRequestsReferences";
+
+/// The `query=` field of one GraphQL query for the PRs `numbers`, with the fields of `PR_FIELDS`.
+/// `gh` fills `{owner}` and `{repo}` from the working directory.
+fn prs_query(numbers: &[PrNumber]) -> String {
+    let prs: Vec<String> = numbers.iter().map(|n| format!("pr{n}:pullRequest(number:{n}){{...F}}", n = n.0)).collect();
+    let prs = prs.join(" ");
+    format!(
+        "query=query($owner:String!,$repo:String!){{repository(owner:$owner,name:$repo){{{prs}}}}} \
+         fragment F on PullRequest{{number title state isDraft author{{login}} createdAt updatedAt headRefName \
+         isCrossRepository headRefOid baseRefName additions deletions mergeable mergeStateStatus \
+         statusCheckRollup{{contexts(first:100){{nodes{{__typename ...on CheckRun{{status conclusion}} \
+         ...on StatusContext{{state}}}}}}}} closingIssuesReferences(first:100){{nodes{{number}}}}}}"
+    )
+}
+
+/// Turns the GraphQL answer into the JSON shape of `gh pr list`: one array,
+/// with the check and closing-issue connections cut down to their nodes.
+const AS_PR_LIST: &str = "[.data.repository[] | .statusCheckRollup = (.statusCheckRollup.contexts.nodes // []) \
+    | .closingIssuesReferences = .closingIssuesReferences.nodes]";
 
 /// One PR as GitHub sees it now, for a decision the cached list is too old for.
 pub fn view_pr(repo_root: &Path, pr: PrNumber) -> Result<PullRequest, GhError> {
@@ -129,7 +163,7 @@ fn view_target(target: GithubRef) -> (&'static str, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{CommitOid, IssueNumber, Mergeability};
+    use crate::domain::{CommitOid, IssueNumber, Mergeability, PrState};
 
     #[test]
     fn view_pr_reads_one_pr_with_the_list_fields() {
@@ -146,6 +180,82 @@ mod tests {
             (PrNumber(12), Mergeability::Conflict, [IssueNumber(3)].as_slice())
         );
         assert_eq!(proc::fake::calls(), [format!("gh pr view 12 --json {PR_FIELDS}")]);
+    }
+
+    fn pr_json(n: u32, state: &str, closes: u32) -> String {
+        format!(
+            r#"{{"number":{n},"title":"t","state":"{state}","isDraft":false,"author":null,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
+            "statusCheckRollup":[],"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+            "closingIssuesReferences":[{{"number":{closes}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn fetch_prs_adds_older_prs_that_close_open_issues_in_one_query() {
+        proc::fake::install(|call| {
+            Ok(if call.starts_with("gh pr list") {
+                format!("[{}]", pr_json(200, "OPEN", 7))
+            } else if call.starts_with("gh issue list") {
+                r#"[{"url":"https://github.com/o/r/issues/7","closedByPullRequestsReferences":[
+                    {"number":200,"url":"https://github.com/o/r/pull/200"}]},
+                    {"url":"https://github.com/o/r/issues/5","closedByPullRequestsReferences":[
+                    {"number":12,"url":"https://github.com/o/r/pull/12"},
+                    {"number":13,"url":"https://github.com/o/r/pull/13"}]}]"#
+                    .to_string()
+            } else {
+                format!("[{},{}]", pr_json(12, "MERGED", 5), pr_json(13, "CLOSED", 5))
+            })
+        });
+        let prs = fetch_prs(Path::new("/r")).expect("fetches");
+        let got: Vec<_> = prs.iter().map(|p| (p.number, p.state, p.closes.clone())).collect();
+        assert_eq!(
+            got,
+            [
+                (PrNumber(200), PrState::Open, vec![IssueNumber(7)]),
+                (PrNumber(12), PrState::Merged, vec![IssueNumber(5)]),
+                (PrNumber(13), PrState::Closed, vec![IssueNumber(5)]),
+            ]
+        );
+        let query = prs_query(&[PrNumber(12), PrNumber(13)]);
+        assert_eq!(
+            proc::fake::calls(),
+            [
+                format!("gh pr list --state all --limit 100 --json {PR_FIELDS}"),
+                format!("gh issue list --state open --limit 200 --json {LINK_FIELDS}"),
+                format!("gh api graphql -F owner={{owner}} -F repo={{repo}} -f {query} --jq {AS_PR_LIST}"),
+            ],
+            "a PR already in the newest 100 is not asked for again"
+        );
+        assert!(query.contains("{pr12:pullRequest(number:12){...F} pr13:pullRequest(number:13){...F}"), "{query}");
+    }
+
+    #[test]
+    fn fetch_prs_without_older_linked_prs_makes_no_query() {
+        proc::fake::install(|call| {
+            Ok(if call.starts_with("gh pr list") {
+                format!("[{}]", pr_json(200, "OPEN", 7))
+            } else {
+                r#"[{"url":"https://github.com/o/r/issues/7","closedByPullRequestsReferences":[
+                    {"number":200,"url":"https://github.com/o/r/pull/200"}]}]"#
+                    .to_string()
+            })
+        });
+        assert_eq!(fetch_prs(Path::new("/r")).expect("fetches").len(), 1);
+        assert_eq!(proc::fake::calls().len(), 2);
+    }
+
+    #[test]
+    fn fetch_prs_fails_when_the_issue_links_do_not_load() {
+        proc::fake::install(|call| {
+            if call.starts_with("gh pr list") {
+                Ok("[]".to_string())
+            } else {
+                Err(proc::fake::fail("gh", 1, "offline"))
+            }
+        });
+        let err = fetch_prs(Path::new("/r")).expect_err("fails");
+        assert_eq!(err.to_string(), "gh failed with code 1: offline");
     }
 
     #[test]

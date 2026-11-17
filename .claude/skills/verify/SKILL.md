@@ -24,7 +24,7 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 | Claude config | `$RUN/claude` (`CLAUDE_CONFIG_DIR`) | dispatch reads session transcripts from `projects/` here, never from your `~/.claude`. The fake claude writes one on each fresh start |
 | config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude` and `multiplexer` is `tmux`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`SessionStart` on a fresh start, `Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit. `touch $RUN/ask-trust` makes a fresh start ask the trust question first, before any hook; type a line to answer |
-| `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status` to the real gh. Blocks every other call, `pr merge` too, and logs it |
+| `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status`, and `api graphql` queries (not mutations) to the real gh. Blocks every other call, `pr merge` too, and logs it |
 | browser | `$RUN/bin/browser` (`GH_BROWSER`, `BROWSER`) | `o` goes through the real `gh … --web`. The URL goes to a log. No browser opens |
 | environment | `up` and `restart` pass only the `KEEP_ENV` allowlist in `verify.sh` (`HOME`, `PATH`, `TERM`, locale, gh tokens, and a few more) | Any other variable can change what dispatch does. `HERDR_*` and `HC_*` make it start sessions outside the sandbox, and `SSH_CONNECTION` makes `o` copy a URL. `--over-ssh` sets a fake `SSH_CONNECTION` to test the copy path |
 
