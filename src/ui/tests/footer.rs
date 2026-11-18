@@ -212,3 +212,24 @@ fn the_filter_footer_is_clickable() {
     assert_clickable(&state, &screen, "enter to keep", HitTarget::Key(Key::Code(KeyCode::Enter)));
     assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
 }
+
+#[test]
+fn the_prompt_shows_each_filter_term_in_the_accent_colour() {
+    let mut state = full_state();
+    state.filter = "retry label:bug assignee:@me milestone:".to_string();
+    let fg = |state: &mut State, needle: &str| {
+        let screen = draw_into(state, 120, 24);
+        let (x, y) = find(&screen, needle);
+        Some(render(state, 120, 24)[(x, y)].fg)
+    };
+    assert_eq!(fg(&mut state, "retry"), palette::LABEL.fg, "free text");
+    assert_eq!(fg(&mut state, "label:bug"), palette::ACCENT.fg);
+    assert_eq!(fg(&mut state, "assignee:@me"), palette::ACCENT.fg);
+    assert_eq!(fg(&mut state, "milestone:"), palette::DIM.fg, "a term with no value yet");
+
+    let _ = app::update(&mut state, Msg::Viewer(Err(crate::github::GhError::EmptyLogin)));
+    assert_eq!(fg(&mut state, "assignee:@me"), palette::ERROR.fg, "@me can not match without the login");
+
+    send(&mut state, KeyCode::Char('/'));
+    assert_eq!(fg(&mut state, "label:bug"), palette::ACCENT.fg, "while typing too");
+}

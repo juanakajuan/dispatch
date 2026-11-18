@@ -1,11 +1,9 @@
-use super::keys::{Key, key_of};
-use super::msg::Cmd;
+use super::State;
+use super::filter::{Facets, Query};
 use super::toast;
-use super::{Focus, State};
 use crate::domain::{GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
 use crate::session::{Session, SessionState};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
-use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,23 +203,6 @@ pub(super) fn select(state: &mut State, key: RowKey) {
     state.tabs.select(key);
 }
 
-pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
-    match key_of(ev) {
-        Some(Key::Code(KeyCode::Enter)) => state.focus = Focus::List,
-        Some(Key::Code(KeyCode::Esc)) => {
-            state.filter.clear();
-            state.focus = Focus::List;
-        }
-        Some(Key::Code(KeyCode::Backspace)) => {
-            state.filter.pop();
-        }
-        Some(Key::Ctrl('c')) => return vec![Cmd::Quit],
-        Some(Key::Char(c)) => state.filter.push(c),
-        _ => {}
-    }
-    Vec::new()
-}
-
 /// Rows of the current tab after the filter, in the tab's sort order. The
 /// single definition of "what is in the list"; ui renders it and update moves
 /// through it.
@@ -232,7 +213,7 @@ pub fn visible_rows(state: &State) -> Vec<RowKey> {
 }
 
 pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
-    let f = state.filter.as_str();
+    let query = Query::parse(&state.filter, state.viewer.login());
     let activity = |n| activity(state, n);
     match state.tab {
         Tab::Issues => {
@@ -242,9 +223,9 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .iter()
                 .filter(|i| {
                     let number = i.number.to_string();
-                    let mut parts = vec![number.as_str(), i.title.as_str()];
-                    parts.extend(i.labels.iter().map(String::as_str));
-                    matches_filter(&parts, f)
+                    let mut text = vec![number.as_str(), i.title.as_str()];
+                    text.extend(i.labels.iter().map(String::as_str));
+                    query.matches(&text, Facets::from(*i))
                 })
                 .collect();
             sort::issues(&mut rows, state.tabs.issues.sort, activity);
@@ -255,7 +236,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                 .prs
                 .items
                 .iter()
-                .filter(|p| matches_filter(&[&p.number.to_string(), &p.title, p.head.display()], f))
+                .filter(|p| query.matches(&[&p.number.to_string(), &p.title, p.head.display()], Facets::from(*p)))
                 .collect();
             sort::prs(&mut rows, state.tabs.prs.sort);
             rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
@@ -265,11 +246,15 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
             let mut rows: Vec<IssueNumber> = numbers
                 .into_iter()
                 .filter(|n| {
-                    let title = state.issues.items.iter().find(|i| i.number == *n).map_or("", |i| i.title.as_str());
+                    let issue = state.issues.items.iter().find(|i| i.number == *n);
+                    let title = issue.map_or("", |i| i.title.as_str());
                     let session = state.sessions.get(n);
                     let branch = session.map_or("", |s| s.branch.as_str());
                     let checked_out = session.map_or("", Session::checked_out);
-                    matches_filter(&[&n.to_string(), title, branch, checked_out], f)
+                    query.matches(
+                        &[&n.to_string(), title, branch, checked_out],
+                        issue.map(Facets::from).unwrap_or_default(),
+                    )
                 })
                 .collect();
             sort::sessions(&mut rows, state.tabs.sessions.sort, activity);
@@ -335,10 +320,4 @@ pub fn session_merged(state: &State, n: IssueNumber) -> bool {
 /// A PR whose head branch equals the session branch.
 pub fn pr_for_session<'a>(state: &'a State, session: &Session) -> Option<&'a PullRequest> {
     state.prs.items.iter().find(|p| p.head.branch() == Some(&session.branch))
-}
-
-/// Case-insensitive substring match over `#N title labels branch`.
-pub(super) fn matches_filter(haystack_parts: &[&str], needle: &str) -> bool {
-    let needle = needle.trim().to_lowercase();
-    needle.is_empty() || haystack_parts.join(" ").to_lowercase().contains(&needle)
 }

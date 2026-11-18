@@ -166,7 +166,9 @@
   ],
   "number": 14386,
   "title": "`gh issue create` issue type supports old behavior",
-  "updatedAt": "2026-10-04T12:33:40Z"
+  "updatedAt": "2026-10-04T12:33:40Z",
+  "assignees": [],
+  "milestone": null
  },
  {
   "author": {
@@ -196,7 +198,9 @@
   "labels": [],
   "number": 1023,
   "title": "Run benchmark commands in a different CWD",
-  "updatedAt": "2026-11-04T00:36:22Z"
+  "updatedAt": "2026-11-04T00:36:22Z",
+  "assignees": [],
+  "milestone": null
  },
  {
   "author": {
@@ -210,6 +214,111 @@
   "labels": [],
   "number": 1017,
   "title": "`--command-name` rejects a name that starts with `-`",
-  "updatedAt": "2026-10-29T14:42:07Z"
+  "updatedAt": "2026-10-29T14:42:07Z",
+  "assignees": [],
+  "milestone": null
+ },
+ {
+  "assignees": [
+   {
+    "id": "MDQ6VXNlcjQyMDkyNzY=",
+    "login": "sharkdp",
+    "name": "David Peter",
+    "databaseId": 4209276
+   }
+  ],
+  "author": {
+   "id": "MDQ6VXNlcjQyMDkyNzY=",
+   "is_bot": false,
+   "login": "sharkdp",
+   "name": "David Peter"
+  },
+  "comments": [
+   {
+    "id": "IC_kwDOBv62x86Y3hdZ",
+    "author": {
+     "login": "sharkdp"
+    },
+    "authorAssociation": "OWNER",
+    "body": "### JSON format v2\r\n\r\nThings to keep in mind / ideas:\r\n\r\n- We could potentially include the full command line, in order to repeat a benchmark in an easy way\r\n- For \"matrix\" runs, do we keep the flat structure or should we build something that represents the structure more cleanly?",
+    "createdAt": "2024-12-29T11:19:48Z",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/sharkdp/hyperfine/issues/788#issuecomment-2564691801",
+    "viewerDidAuthor": false
+   },
+   {
+    "id": "IC_kwDOBv62x86swmK7",
+    "author": {
+     "login": "krk"
+    },
+    "authorAssociation": "NONE",
+    "body": "> Additional performance metrics\n\nHow about supporting only two modes to begin with: `default` and `extended` modes. Default mode would collect the current duration metrics. Extended mode would include additional metrics from https://github.com/andrewrk/poop to begin with, which is 6 additional metrics.\n\nThis would allow supporting multiple metrics with *minimal implementation effort*, without blocking implementation of the other features, such as JSON support for all metric data, ability to select individual metrics from CLI, changing wording from fastest etc.\n\nFor the sole purpose of supporting multiple metrics with default vs. extended flags in the text output, if you agree this is viable, do you think we need https://github.com/sharkdp/hyperfine/pull/790 as a prerequisite?",
+    "createdAt": "2025-05-21T15:40:45Z",
+    "includesCreatedEdit": false,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/sharkdp/hyperfine/issues/788#issuecomment-2898420411",
+    "viewerDidAuthor": false
+   },
+   {
+    "id": "IC_kwDOBv62x87Qb1Y6",
+    "author": {
+     "login": "zenithlight"
+    },
+    "authorAssociation": "NONE",
+    "body": "Not sure if this is in scope for what was described, but I have a use case where I want to benchmark the decoding tokens/sec for local LLM API calls.\n\nllama-server exposes these as fields in the returned JSON, so it would suffice to just parse using JQ and return the numeric value from there.\n\nIt would be nice if hyperfine allowed measuring arbitrary results of commands like this. One approach that comes to mind is:\n* Optional wrapper command (passed in with the benchmarked command on the command line) that spawns the benchmarked command, measuring whatever metrics (e.g. memory usage) of the benchmarked command, or processing its output if necessary. Then the wrapper command returns a JSON key-value mapping of metrics -> value. Hyperfine then aggregates the JSON mapping emitted from the wrapper over each run.\n\nTheoretically, the advanced metrics you mentioned (memory, CPU instructions, etc) can hook into this abstraction. It can be a bespoke util that wraps and measures these key metrics. It can be kept separate from the core engine (but for ease of use command-line flags like `--memory`, etc. can be added, which basically just activate \"wrapper mode\" with the first-party wrapper if present.)",
+    "createdAt": "2025-11-06T12:13:51Z",
+    "includesCreatedEdit": true,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [],
+    "url": "https://github.com/sharkdp/hyperfine/issues/788#issuecomment-3496957498",
+    "viewerDidAuthor": false
+   },
+   {
+    "id": "IC_kwDOBv62x88AAAABZrLZRQ",
+    "author": {
+     "login": "sharkdp"
+    },
+    "authorAssociation": "OWNER",
+    "body": "A lot of things have happened now: additional metrics ([#983](https://github.com/sharkdp/hyperfine/pull/983)), JSON schema v2 ([#790](https://github.com/sharkdp/hyperfine/pull/790)), direct execution by default ([#982](https://github.com/sharkdp/hyperfine/pull/982)), and the new terminal output, --metrics selection, and first-command reference ([#986](https://github.com/sharkdp/hyperfine/pull/986))\n\nWhat's still missing:\n\n- baselines (Saved benchmarks for later comparison). The new JSON format and the new terminal output format should make this easily possible now, though.\n- Interleaved benchmark execution: I haven't started working on this, but I'm not sure anymore if it should block 2.0",
+    "createdAt": "2026-10-06T14:03:10Z",
+    "includesCreatedEdit": true,
+    "isMinimized": false,
+    "minimizedReason": "",
+    "reactionGroups": [
+     {
+      "content": "ROCKET",
+      "users": {
+       "totalCount": 1
+      }
+     }
+    ],
+    "url": "https://github.com/sharkdp/hyperfine/issues/788#issuecomment-6017964357",
+    "viewerDidAuthor": false
+   }
+  ],
+  "createdAt": "2024-12-28T21:52:29Z",
+  "labels": [
+   {
+    "id": "MDU6TGFiZWw4MDM3Mzk4OTc=",
+    "name": "help wanted",
+    "description": "Extra attention is needed",
+    "color": "FBCA04"
+   }
+  ],
+  "milestone": {
+   "number": 2,
+   "title": "hyperfine 2.0",
+   "description": "",
+   "dueOn": null
+  },
+  "number": 788,
+  "title": "Hyperfine 2.0",
+  "updatedAt": "2026-10-06T14:16:07Z"
  }
 ]

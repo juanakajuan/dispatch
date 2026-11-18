@@ -32,6 +32,8 @@ pub enum GhError {
     EmptyUrl {
         kind: &'static str,
     },
+    /// The viewer query printed no login.
+    EmptyLogin,
 }
 
 impl fmt::Display for GhError {
@@ -42,6 +44,7 @@ impl fmt::Display for GhError {
             GhError::BadTimestamp { item, field, raw, detail } => write!(f, "{item}: bad {field} {raw:?}: {detail}"),
             GhError::UnknownPrState { pr, state } => write!(f, "PR {pr} has unknown state {state:?}"),
             GhError::EmptyUrl { kind } => write!(f, "gh {kind} view printed no URL"),
+            GhError::EmptyLogin => f.write_str("gh printed no login"),
         }
     }
 }
@@ -65,10 +68,10 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, GhError> {
 }
 
 /// The fields `Issue` needs, for `gh issue list`.
-const ISSUE_FIELDS: &str = "number,title,labels,author,createdAt,updatedAt,comments";
+const ISSUE_FIELDS: &str = "number,title,labels,assignees,milestone,author,createdAt,updatedAt,comments";
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,author,createdAt,updatedAt,headRefName,isCrossRepository,headRepository,maintainerCanModify,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
+const PR_FIELDS: &str = "number,title,state,isDraft,labels,assignees,milestone,author,createdAt,updatedAt,headRefName,isCrossRepository,headRepository,maintainerCanModify,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
 
 /// The 100 newest PRs in any state, plus each older PR that closes an open
 /// issue. A refresh runs every 60 s, so it costs at most three calls: the
@@ -97,7 +100,8 @@ fn prs_query(numbers: &[PrNumber]) -> String {
     let prs = prs.join(" ");
     format!(
         "query=query($owner:String!,$repo:String!){{repository(owner:$owner,name:$repo){{{prs}}}}} \
-         fragment F on PullRequest{{number title state isDraft author{{login}} createdAt updatedAt headRefName \
+         fragment F on PullRequest{{number title state isDraft labels(first:100){{nodes{{name}}}} \
+         assignees(first:100){{nodes{{login}}}} milestone{{title}} author{{login}} createdAt updatedAt headRefName \
          isCrossRepository headRepository{{nameWithOwner}} maintainerCanModify headRefOid baseRefName additions deletions mergeable mergeStateStatus \
          statusCheckRollup{{contexts(first:100){{nodes{{__typename ...on CheckRun{{status conclusion}} \
          ...on StatusContext{{state}}}}}}}} closingIssuesReferences(first:100){{nodes{{number}}}}}}"
@@ -105,9 +109,20 @@ fn prs_query(numbers: &[PrNumber]) -> String {
 }
 
 /// Turns the GraphQL answer into the JSON shape of `gh pr list`: one array,
-/// with the check and closing-issue connections cut down to their nodes.
-const AS_PR_LIST: &str = "[.data.repository[] | .statusCheckRollup = (.statusCheckRollup.contexts.nodes // []) \
+/// with the label, assignee, check, and closing-issue connections cut down to
+/// their nodes.
+const AS_PR_LIST: &str = "[.data.repository[] | .labels = .labels.nodes | .assignees = .assignees.nodes \
+    | .statusCheckRollup = (.statusCheckRollup.contexts.nodes // []) \
     | .closingIssuesReferences = .closingIssuesReferences.nodes]";
+
+/// The login `gh` is signed in as, for the `assignee:@me` filter term.
+pub fn viewer_login(repo_root: &Path) -> Result<String, GhError> {
+    let login = gh(repo_root, ["api", "graphql", "-f", "query=query{viewer{login}}", "--jq", ".data.viewer.login"])?;
+    match login.trim() {
+        "" => Err(GhError::EmptyLogin),
+        login => Ok(login.to_string()),
+    }
+}
 
 /// One PR as GitHub sees it now, for a decision the cached list is too old for.
 pub fn view_pr(repo_root: &Path, pr: PrNumber) -> Result<PullRequest, GhError> {
@@ -168,7 +183,7 @@ mod tests {
     #[test]
     fn view_pr_reads_one_pr_with_the_list_fields() {
         proc::fake::install(|_| {
-            Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"author":null,
+            Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":null,
                 "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
                 "closingIssuesReferences":[{"number":3}]}"#
@@ -184,7 +199,7 @@ mod tests {
 
     fn pr_json(n: u32, state: &str, closes: u32) -> String {
         format!(
-            r#"{{"number":{n},"title":"t","state":"{state}","isDraft":false,"author":null,
+            r#"{{"number":{n},"title":"t","state":"{state}","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":null,
             "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
             "statusCheckRollup":[],"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
             "closingIssuesReferences":[{{"number":{closes}}}]}}"#
@@ -310,5 +325,14 @@ mod tests {
         proc::fake::install(|_| Err(proc::fake::fail("gh", 1, "no browser")));
         let err = open_in_browser(Path::new("/r"), GithubRef::Issue(IssueNumber(3))).expect_err("fails");
         assert_eq!(err.to_string(), "gh failed with code 1: no browser");
+    }
+
+    #[test]
+    fn viewer_login_reads_the_signed_in_login_and_refuses_an_empty_one() {
+        proc::fake::install(|_| Ok("octo\n".to_string()));
+        assert_eq!(viewer_login(Path::new("/r")), Ok("octo".to_string()));
+        assert_eq!(proc::fake::calls(), ["gh api graphql -f query=query{viewer{login}} --jq .data.viewer.login"]);
+        proc::fake::install(|_| Ok(String::new()));
+        assert_eq!(viewer_login(Path::new("/r")), Err(GhError::EmptyLogin));
     }
 }
