@@ -22,7 +22,9 @@
 # Nothing touches the user's tmux server, ~/.config/dispatch, or their checkout.
 set -euo pipefail
 
-HOME_DIR="${DISPATCH_VERIFY_HOME:-${TMPDIR:-/tmp}/dispatch-verify}"
+# Not under $TMPDIR: on macOS it is long enough to push the tmux socket path
+# over the limit for a Unix socket.
+HOME_DIR="${DISPATCH_VERIFY_HOME:-/tmp/dispatch-verify}"
 ROOT="$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)"
 
 die() { echo "verify: $*" >&2; exit 1; }
@@ -66,6 +68,15 @@ cmd_up() {
       *) die "unknown up option $1" ;;
     esac
   done
+  local id; id="$(date +%Y%m%d-%H%M%S)-$$"
+  mkdir -p "$HOME_DIR"
+  RUN="$(realpath "$HOME_DIR")/$id"
+  SOCK="$RUN/tmux/sock"
+  # sun_path holds 104 bytes on macOS and 108 on Linux, with the closing NUL.
+  local sock_max=107; [[ $(uname) == Darwin ]] && sock_max=103
+  local sock_bytes; sock_bytes="$(printf %s "$SOCK" | wc -c)"
+  ((sock_bytes <= sock_max)) || die "tmux socket path is $((sock_bytes)) bytes, over the limit of $sock_max: $SOCK. Set DISPATCH_VERIFY_HOME to a shorter folder."
+
   local bin_src="$ROOT/target/debug/dispatch"
   [[ -x $bin_src ]] || die "no binary at $bin_src. Run: verify.sh build"
   local real_gh; real_gh="$(command -v gh)" || die "gh is not on PATH"
@@ -73,17 +84,13 @@ cmd_up() {
   gh auth status >/dev/null 2>&1 || die "gh is not logged in (gh auth status)"
   [[ -n $repo ]] || repo="$(cd "$ROOT" && gh repo view --json nameWithOwner -q .nameWithOwner)"
 
-  local id; id="$(date +%Y%m%d-%H%M%S)-$$"
-  RUN="$HOME_DIR/$id"
   mkdir -p "$RUN"/{bin,claude,evidence,tmux,work,xdg/dispatch}
-  RUN="$(realpath "$RUN")"
   # dispatch reads $XDG_CONFIG_HOME/dispatch/config.json. gh and git read the same
   # base dir, so link every other entry of the real config dir into the run's dir.
   local real_xdg="${XDG_CONFIG_HOME:-$HOME/.config}" entry
   for entry in "$real_xdg"/* "$real_xdg"/.[!.]*; do
     if [[ -e $entry && $(basename "$entry") != dispatch ]]; then ln -s "$entry" "$RUN/xdg/"; fi
   done
-  SOCK="$RUN/tmux/sock"
   local name="${repo##*/}"
   CLONE="$RUN/work/$name"
 
