@@ -13,18 +13,20 @@ eq "ps_env_lines drops argv and keeps a value with spaces whole" \
   "$(echo '/run/bin/dispatch --flag HC_LEAK=1 SSH_CONNECTION=10.0.0.2 50000 10.0.0.1 22 PATH=/run/bin:/usr/bin _=/run/bin/dispatch' | ps_env_lines)"
 eq "ps_env_lines prints nothing for a process with no environment" "" "$(echo '/run/bin/dispatch' | ps_env_lines)"
 
-sleep_bin="$(realpath "$(command -v sleep)")"
-env -i HC_LEAK=1 'SSH_CONNECTION=10.0.0.2 50000 10.0.0.1 22' PATH=/run/bin:/usr/bin "$sleep_bin" 60 &
+# The probe is bash, not /bin/sleep: macOS hides the environment of its own
+# system binaries from ps. The probe stops itself, so it has no child to orphan.
+probe_bin="$(realpath "$BASH")"
+env -i HC_LEAK=1 'SSH_CONNECTION=10.0.0.2 50000 10.0.0.1 22' PATH=/run/bin:/usr/bin "$probe_bin" -c 'kill -STOP $$' &
 pid=$!
-trap 'kill "$pid" 2>/dev/null || true' EXIT
+trap 'kill -KILL "$pid" 2>/dev/null || true' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -n $(proc_env "$pid") ]] && break; sleep 0.1; done
 
 eq "proc_env reads a live process's environment, one variable per line" \
   $'HC_LEAK=1\nPATH=/run/bin:/usr/bin\nSSH_CONNECTION=10.0.0.2 50000 10.0.0.1 22' \
   "$(proc_env "$pid" | sort)"
-eq "proc_exe reads a live process's executable" "$sleep_bin" "$(proc_exe "$pid")"
+eq "proc_exe reads a live process's executable" "$probe_bin" "$(proc_exe "$pid")"
 
-kill "$pid"; wait "$pid" 2>/dev/null || true
+kill -KILL "$pid"; wait "$pid" 2>/dev/null || true
 eq "proc_env prints nothing for a process that is gone" "" "$(proc_env "$pid")"
 eq "proc_exe prints nothing for a process that is gone" "" "$(proc_exe "$pid")"
 
