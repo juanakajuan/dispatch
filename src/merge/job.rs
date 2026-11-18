@@ -110,7 +110,7 @@ mod tests {
             PrState::Closed => ("CLOSED", false),
         };
         format!(
-            r#"{{"number":10,"title":"t","state":"{state}","isDraft":{draft},"author":null,
+            r#"{{"number":10,"title":"t","state":"{state}","isDraft":{draft},"labels":[],"assignees":[],"milestone":null,"author":null,
             "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-02T03:04:05Z","headRefName":"fix/3-x","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":0,
             "statusCheckRollup":[{checks}],"mergeable":"{mergeable}","mergeStateStatus":"{status}",
             "closingIssuesReferences":[],"url":"u"}}"#

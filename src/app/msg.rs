@@ -26,6 +26,8 @@ pub enum Msg {
         result: Result<Vec<PullRequest>, GhError>,
         at: Instant,
     },
+    /// The login `gh` is signed in as.
+    Viewer(Result<String, GhError>),
     Observed(Result<Observation, SessionError>),
     Started {
         issue: IssueNumber,
@@ -109,6 +111,8 @@ pub enum ReadJob {
     FetchIssues,
     FetchPrs,
     ObserveSessions,
+    /// Once at start, for `assignee:@me`.
+    FetchViewer,
     /// Open the page in the browser. No inflight flag: two presses may open
     /// two tabs, which is what the user asked for.
     Open(GithubRef),

@@ -1,6 +1,7 @@
 use super::header::feed_failure;
 use super::palette;
 use super::text::{cells, one_line, row_line, span, spans_width};
+use crate::app::filter::{Assignee, Term, TokenKind, Viewer, tokens};
 use crate::app::keys::{Hint, Key};
 use crate::app::list::Tab;
 use crate::app::mouse::{HitMap, HitTarget};
@@ -39,7 +40,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
     let mut spans = vec![span("❯ ", palette::ACCENT)];
     match (&state.focus, state.filter.is_empty()) {
         (Focus::Filter, _) => {
-            spans.push(Span::raw(state.filter.clone()));
+            spans.extend(filter_spans(state, Style::default()));
             spans.push(span("▏", palette::ACCENT));
         }
         (Focus::Message { issue, text }, _) => {
@@ -47,7 +48,10 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.push(Span::raw(text.clone()));
             spans.push(span("▏", palette::ACCENT));
         }
-        (_, false) => spans.push(span(format!("/{}", state.filter), palette::LABEL)),
+        (_, false) => {
+            spans.push(span("/", palette::LABEL));
+            spans.extend(filter_spans(state, palette::LABEL));
+        }
         (_, true) => spans.push(span(
             match state.tab {
                 Tab::Issues => "/ to filter issues · s to start a session",
@@ -68,6 +72,32 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
         frame.render_widget(Paragraph::new(span(CLEAR_FILTER, palette::DIM)), clear);
         hits.targets.push((clear, HitTarget::Key(Key::Code(KeyCode::Esc))));
     }
+}
+
+/// The filter as typed, with each term in the accent colour, so the user sees
+/// which words filter by a field. A term key with no value yet is dim, and
+/// `assignee:@me` is red when dispatch could not read the user's login.
+fn filter_spans(state: &State, text: Style) -> Vec<Span<'static>> {
+    let raw = state.filter.as_str();
+    let mut spans = Vec::new();
+    let mut at = 0;
+    for t in tokens(raw) {
+        if at < t.at.start {
+            spans.push(span(raw[at..t.at.start].to_string(), text));
+        }
+        let style = match &t.kind {
+            TokenKind::Text => text,
+            TokenKind::Incomplete => palette::DIM,
+            TokenKind::Term(Term::Assignee(Assignee::Me)) if state.viewer == Viewer::Failed => palette::ERROR,
+            TokenKind::Term(_) => palette::ACCENT,
+        };
+        spans.push(span(raw[t.at.clone()].to_string(), style));
+        at = t.at.end;
+    }
+    if at < raw.len() {
+        spans.push(span(raw[at..].to_string(), text));
+    }
+    spans
 }
 
 /// Hints that stay when the footer is too narrow for all of them.

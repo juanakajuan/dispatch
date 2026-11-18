@@ -148,16 +148,6 @@ fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
 }
 
 #[test]
-fn filter_is_case_insensitive_over_all_parts() {
-    let parts = ["#142", "Retry queue", "bug", "fix/142-retry"];
-    assert!(matches_filter(&parts, ""));
-    assert!(matches_filter(&parts, "RETRY"));
-    assert!(matches_filter(&parts, "#142"));
-    assert!(matches_filter(&parts, "bug fix"));
-    assert!(!matches_filter(&parts, "docs"));
-}
-
-#[test]
 fn clicking_the_filter_prompt_opens_the_filter_and_clicking_clear_removes_it() {
     let (mut state, now) = with_target(HitTarget::Key(Key::Char('/')));
     press(&mut state, click(0, 0, now));

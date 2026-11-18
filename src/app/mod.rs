@@ -14,8 +14,9 @@ use std::time::Instant;
 use batch::{BatchStart, batch_key};
 use dialog::{StartDialog, dialog_key};
 use feed::{Due, Feed, Poll, observed, tick};
+use filter::{Viewer, filter_key};
 use keys::{act, action_for};
-use list::{Tab, Tabs, filter_key};
+use list::{Tab, Tabs};
 use menus::{SettingsMenu, keybinds_key, settings_key};
 use merge::{Armed, merged};
 use message::{message_key, sent};
@@ -30,6 +31,7 @@ use toast::Toast;
 pub mod batch;
 pub mod dialog;
 pub mod feed;
+pub mod filter;
 pub mod keys;
 pub mod list;
 pub mod menus;
@@ -108,6 +110,7 @@ pub struct State {
     pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
     pub filter: String,
+    pub viewer: Viewer,
     pub focus: Focus,
     pub toast: Option<Toast>,
     pub due: Due,
@@ -137,6 +140,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         marked: BTreeSet::new(),
         tabs: Tabs::default(),
         filter: String::new(),
+        viewer: Viewer::Unknown,
         focus: Focus::List,
         toast: None,
         due: Due {
@@ -157,6 +161,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         state.issues.poll.request(ReadJob::FetchIssues),
         state.prs.poll.request(ReadJob::FetchPrs),
         state.observe.request(ReadJob::ObserveSessions),
+        Some(Cmd::Job(msg::Job::Read(ReadJob::FetchViewer))),
     ];
     (state, cmds.into_iter().flatten().collect())
 }
@@ -189,6 +194,10 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         }
         Msg::Prs { result, at } => {
             state.prs.landed(result, at);
+            Vec::new()
+        }
+        Msg::Viewer(result) => {
+            state.viewer = result.map_or(Viewer::Failed, Viewer::Login);
             Vec::new()
         }
         Msg::Observed(result) => observed(state, result),
