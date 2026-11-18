@@ -25,7 +25,7 @@ set -euo pipefail
 # Not under $TMPDIR: on macOS it is long enough to push the tmux socket path
 # over the limit for a Unix socket.
 HOME_DIR="${DISPATCH_VERIFY_HOME:-/tmp/dispatch-verify}"
-ROOT="$(git -C "$(dirname "$(realpath "$0")")" rev-parse --show-toplevel)"
+ROOT="$(git -C "$(dirname "$(realpath "${BASH_SOURCE[0]}")")" rev-parse --show-toplevel)"
 
 die() { echo "verify: $*" >&2; exit 1; }
 
@@ -227,17 +227,44 @@ cmd_shot_inner() {
   echo "$RUN/evidence/$n-$label.txt"
 }
 
+# `ps -E` prints argv and then the environment on one line, joined by spaces.
+# A word that starts NAME= opens a variable. Any other word belongs to the
+# value before it, so `SSH_CONNECTION=10.0.0.2 50000 10.0.0.1 22` stays whole.
+ps_env_lines() {
+  awk '{ for (i = 1; i <= NF; i++)
+           if ($i ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { if (v != "") print v; v = $i }
+           else if (v != "") v = v " " $i }
+       END { if (v != "") print v }'
+}
+
+# The environment of process PID, one NAME=VALUE per line. Empty if it cannot
+# be read. Linux has /proc. macOS does not, so ask ps.
+proc_env() {
+  if [[ -d /proc/$1 ]]; then tr '\0' '\n' <"/proc/$1/environ" 2>/dev/null || true
+  else ps -E -ww -o command= -p "$1" 2>/dev/null | ps_env_lines; fi
+}
+
+# The executable of process PID. Empty if it cannot be read.
+proc_exe() {
+  local exe
+  if [[ -d /proc/$1 ]]; then exe="/proc/$1/exe"; else exe="$(ps -o comm= -p "$1" 2>/dev/null)"; fi
+  [[ -z $exe ]] || realpath "$exe" 2>/dev/null || true
+}
+
 cmd_doctor() {
   load "$1"
-  local ok=1
+  local ok=1 pid penv
+  pid="$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null || true)"
+  penv="$([[ -z $pid ]] || proc_env "$pid")"
   check() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; ok=0; fi; }
   check "tmux server answers on $SOCK" 't list-sessions >/dev/null 2>&1'
   check "drive pane $PANE is alive" '[[ $(t display-message -p -t "$PANE" "#{pane_dead}" 2>/dev/null) == 0 ]]'
-  check "pane runs this run's binary" '[[ $(realpath "/proc/$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)/exe" 2>/dev/null) == "$BIN" ]]'
-  check "drive pane has the gh guard first on PATH" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^PATH=$RUN/bin:"'
-  check "drive pane has TMUX on this run's socket" 'tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -q "^TMUX=$SOCK,"'
-  check "drive pane has no herdr, herdr app, or unwanted SSH variables" '! tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -E "^(HERDR_|HC_|SSH_TTY=$( ((OVER_SSH)) || echo "|SSH_CONNECTION=" ))" -q'
-  check "drive pane holds only allowlisted variables (KEEP_ENV in verify.sh)" '! tr "\0" "\n" </proc/"$(t display-message -p -t "$PANE" "#{pane_pid}" 2>/dev/null)"/environ 2>/dev/null | grep -Evq "$PANE_ENV_RE"'
+  check "pane runs this run's binary" '[[ -n $pid && $(proc_exe "$pid") == "$BIN" ]]'
+  check "drive pane's environment is readable" '[[ -n $penv ]]'
+  check "drive pane has the gh guard first on PATH" 'grep -q "^PATH=$RUN/bin:" <<<"$penv"'
+  check "drive pane has TMUX on this run's socket" 'grep -q "^TMUX=$SOCK," <<<"$penv"'
+  check "drive pane has no herdr, herdr app, or unwanted SSH variables" '[[ -n $penv ]] && ! grep -E "^(HERDR_|HC_|SSH_TTY=$( ((OVER_SSH)) || echo "|SSH_CONNECTION=" ))" -q <<<"$penv"'
+  check "drive pane holds only allowlisted variables (KEEP_ENV in verify.sh)" '[[ -n $penv ]] && ! grep -Evq "$PANE_ENV_RE" <<<"$penv"'
   check "binary matches $BIN_SRC (no rebuild since up)" 'cmp -s "$BIN" "$BIN_SRC"'
   check "binary is not older than src/ (built at $BUILT_REV)" '[[ -z $(find "$ROOT/src" "$ROOT/Cargo.toml" -newer "$BIN_SRC" -print -quit) ]]'
   check "gh is logged in, as the drive server sees it" 't run-shell "gh auth status >/dev/null 2>&1 && echo GH_OK" 2>/dev/null | grep -q GH_OK'
@@ -312,6 +339,9 @@ cmd_list() {
       echo "UP    $dir"; else echo "down  $dir"; fi
   done
 }
+
+# verify_test.sh sources this file for its functions.
+[[ ${BASH_SOURCE[0]} == "$0" ]] || return 0
 
 sub="${1:-}"; shift || true
 case "$sub" in
