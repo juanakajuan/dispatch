@@ -71,7 +71,7 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, GhError> {
 const ISSUE_FIELDS: &str = "number,title,labels,assignees,milestone,author,createdAt,updatedAt,comments";
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,labels,assignees,milestone,author,createdAt,updatedAt,headRefName,isCrossRepository,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
+const PR_FIELDS: &str = "number,title,state,isDraft,labels,assignees,milestone,author,createdAt,updatedAt,headRefName,isCrossRepository,headRepository,maintainerCanModify,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
 
 /// The 100 newest PRs in any state, plus each older PR that closes an open
 /// issue. A refresh runs every 60 s, so it costs at most three calls: the
@@ -102,7 +102,7 @@ fn prs_query(numbers: &[PrNumber]) -> String {
         "query=query($owner:String!,$repo:String!){{repository(owner:$owner,name:$repo){{{prs}}}}} \
          fragment F on PullRequest{{number title state isDraft labels(first:100){{nodes{{name}}}} \
          assignees(first:100){{nodes{{login}}}} milestone{{title}} author{{login}} createdAt updatedAt headRefName \
-         isCrossRepository headRefOid baseRefName additions deletions mergeable mergeStateStatus \
+         isCrossRepository headRepository{{nameWithOwner}} maintainerCanModify headRefOid baseRefName additions deletions mergeable mergeStateStatus \
          statusCheckRollup{{contexts(first:100){{nodes{{__typename ...on CheckRun{{status conclusion}} \
          ...on StatusContext{{state}}}}}}}} closingIssuesReferences(first:100){{nodes{{number}}}}}}"
     )
@@ -184,7 +184,7 @@ mod tests {
     fn view_pr_reads_one_pr_with_the_list_fields() {
         proc::fake::install(|_| {
             Ok(r#"{"number":12,"title":"t","state":"OPEN","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":null,
-                "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
+                "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
                 "statusCheckRollup":[],"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY",
                 "closingIssuesReferences":[{"number":3}]}"#
                 .to_string())
@@ -200,7 +200,7 @@ mod tests {
     fn pr_json(n: u32, state: &str, closes: u32) -> String {
         format!(
             r#"{{"number":{n},"title":"t","state":"{state}","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":null,
-            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"main","additions":1,"deletions":2,
             "statusCheckRollup":[],"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
             "closingIssuesReferences":[{{"number":{closes}}}]}}"#
         )

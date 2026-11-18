@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::merge::{CannotFix, NoTarget};
-use crate::domain::{PrBranch, Unusable};
+use crate::domain::{BranchNameError, ForkPush, PrBranch, RepoSlug};
 use crate::merge::job::DraftStep;
 use crate::merge::plan::MergeRefusal;
 use crate::merge::{Consent, MergeAsk, MergeError};
@@ -108,8 +108,8 @@ fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
     assert_eq!(started.len(), 1);
     let req = started[0];
     assert_eq!(
-        (req.issue, req.branch.as_str(), req.mode, req.from),
-        (IssueNumber(3), "fix/3-x", Mode::Implement, StartFrom::Origin)
+        (req.issue, req.branch.as_str(), req.mode, &req.from),
+        (IssueNumber(3), "fix/3-x", Mode::Implement, &StartFrom::Origin)
     );
     assert_eq!(req.prompt, plan::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
     assert!(state.starting.contains(&IssueNumber(3)));
@@ -182,21 +182,61 @@ fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
     );
 }
 
+fn conflict_handoff(head: PrBranch) -> Msg {
+    let fresh = PullRequest { head, mergeability: Mergeability::Conflict, ..pr(10, "fix/3-x", &[3]) };
+    let outcome =
+        MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) };
+    Msg::Merged { ask: ASK_FIX, run: ran(Ok(outcome)) }
+}
+
 #[test]
-fn a_pr_from_a_fork_still_merges_but_never_gets_a_fix_session() {
+fn a_fork_pr_that_denies_maintainer_edits_merges_but_never_gets_a_fix_session() {
     let (mut state, _) = app();
-    let fork = PrBranch::Unusable { raw: "fix/3-x".to_string(), why: Unusable::InFork };
+    let fork = PrBranch::fork(PrNumber(10), "fix/3-x".to_string(), ForkPush::Denied);
     state.prs.items[0].head = fork.clone();
     press(&mut state, key('m'));
     assert_eq!(merges(&press(&mut state, key('m'))), [ASK], "a clean fork PR merges directly");
-    let fresh = PullRequest { head: fork, mergeability: Mergeability::Conflict, ..pr(10, "fix/3-x", &[3]) };
-    let outcome =
-        MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) };
-    let cmds = press(&mut state, Msg::Merged { ask: ASK_FIX, run: ran(Ok(outcome)) });
-    assert!(starts(&cmds).is_empty());
+
+    let refusal = "PR #10 has a merge conflict with main. PR #10 is from a fork that does not let maintainers \
+                   push to it, so a session can not push a fix.";
+    state.prs.items[0].mergeability = Mergeability::Conflict;
+    assert!(press(&mut state, key('m')).is_empty());
+    assert_eq!(toast(&state), refusal, "the first m says why, and arms nothing");
+    assert!(state.armed.is_none());
+    assert!(starts(&press(&mut state, conflict_handoff(fork))).is_empty());
+    assert_eq!(toast(&state), refusal);
+}
+
+#[test]
+fn a_fork_pr_that_allows_maintainer_edits_gets_a_fix_session_on_a_local_branch() {
+    let (mut state, _) = app();
+    let repo = RepoSlug::parse("maxbeizer/cli").expect("slug");
+    let fork = PrBranch::fork(PrNumber(10), "fix/3-x".to_string(), ForkPush::Allowed(repo.clone()));
+    let cmds = press(&mut state, conflict_handoff(fork.clone()));
+    let started = starts(&cmds);
+    assert_eq!(started.len(), 1);
+    let head = BranchName::parse("fix/3-x").expect("branch");
+    assert_eq!(
+        (started[0].branch.as_str(), &started[0].from),
+        ("fork/pr-10", &StartFrom::Fork { repo: repo.clone(), branch: head.clone() })
+    );
+    assert_eq!(
+        started[0].prompt,
+        plan::fork_fix_session_prompt(PrNumber(10), &repo, "main", MergeProblem::Conflict, MergeMethod::Rebase)
+    );
+    assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
+
+    let (mut state, _) = app();
+    let mut running = session(3, SessionState::Running);
+    running.branch = BranchName::parse("fork/pr-10").expect("branch");
+    state.sessions.insert(IssueNumber(3), running);
+    state.prs.items[0].head = fork;
+    state.prs.items[0].mergeability = Mergeability::Conflict;
+    press(&mut state, key('m'));
     assert_eq!(
         toast(&state),
-        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix/3-x\": the branch is in a fork"
+        "PR #10 has a merge conflict with main. Press m again to ask #3's agent to fix and merge it.",
+        "the session on the local branch is the PR's session"
     );
 }
 
@@ -382,7 +422,7 @@ fn m_explains_why_it_can_not_merge() {
 #[test]
 fn each_reason_m_can_not_act_keeps_its_sentence() {
     let (pr, issue) = (PrNumber(10), IssueNumber(3));
-    let unusable = CannotFix::UnusableHead { pr, raw: "a..b".to_string(), why: Unusable::InFork };
+    let unusable = CannotFix::UnusableHead { pr, raw: "a..b".to_string(), why: BranchNameError::BadSequence("..") };
     let cases = [
         (NoTarget::NothingSelected.to_string(), "Nothing is selected."),
         (NoTarget::NotListed(pr).to_string(), "PR #10 is not in the list."),
@@ -396,7 +436,11 @@ fn each_reason_m_can_not_act_keeps_its_sentence() {
             CannotFix::EachIssueBusy(pr).to_string(),
             "Each issue that PR #10 closes already has a session on another branch.",
         ),
-        (unusable.to_string(), "PR #10 has the branch name \"a..b\": the branch is in a fork"),
+        (unusable.to_string(), "PR #10 has the branch name \"a..b\": BadSequence(\"..\")"),
+        (
+            CannotFix::ForkDeniesEdits(pr).to_string(),
+            "PR #10 is from a fork that does not let maintainers push to it, so a session can not push a fix.",
+        ),
     ];
     for (got, want) in cases {
         assert_eq!(got, want);

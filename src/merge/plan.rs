@@ -1,6 +1,6 @@
 //! Pure merge rules. No I/O.
 
-use crate::domain::{Checks, MergeMethod, Mergeability, PrNumber, PrState, PullRequest};
+use crate::domain::{Checks, MergeMethod, Mergeability, PrNumber, PrState, PullRequest, RepoSlug};
 use std::fmt;
 
 /// What `m` does with a PR.
@@ -114,6 +114,25 @@ pub fn fix_session_prompt(pr: PrNumber, base: &str, problem: MergeProblem, metho
     )
 }
 
+/// The fix prompt for a PR from the fork `repo`. The session branch has
+/// another name than the fork's branch, and dispatch sets it up so a plain
+/// `git pull` and `git push` reach the fork. The fork's branch name is not
+/// in the prompt, because the fork's author chose it.
+pub fn fork_fix_session_prompt(
+    pr: PrNumber,
+    repo: &RepoSlug,
+    base: &str,
+    problem: MergeProblem,
+    method: MergeMethod,
+) -> String {
+    format!(
+        "This worktree is on the branch of PR #{n}, from the fork {repo}. Run `git pull` to get its latest commits. \
+         A plain `git push` pushes to the PR. {}",
+        handoff_prompt(pr, base, problem, method),
+        n = pr.0,
+    )
+}
+
 /// The method to merge with. `configured` is the `dispatch.mergeMethod`
 /// setting; `allowed` is what the repo allows, in gh order. Without a
 /// setting, the first allowed method wins, so a repo that allows one method
@@ -217,6 +236,13 @@ mod tests {
             fix_session_prompt(PrNumber(12), "main", MergeProblem::ChecksFailing, MergeMethod::Merge),
             "This worktree is on the branch of PR #12. Run `gh pr checkout 12` to get its latest commits. \
              PR #12 has failing checks. Fix it and push. When the checks pass, merge it with `gh pr merge 12 --merge`."
+        );
+        let fork = RepoSlug::parse("maxbeizer/cli").expect("slug");
+        assert_eq!(
+            fork_fix_session_prompt(PrNumber(12), &fork, "main", MergeProblem::ChecksFailing, MergeMethod::Merge),
+            "This worktree is on the branch of PR #12, from the fork maxbeizer/cli. Run `git pull` to get its latest \
+             commits. A plain `git push` pushes to the PR. PR #12 has failing checks. Fix it and push. When the \
+             checks pass, merge it with `gh pr merge 12 --merge`."
         );
     }
 

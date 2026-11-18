@@ -46,7 +46,7 @@ fn a_branch_that_origin_lacks_is_not_pushed() {
         fake::calls(),
         [
             "git for-each-ref --format=%(refname) %(objectname) %(ahead-behind:refs/remotes/origin/main) \
-             refs/heads/fix/3-x refs/remotes/origin/fix/3-x",
+             refs/heads/fix/3-x refs/remotes/origin/fix/3-x refs/remotes/dispatch-fix-3-x",
             "git --no-optional-locks status --porcelain",
         ],
         "one for-each-ref and one status; no rev-list without an origin branch"
@@ -75,6 +75,14 @@ fn origin_at_another_commit_counts_both_sides() {
         "{:?}",
         fake::calls()
     );
+}
+
+#[test]
+fn a_fork_session_is_pushed_when_its_fork_branch_is_at_its_commit() {
+    let ws = workspace(&temp_dir("work-fork"));
+    git("refs/heads/fork/pr-6 aaa 2 0\nrefs/remotes/dispatch-fork-pr-6/feat/x aaa 2 0\n", Ok(""), "");
+    let got = ws.work(&sessions(&[(4, "fork/pr-6")]));
+    assert_eq!(got[&IssueNumber(4)], Work { commits: 2, uncommitted: 0, push: Push::Pushed });
 }
 
 #[test]

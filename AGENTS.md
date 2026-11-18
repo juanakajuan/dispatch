@@ -20,7 +20,7 @@ A feature has one name. `src/app/<name>.rs` holds its state and flow, and `src/<
 - User-visible sentences (refusals, errors, toasts) have tests that pin the exact text. A change to that text is a behavior change: make it a `fix` or `feat` commit, not a `refactor`.
 - A toast is red because it is `toast::error`, never because of its words.
 - `armed` (a pending second `m`) lives on `State`, not inside the list focus: a merge result can arm `m` while a menu is open.
-- A PR head is a `PrBranch`. A head that is a bad branch name or is in a fork is `Unusable`: the PR still lists and merges, but dispatch never starts a fix session on it.
+- A PR head is a `PrBranch`. A head that is a bad branch name is `Unusable`: the PR still lists and merges, but dispatch never starts a fix session on it. A head in a fork is `Fork`: a fix session runs on the local branch `fork/pr-<n>`, only when the PR allows edits from maintainers. A fork's branch name never goes into a prompt, because the fork's author chose it.
 
 ## What stops each repeated mistake
 

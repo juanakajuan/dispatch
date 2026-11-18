@@ -1,5 +1,5 @@
 use crate::config::{ClaudeCommand, Config};
-use crate::domain::{BranchName, Issue, IssueNumber, Mode};
+use crate::domain::{BranchName, Issue, IssueNumber, Mode, RepoSlug};
 
 /// What the start dialog hands over after validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -12,12 +12,15 @@ pub struct StartRequest {
 }
 
 /// Where a new branch starts. Used only when `branch` does not exist locally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartFrom {
     /// The default branch, for new work on an issue.
     Base,
     /// The branch of the same name on origin, for work on an open PR.
     Origin,
+    /// `branch` in the fork `repo`, for work on an open PR from a fork that
+    /// allows edits from maintainers. The new branch tracks it.
+    Fork { repo: RepoSlug, branch: BranchName },
 }
 
 /// The config that shapes a start or resume. It is a value the caller passes

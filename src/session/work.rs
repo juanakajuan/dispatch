@@ -1,6 +1,6 @@
 //! What each session has done that a row can show without an attach: commits
 //! on its branch, files not committed in its worktree, and how its branch
-//! stands against `origin`. The poll reads it every 2 s, so it costs one
+//! stands against its remote copy, on `origin` or in its fork. The poll reads it every 2 s, so it costs one
 //! `for-each-ref` for all sessions, one `status` per worktree, and one
 //! `rev-list` only for a branch whose `origin` copy is at another commit.
 
@@ -41,13 +41,13 @@ pub(super) fn read(ws: &Workspace, sessions: &Sessions) -> Works {
 }
 
 fn one(ws: &Workspace, tips: &git::Tips, branch: &BranchName, worktree: &std::path::Path) -> Option<Work> {
-    let (local, origin) = (git::local_ref(branch), git::origin_ref(branch));
+    let local = git::local_ref(branch);
     let tip = tips.get(&local)?;
-    let push = match tips.get(&origin) {
+    let push = match git::remote_copy(tips, branch) {
         None => Push::NotPushed,
-        Some(remote) if remote.commit == tip.commit => Push::Pushed,
-        Some(_) => {
-            let (to_push, to_pull) = git::left_right(&ws.repo_root, &local, &origin).ok()?;
+        Some((_, remote)) if remote.commit == tip.commit => Push::Pushed,
+        Some((remote, _)) => {
+            let (to_push, to_pull) = git::left_right(&ws.repo_root, &local, remote).ok()?;
             Push::Differs { to_push, to_pull }
         }
     };

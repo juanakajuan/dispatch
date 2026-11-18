@@ -4,7 +4,7 @@ use super::start_argv::claude_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
 use crate::config::ClaudeCommand;
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
 use std::path::PathBuf;
 
 /// Everything `plan_start` needs. Gathered by `observe_for_start`.
@@ -50,6 +50,9 @@ pub(super) enum StartPlan {
 pub(super) enum Step {
     /// `git fetch origin <branch>`, so the new branch starts from fresh commits.
     Fetch(OriginRef),
+    /// Adds the fork as the remote `fork/<owner>/<name>`, has `branch` track
+    /// `head` on it, and fetches `head` into `branch`, which is new.
+    FetchFork { repo: RepoSlug, head: BranchName, branch: BranchName },
     /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
     /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
     AddWorktree { dir: PathBuf, branch: BranchName, from: Option<OriginRef> },
@@ -73,6 +76,7 @@ pub(super) enum Step {
 /// | req.branch checked out elsewhere                      | Conflict `BranchCheckedOut`         |
 /// | req.branch exists, unmarked, free                     | [`AddWorktree` create=false, Mark, `OpenWindow`] |
 /// | nothing exists                                        | [Fetch, `AddWorktree` create=true, Mark, `OpenWindow`] |
+/// | nothing exists, `req.from` is `StartFrom::Fork`         | [`FetchFork`, `AddWorktree` create=false, Mark, `OpenWindow`] |
 ///
 /// A created branch starts from the default branch, or from `origin/<branch>`
 /// when `req.from` is `StartFrom::Origin`.
@@ -123,10 +127,15 @@ pub(super) fn plan_start(
         });
     }
     let mut steps = Vec::new();
-    let from = (obs.branch == LocalBranch::Missing).then(|| match req.from {
-        StartFrom::Base => layout.base.clone(),
-        StartFrom::Origin => OriginRef::of(req.branch.clone()),
-    });
+    let from = match (obs.branch, &req.from) {
+        (LocalBranch::Exists, _) => None,
+        (LocalBranch::Missing, StartFrom::Base) => Some(layout.base.clone()),
+        (LocalBranch::Missing, StartFrom::Origin) => Some(OriginRef::of(req.branch.clone())),
+        (LocalBranch::Missing, StartFrom::Fork { repo, branch }) => {
+            steps.push(Step::FetchFork { repo: repo.clone(), head: branch.clone(), branch: req.branch.clone() });
+            None
+        }
+    };
     if let Some(remote_ref) = &from {
         steps.push(Step::Fetch(remote_ref.clone()));
     }

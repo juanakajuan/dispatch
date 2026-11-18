@@ -1,12 +1,13 @@
-//! `gh` JSON as serde reads it, and the parse into domain types. A PR from a
-//! fork gets an unusable head here, so no session starts on it.
+//! `gh` JSON as serde reads it, and the parse into domain types.
 
 use super::GhError;
 use crate::domain::{
-    Checks, CommitOid, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
-    PullRequest, Unusable,
+    CommitOid, ForkPush, GithubRef, Issue, IssueNumber, MergeMethod, PrBranch, PrNumber, PrState, PullRequest, RepoSlug,
 };
+use checks::{WireCheck, mergeability, rollup};
 use serde::de::DeserializeOwned;
+
+mod checks;
 
 pub(super) fn decode<T: DeserializeOwned>(json: &str, what: &'static str) -> Result<T, GhError> {
     serde_json::from_str(json).map_err(|e| GhError::Decode { what, detail: e.to_string() })
@@ -80,7 +81,9 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         milestone: w.milestone.map(|m| m.title),
         author: login(w.author),
         head: match w.is_cross_repository {
-            HeadRepo::Fork => PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork },
+            HeadRepo::Fork => {
+                PrBranch::fork(number, w.head_ref_name, fork_push(w.maintainer_can_modify, w.head_repository))
+            }
             HeadRepo::Same => PrBranch::parse(w.head_ref_name),
         },
         head_oid: CommitOid::new(w.head_ref_oid),
@@ -93,53 +96,11 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
     })
 }
 
-/// `mergeable` is MERGEABLE, CONFLICTING, or UNKNOWN. `mergeStateStatus` is
-/// CLEAN, `HAS_HOOKS`, DIRTY, BEHIND, BLOCKED, UNSTABLE, DRAFT, or UNKNOWN. A
-/// value GitHub adds later reads as `Unknown`, so dispatch waits rather than
-/// merges.
-fn mergeability(mergeable: &str, status: &str) -> Mergeability {
-    match (mergeable, status) {
-        ("CONFLICTING", _) | (_, "DIRTY") => Mergeability::Conflict,
-        (_, "CLEAN" | "HAS_HOOKS") => Mergeability::Clean,
-        (_, "BEHIND") => Mergeability::Behind,
-        (_, "BLOCKED") => Mergeability::Blocked,
-        (_, "UNSTABLE") => Mergeability::Unstable,
-        _ => Mergeability::Unknown,
-    }
-}
-
-/// Any failure -> Fail, else any not completed -> Pending, else Pass.
-/// Empty -> `Checks::None`.
-fn rollup(items: &[WireCheck]) -> Checks {
-    let outcomes: Vec<Checks> = items
-        .iter()
-        .filter_map(|c| match c {
-            WireCheck::CheckRun { status, conclusion } => Some(if status != "COMPLETED" {
-                Checks::Pending
-            } else if matches!(
-                conclusion.as_str(),
-                "FAILURE" | "TIMED_OUT" | "CANCELLED" | "STARTUP_FAILURE" | "ACTION_REQUIRED"
-            ) {
-                Checks::Fail
-            } else {
-                Checks::Pass
-            }),
-            WireCheck::StatusContext { state } => Some(match state.as_str() {
-                "FAILURE" | "ERROR" => Checks::Fail,
-                "SUCCESS" => Checks::Pass,
-                _ => Checks::Pending,
-            }),
-            WireCheck::Unknown => None,
-        })
-        .collect();
-    if outcomes.is_empty() {
-        Checks::None
-    } else if outcomes.contains(&Checks::Fail) {
-        Checks::Fail
-    } else if outcomes.contains(&Checks::Pending) {
-        Checks::Pending
-    } else {
-        Checks::Pass
+/// A deleted fork has no `headRepository`, so no one can push to it.
+fn fork_push(edits: Edits, repo: Option<WireRepo>) -> ForkPush {
+    match (edits, repo.and_then(|r| RepoSlug::parse(&r.name_with_owner))) {
+        (Edits::Allowed, Some(slug)) => ForkPush::Allowed(slug),
+        (Edits::Allowed | Edits::Denied, _) => ForkPush::Denied,
     }
 }
 
@@ -189,6 +150,8 @@ pub(super) struct WirePr {
     updated_at: String,
     head_ref_name: String,
     is_cross_repository: HeadRepo,
+    head_repository: Option<WireRepo>,
+    maintainer_can_modify: Edits,
     head_ref_oid: String,
     base_ref_name: String,
     additions: u32,
@@ -222,6 +185,27 @@ enum HeadRepo {
 impl From<bool> for HeadRepo {
     fn from(is_cross_repository: bool) -> Self {
         if is_cross_repository { HeadRepo::Fork } else { HeadRepo::Same }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireRepo {
+    name_with_owner: String,
+}
+
+/// `maintainerCanModify`: whether the PR lets maintainers of the base repo
+/// push to its head.
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(from = "bool")]
+enum Edits {
+    Allowed,
+    Denied,
+}
+
+impl From<bool> for Edits {
+    fn from(maintainer_can_modify: bool) -> Self {
+        if maintainer_can_modify { Edits::Allowed } else { Edits::Denied }
     }
 }
 
@@ -296,33 +280,14 @@ pub(super) fn linked_prs(wire: Vec<WireIssueLinks>) -> Vec<PrNumber> {
     prs
 }
 
-/// Real output mixes two shapes, told apart by `__typename`:
-/// `CheckRun` {status: "`COMPLETED"|"IN_PROGRESS`"|.., conclusion: "SUCCESS"|"FAILURE"|""}
-/// `StatusContext` {state: "SUCCESS"|"PENDING"|"FAILURE"|"ERROR"}.
-#[derive(serde::Deserialize)]
-#[serde(tag = "__typename")]
-enum WireCheck {
-    CheckRun {
-        #[serde(default)]
-        status: String,
-        #[serde(default)]
-        conclusion: String,
-    },
-    StatusContext {
-        #[serde(default)]
-        state: String,
-    },
-    #[serde(other)]
-    Unknown,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{BranchName, Checks, ForkHead, Mergeability};
     use crate::github::{ISSUE_FIELDS, PR_FIELDS};
 
-    const PRS: &str = include_str!("../../fixtures/prs.json");
-    const ISSUES: &str = include_str!("../../fixtures/issues.json");
+    const PRS: &str = include_str!("../../../fixtures/prs.json");
+    const ISSUES: &str = include_str!("../../../fixtures/issues.json");
 
     fn parse_issues(json: &str) -> Result<Vec<Issue>, GhError> {
         decode(json, "gh issue list").and_then(issues_from_wire)
@@ -336,22 +301,18 @@ mod tests {
         parse_prs(PRS).expect("fixture parses").into_iter().find(|p| p.number == PrNumber(n)).expect("pr in fixture")
     }
 
-    fn check(status: &str, conclusion: &str) -> WireCheck {
-        WireCheck::CheckRun { status: status.to_string(), conclusion: conclusion.to_string() }
-    }
-
-    fn status(state: &str) -> WireCheck {
-        WireCheck::StatusContext { state: state.to_string() }
-    }
-
     #[test]
     fn real_prs_map_state_checks_and_closes() {
         let open = pr(1028);
         assert_eq!((open.state, open.checks, open.mergeability), (PrState::Open, Checks::Pass, Mergeability::Clean));
         assert_eq!(open.closes, [IssueNumber(711)]);
         assert_eq!(open.head.display(), "feature/711-hardware-metadata");
-        assert_eq!(open.head.branch(), None, "a fork's branch is not on origin");
-        assert!(pr(14927).head.branch().is_some(), "a branch in the repo itself");
+        assert_eq!(
+            open.head.branch().map(BranchName::as_str),
+            Some("fork/pr-1028"),
+            "a fork's branch is not on origin"
+        );
+        assert!(matches!(pr(14927).head, PrBranch::Valid(_)), "a branch in the repo itself");
         assert_eq!(open.base.display(), "master");
         assert_eq!(pr(1002).updated_at.to_string(), "2026-10-12T08:33:48Z");
         assert_eq!(pr(1002).state, PrState::Merged);
@@ -362,39 +323,14 @@ mod tests {
     }
 
     #[test]
-    fn rollup_failure_beats_pending_beats_pass() {
-        assert_eq!(rollup(&[]), Checks::None);
-        assert_eq!(rollup(&[check("COMPLETED", "SUCCESS"), check("COMPLETED", "SKIPPED")]), Checks::Pass);
-        assert_eq!(rollup(&[check("IN_PROGRESS", ""), check("COMPLETED", "SUCCESS")]), Checks::Pending);
-        assert_eq!(rollup(&[check("IN_PROGRESS", ""), check("COMPLETED", "FAILURE")]), Checks::Fail);
-        assert_eq!(rollup(&[status("PENDING"), status("SUCCESS")]), Checks::Pending);
-        assert_eq!(rollup(&[status("ERROR"), check("COMPLETED", "SUCCESS")]), Checks::Fail);
-        assert_eq!(rollup(&[WireCheck::Unknown]), Checks::None);
-    }
-
-    #[test]
     fn mixed_check_shapes_parse_by_typename() {
         let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":{"login":"a"},
-            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
             "mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","closingIssuesReferences":[]}]"#;
         assert_eq!(parse_prs(json).expect("parses")[0].checks, Checks::Pending);
-    }
-
-    #[test]
-    fn mergeability_reads_both_fields_and_waits_on_anything_new() {
-        assert_eq!(mergeability("MERGEABLE", "CLEAN"), Mergeability::Clean);
-        assert_eq!(mergeability("MERGEABLE", "HAS_HOOKS"), Mergeability::Clean);
-        assert_eq!(mergeability("CONFLICTING", "BLOCKED"), Mergeability::Conflict, "a conflict wins");
-        assert_eq!(mergeability("UNKNOWN", "DIRTY"), Mergeability::Conflict);
-        assert_eq!(mergeability("MERGEABLE", "BEHIND"), Mergeability::Behind);
-        assert_eq!(mergeability("MERGEABLE", "BLOCKED"), Mergeability::Blocked);
-        assert_eq!(mergeability("MERGEABLE", "UNSTABLE"), Mergeability::Unstable);
-        assert_eq!(mergeability("UNKNOWN", "UNKNOWN"), Mergeability::Unknown);
-        assert_eq!(mergeability("MERGEABLE", "DRAFT"), Mergeability::Unknown);
-        assert_eq!(mergeability("MERGEABLE", "SOMETHING_NEW"), Mergeability::Unknown);
     }
 
     #[test]
@@ -441,6 +377,17 @@ mod tests {
     fn real_prs_map_labels() {
         assert_eq!(pr(14035).labels, ["needs-triage", "external"]);
         assert!(pr(1028).labels.is_empty() && pr(1028).assignees.is_empty() && pr(1028).milestone.is_none());
+    }
+
+    #[test]
+    fn a_fork_pr_can_take_a_push_only_when_it_allows_maintainer_edits() {
+        let push = |n| match pr(n).head {
+            PrBranch::Fork(ForkHead { push, .. }) => push,
+            other => panic!("#{n} is from a fork: {other:?}"),
+        };
+        assert_eq!(push(14035), ForkPush::Allowed(RepoSlug::parse("maxbeizer/cli").expect("slug")));
+        assert_eq!(push(1002), ForkPush::Denied, "maintainerCanModify is false");
+        assert_eq!(push(1028), ForkPush::Denied, "the fork is gone");
     }
 
     /// The fixtures are real gh output for today's queries. A field dropped

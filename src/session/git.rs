@@ -2,7 +2,7 @@
 //! captured from git 2.56.
 
 use super::error::{FsAction, FsError, GitError, SessionError};
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -135,6 +135,63 @@ pub(super) fn fetch(root: &Path, remote_ref: &OriginRef) -> Result<(), ProcError
     git(root, ["fetch", "origin", remote_ref.branch().as_str()]).map(|_| ())
 }
 
+/// The remote dispatch adds for the fork of the session branch `branch`,
+/// one per PR, so nothing else uses its name or its refs.
+pub(super) fn fork_remote(branch: &BranchName) -> String {
+    format!("dispatch-{}", branch.as_str().replace('/', "-"))
+}
+
+/// Adds `repo` as a remote with origin's host and protocol. Its fetch and
+/// push refspecs map only `head` to `branch`, so `git pull` and `git push`
+/// on `branch` need no name from the fork. Then fetches `head` into
+/// `branch`; the fetch also sets the remote-tracking ref, so the commits
+/// count as pushed. Each `git config` overwrites, so a retry after a crash
+/// converges.
+pub(super) fn fetch_fork(
+    root: &Path,
+    repo: &RepoSlug,
+    head: &BranchName,
+    branch: &BranchName,
+) -> Result<(), SessionError> {
+    let origin = git(root, ["remote", "get-url", "origin"]).map_err(SessionError::Git)?;
+    let url = fork_url(&origin, repo).ok_or_else(|| SessionError::NoForkUrl(origin.trim().to_string()))?;
+    let remote = fork_remote(branch);
+    let (b, h) = (branch.as_str(), head.as_str());
+    let config = [
+        (format!("remote.{remote}.url"), url),
+        (format!("remote.{remote}.fetch"), format!("+refs/heads/{h}:refs/remotes/{remote}/{h}")),
+        (format!("remote.{remote}.push"), format!("refs/heads/{b}:refs/heads/{h}")),
+        (format!("branch.{b}.remote"), remote.clone()),
+        (format!("branch.{b}.merge"), format!("refs/heads/{h}")),
+    ];
+    for (key, value) in config {
+        git(root, ["config".to_string(), "--replace-all".to_string(), key, value]).map_err(SessionError::Git)?;
+    }
+    git(root, ["fetch".to_string(), remote, format!("refs/heads/{h}:refs/heads/{b}")]).map_err(SessionError::Git)?;
+    Ok(())
+}
+
+/// Removes the fork remote of `branch`, if it has one.
+pub(super) fn remove_fork_remote(root: &Path, branch: &BranchName) -> Result<(), ProcError> {
+    let remote = fork_remote(branch);
+    match git(root, ["config", "--get", &format!("remote.{remote}.url")]) {
+        Ok(_) => git(root, ["remote", "remove", &remote]).map(|_| ()),
+        Err(e) if e.exit_code() == Some(1) => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// `origin` with its `owner/name` path swapped for `repo`. `None` when the
+/// URL has no `owner/name` path.
+fn fork_url(origin: &str, repo: &RepoSlug) -> Option<String> {
+    let url = origin.trim().trim_end_matches('/');
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    let name_at = url.rfind('/')?;
+    let owner_at = url[..name_at].rfind(['/', ':'])?;
+    let has_path = name_at > owner_at + 1 && name_at + 1 < url.len();
+    has_path.then(|| format!("{}{repo}.git", &url[..=owner_at]))
+}
+
 pub(super) fn add_worktree(
     root: &Path,
     dir: &Path,
@@ -176,15 +233,15 @@ pub(super) struct Tip {
 /// Full ref name -> tip. A ref that does not exist is not in the map.
 pub(super) type Tips = BTreeMap<String, Tip>;
 
-/// `refs/heads/<b>` and `refs/remotes/origin/<b>` of each branch, in one
-/// `for-each-ref`. Without branches it runs nothing: `for-each-ref` with no
+/// `refs/heads/<b>`, `refs/remotes/origin/<b>`, and the refs of the fork
+/// remote of each branch, in one `for-each-ref`. Without branches it runs nothing: `for-each-ref` with no
 /// pattern lists every ref.
 pub(super) fn tips(root: &Path, base: &OriginRef, branches: &[&BranchName]) -> Result<Tips, ProcError> {
     if branches.is_empty() {
         return Ok(Tips::new());
     }
     let format = format!("--format=%(refname) %(objectname) %(ahead-behind:refs/remotes/{base})");
-    let refs = branches.iter().flat_map(|b| [local_ref(b), origin_ref(b)]);
+    let refs = branches.iter().flat_map(|b| [local_ref(b), origin_ref(b), format!("refs/remotes/{}", fork_remote(b))]);
     git(root, ["for-each-ref".to_string(), format].into_iter().chain(refs)).map(|t| parse_tips(&t))
 }
 
@@ -194,6 +251,14 @@ pub(super) fn local_ref(branch: &BranchName) -> String {
 
 pub(super) fn origin_ref(branch: &BranchName) -> String {
     format!("refs/remotes/origin/{}", branch.as_str())
+}
+
+/// The ref that holds the remote copy of `branch`: its fork's branch, else
+/// `origin/<branch>`.
+pub(super) fn remote_copy<'t>(tips: &'t Tips, branch: &BranchName) -> Option<(&'t str, &'t Tip)> {
+    let fork = format!("refs/remotes/{}/", fork_remote(branch));
+    let in_fork = tips.range(fork.clone()..).next().filter(|(name, _)| name.starts_with(&fork));
+    in_fork.or_else(|| tips.get_key_value(&origin_ref(branch))).map(|(name, tip)| (name.as_str(), tip))
 }
 
 /// Lines like `refs/heads/fix/3-x <sha> 2 0`: ref, commit, ahead, behind.
@@ -328,6 +393,60 @@ mod tests {
         fake::install(|_| Ok(String::new()));
         fetch(Path::new("/"), &OriginRef::parse("origin/release/1.0").expect("ref")).expect("ok");
         assert_eq!(fake::calls(), ["git fetch origin release/1.0"]);
+    }
+
+    #[test]
+    fn a_fork_url_keeps_origin_host_and_protocol() {
+        let fork = RepoSlug::parse("maxbeizer/cli").expect("slug");
+        for (origin, want) in [
+            ("https://github.com/cli/cli.git\n", Some("https://github.com/maxbeizer/cli.git")),
+            ("https://github.com/cli/cli/", Some("https://github.com/maxbeizer/cli.git")),
+            ("git@github.com:cli/cli.git", Some("git@github.com:maxbeizer/cli.git")),
+            ("ssh://git@ghe.example.com/cli/cli", Some("ssh://git@ghe.example.com/maxbeizer/cli.git")),
+            ("cli", None),
+            ("git@github.com:cli", None),
+        ] {
+            assert_eq!(fork_url(origin, &fork).as_deref(), want, "{origin}");
+        }
+    }
+
+    #[test]
+    fn fetch_fork_adds_the_remote_tracks_the_head_and_fetches_it() {
+        fake::install(|call| {
+            Ok(if call.contains("get-url") { "git@github.com:cli/cli.git\n".to_string() } else { String::new() })
+        });
+        let fork = RepoSlug::parse("maxbeizer/cli").expect("slug");
+        fetch_fork(Path::new("/"), &fork, &branch("fix-scope"), &branch("fork/pr-7")).expect("ok");
+        assert_eq!(
+            fake::calls(),
+            [
+                "git remote get-url origin",
+                "git config --replace-all remote.dispatch-fork-pr-7.url git@github.com:maxbeizer/cli.git",
+                "git config --replace-all remote.dispatch-fork-pr-7.fetch \
+                 +refs/heads/fix-scope:refs/remotes/dispatch-fork-pr-7/fix-scope",
+                "git config --replace-all remote.dispatch-fork-pr-7.push refs/heads/fork/pr-7:refs/heads/fix-scope",
+                "git config --replace-all branch.fork/pr-7.remote dispatch-fork-pr-7",
+                "git config --replace-all branch.fork/pr-7.merge refs/heads/fix-scope",
+                "git fetch dispatch-fork-pr-7 refs/heads/fix-scope:refs/heads/fork/pr-7",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_remote_copy_of_a_fork_branch_is_in_its_fork() {
+        let tip = |commit: &str| Tip { commit: commit.to_string(), ahead_of_base: 0 };
+        let tips: Tips = [
+            ("refs/remotes/dispatch-fork-pr-7/fix-scope", tip("f")),
+            ("refs/remotes/dispatch-fork-pr-70/other", tip("x")),
+            ("refs/remotes/origin/fix/3-x", tip("o")),
+        ]
+        .into_iter()
+        .map(|(name, tip)| (name.to_string(), tip))
+        .collect();
+        let copy = |b: &str| remote_copy(&tips, &branch(b)).map(|(name, tip)| (name, tip.commit.as_str()));
+        assert_eq!(copy("fork/pr-7"), Some(("refs/remotes/dispatch-fork-pr-7/fix-scope", "f")));
+        assert_eq!(copy("fix/3-x"), Some(("refs/remotes/origin/fix/3-x", "o")));
+        assert_eq!(copy("fork/pr-8"), None);
     }
 
     #[test]
