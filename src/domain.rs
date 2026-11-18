@@ -85,6 +85,12 @@ impl BranchName {
         BranchName(format!("issue/{}", issue.0))
     }
 
+    /// `fork/pr-<n>`, valid by construction. The local branch of a session
+    /// on the head of a PR from a fork.
+    pub fn fork_pr(pr: PrNumber) -> BranchName {
+        BranchName(format!("fork/pr-{}", pr.0))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -124,43 +130,59 @@ pub enum BranchNameError {
     BadSequence(&'static str),
 }
 
-/// A PR's head or base branch as GitHub names it. A branch dispatch can not
-/// check out from origin stays `Unusable`: the PR still lists and can merge,
-/// but no session can start on it.
+/// A PR's head or base branch as GitHub names it. A head that is a bad
+/// branch name stays `Unusable`: the PR still lists and can merge, but no
+/// session can start on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PrBranch {
     Valid(BranchName),
-    Unusable { raw: String, why: Unusable },
+    /// The head of a PR from a fork. `origin/<branch>` is some other branch,
+    /// or none, so a session uses the local branch `local`.
+    Fork(ForkHead),
+    Unusable {
+        raw: String,
+        why: BranchNameError,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Unusable {
-    BadName(BranchNameError),
-    /// The head of a PR from a fork. `origin/<raw>` is some other branch,
-    /// or none.
-    InFork,
+pub struct ForkHead {
+    /// The branch in the fork.
+    pub branch: BranchName,
+    pub local: BranchName,
+    pub push: ForkPush,
 }
 
-impl std::fmt::Display for Unusable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Unusable::BadName(e) => write!(f, "{e:?}"),
-            Unusable::InFork => f.write_str("the branch is in a fork"),
-        }
-    }
+/// Whether a maintainer of the base repo can push to the fork's branch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ForkPush {
+    Allowed(RepoSlug),
+    /// The PR does not allow edits from maintainers, or the fork is gone.
+    Denied,
 }
 
 impl PrBranch {
     pub fn parse(raw: String) -> PrBranch {
         match BranchName::parse(&raw) {
             Ok(name) => PrBranch::Valid(name),
-            Err(e) => PrBranch::Unusable { raw, why: Unusable::BadName(e) },
+            Err(why) => PrBranch::Unusable { raw, why },
         }
     }
 
+    /// The head of PR `pr` from a fork. A bad branch name is never used,
+    /// in a fork too.
+    pub fn fork(pr: PrNumber, raw: String, push: ForkPush) -> PrBranch {
+        match BranchName::parse(&raw) {
+            Ok(branch) => PrBranch::Fork(ForkHead { branch, local: BranchName::fork_pr(pr), push }),
+            Err(why) => PrBranch::Unusable { raw, why },
+        }
+    }
+
+    /// The local branch a session on this head uses.
     pub fn branch(&self) -> Option<&BranchName> {
         match self {
             PrBranch::Valid(name) => Some(name),
+            PrBranch::Fork(fork) => Some(&fork.local),
             PrBranch::Unusable { .. } => None,
         }
     }
@@ -169,8 +191,33 @@ impl PrBranch {
     pub fn display(&self) -> &str {
         match self {
             PrBranch::Valid(name) => name.as_str(),
+            PrBranch::Fork(fork) => fork.branch.as_str(),
             PrBranch::Unusable { raw, .. } => raw,
         }
+    }
+}
+
+/// `owner/name` of a GitHub repo: owner of ASCII letters, digits, and `-`;
+/// name of ASCII letters, digits, `.`, `_`, and `-`, and not `.` or `..`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RepoSlug {
+    owner: String,
+    name: String,
+}
+
+impl RepoSlug {
+    pub fn parse(raw: &str) -> Option<RepoSlug> {
+        let (owner, name) = raw.split_once('/')?;
+        let owner_ok = !owner.is_empty() && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+        let name_ok =
+            !matches!(name, "" | "." | "..") && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c));
+        (owner_ok && name_ok).then(|| RepoSlug { owner: owner.to_string(), name: name.to_string() })
+    }
+}
+
+impl std::fmt::Display for RepoSlug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.owner, self.name)
     }
 }
 
@@ -355,6 +402,23 @@ mod tests {
         assert_eq!((good.branch().map(BranchName::as_str), good.display()), (Some("fix/3-x"), "fix/3-x"));
         let bad = PrBranch::parse("a b".to_string());
         assert_eq!((bad.branch(), bad.display()), (None, "a b"));
+    }
+
+    #[test]
+    fn a_fork_head_gets_a_local_branch_and_a_bad_fork_name_stays_unusable() {
+        let fork = PrBranch::fork(PrNumber(7), "main".to_string(), ForkPush::Denied);
+        assert_eq!((fork.branch().map(BranchName::as_str), fork.display()), (Some("fork/pr-7"), "main"));
+        let bad = PrBranch::fork(PrNumber(7), "a..b".to_string(), ForkPush::Denied);
+        assert_eq!((bad.branch(), bad.display()), (None, "a..b"));
+    }
+
+    #[test]
+    fn repo_slug_takes_only_github_owner_and_name_characters() {
+        let slug = RepoSlug::parse("max-beizer/cli.rs_2").expect("slug");
+        assert_eq!(slug.to_string(), "max-beizer/cli.rs_2");
+        for bad in ["cli", "/cli", "o/", "o/..", "o/a/b", "o_x/cli", "o/a b", "o/-x;rm"] {
+            assert_eq!(RepoSlug::parse(bad), None, "{bad}");
+        }
     }
 
     #[test]

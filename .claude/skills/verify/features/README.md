@@ -12,11 +12,11 @@ This directory is the maintained source for verifying what a dispatch user sees 
 
   ```sh
   gh pr list -R OWNER/NAME --state all --limit 100 \
-    --json number,state,isDraft,isCrossRepository,mergeStateStatus,statusCheckRollup,mergeable,closingIssuesReferences \
-    -q '.[] | select(.state == "OPEN") | "#\(.number) draft=\(.isDraft) fork=\(.isCrossRepository) \(.mergeStateStatus) closes=\([.closingIssuesReferences[].number])"'
+    --json number,state,isDraft,isCrossRepository,maintainerCanModify,mergeStateStatus,statusCheckRollup,mergeable,closingIssuesReferences \
+    -q '.[] | select(.state == "OPEN") | "#\(.number) draft=\(.isDraft) fork=\(.isCrossRepository) edits=\(.maintainerCanModify) \(.mergeStateStatus) closes=\([.closingIssuesReferences[].number])"'
   ```
 
-  A direct merge needs a `CLEAN` PR with `draft=false`. The merge new-session and handoff journeys need a PR with `draft=false`, `fork=false`, a state such as `UNSTABLE`, `DIRTY`, `BEHIND`, or `BLOCKED`, and a `closes=` issue.
+  A direct merge needs a `CLEAN` PR with `draft=false`. The merge new-session and handoff journeys need a PR with `draft=false`, `fork=false` (or `fork=true edits=true`), a state such as `UNSTABLE`, `DIRTY`, `BEHIND`, or `BLOCKED`, and a `closes=` issue.
 - Never drive a dispatch that this run did not start.
 
 ## Driving conventions

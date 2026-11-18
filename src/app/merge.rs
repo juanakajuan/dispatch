@@ -4,7 +4,10 @@ use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
 use super::msg::{Cmd, Job, SendKind, WriteJob};
 use super::sessions::goto_session;
 use super::toast;
-use crate::domain::{IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState, PullRequest, Unusable};
+use crate::domain::{
+    BranchName, BranchNameError, ForkHead, ForkPush, IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState,
+    PullRequest,
+};
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::merge::{Consent, MergeAsk, MergeError};
@@ -57,7 +60,8 @@ impl fmt::Display for NoTarget {
 pub(super) enum CannotFix {
     ClosesNoIssue(PrNumber),
     EachIssueBusy(PrNumber),
-    UnusableHead { pr: PrNumber, raw: String, why: Unusable },
+    UnusableHead { pr: PrNumber, raw: String, why: BranchNameError },
+    ForkDeniesEdits(PrNumber),
 }
 
 impl fmt::Display for CannotFix {
@@ -69,7 +73,11 @@ impl fmt::Display for CannotFix {
             CannotFix::EachIssueBusy(n) => {
                 write!(f, "Each issue that PR {n} closes already has a session on another branch.")
             }
-            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why}"),
+            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why:?}"),
+            CannotFix::ForkDeniesEdits(n) => write!(
+                f,
+                "PR {n} is from a fork that does not let maintainers push to it, so a session can not push a fix."
+            ),
         }
     }
 }
@@ -99,6 +107,7 @@ pub(super) fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, CannotFix>
     if let Some(s) = state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)) {
         return Ok(if s.state.is_live() { Fixer::Agent(s.issue) } else { Fixer::NewSession(s.issue) });
     }
+    head_start(pr)?;
     let n = pr.number;
     if pr.closes.is_empty() {
         return Err(CannotFix::ClosesNoIssue(n));
@@ -175,19 +184,27 @@ pub(super) fn fix_request(
     problem: MergeProblem,
     method: MergeMethod,
 ) -> Result<StartRequest, CannotFix> {
-    let branch = match &pr.head {
-        PrBranch::Valid(name) => name.clone(),
-        PrBranch::Unusable { raw, why } => {
-            return Err(CannotFix::UnusableHead { pr: pr.number, raw: raw.clone(), why: why.clone() });
-        }
+    let (branch, from) = head_start(pr)?;
+    let (n, base) = (pr.number, pr.base.display());
+    let prompt = match &from {
+        StartFrom::Fork { repo, .. } => plan::fork_fix_session_prompt(n, repo, base, problem, method),
+        StartFrom::Base | StartFrom::Origin => plan::fix_session_prompt(n, base, problem, method),
     };
-    Ok(StartRequest {
-        issue,
-        branch,
-        mode: Mode::Implement,
-        prompt: plan::fix_session_prompt(pr.number, pr.base.display(), problem, method),
-        from: StartFrom::Origin,
-    })
+    Ok(StartRequest { issue, branch, mode: Mode::Implement, prompt, from })
+}
+
+/// The branch a session on the PR's head uses, and where that branch starts.
+fn head_start(pr: &PullRequest) -> Result<(BranchName, StartFrom), CannotFix> {
+    match &pr.head {
+        PrBranch::Valid(name) => Ok((name.clone(), StartFrom::Origin)),
+        PrBranch::Fork(ForkHead { branch, local, push: ForkPush::Allowed(repo) }) => {
+            Ok((local.clone(), StartFrom::Fork { repo: repo.clone(), branch: branch.clone() }))
+        }
+        PrBranch::Fork(ForkHead { push: ForkPush::Denied, .. }) => Err(CannotFix::ForkDeniesEdits(pr.number)),
+        PrBranch::Unusable { raw, why } => {
+            Err(CannotFix::UnusableHead { pr: pr.number, raw: raw.clone(), why: why.clone() })
+        }
+    }
 }
 
 pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd> {

@@ -106,6 +106,7 @@ fn run_steps<M: Mux>(
                     warnings.push(StartWarning::FetchFailed { base: remote_ref, error });
                 }
             }
+            Step::FetchFork { repo, head, branch } => git::fetch_fork(&ws.repo_root, &repo, &head, &branch)?,
             Step::AddWorktree { dir, branch, from } => {
                 if let Err(e) = git::ensure_excluded(&ws.git_common_dir, WORKTREES_EXCLUDE) {
                     warnings.push(StartWarning::NotExcluded(e));
@@ -159,6 +160,7 @@ pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Res
     }
     git::remove_worktree(&ws.repo_root, row.worktree.as_path()).map_err(git_err)?;
     git::delete_branch(&ws.repo_root, &row.branch).map_err(git_err)?;
+    git::remove_fork_remote(&ws.repo_root, &row.branch).map_err(git_err)?;
     Ok(RemoveOutcome::Removed)
 }
 

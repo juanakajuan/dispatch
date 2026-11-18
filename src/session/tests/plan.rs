@@ -1,11 +1,11 @@
 use super::{br, markers, req, win, wp, wt};
 use crate::config::ClaudeCommand;
-use crate::domain::{IssueNumber, Mode, OriginRef, WorktreePath};
+use crate::domain::{IssueNumber, Mode, OriginRef, RepoSlug, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
 use crate::session::mux::{Liveness, Observed};
 use crate::session::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
-use crate::session::request::StartFrom;
+use crate::session::request::{StartFrom, StartRequest};
 use crate::session::{git, tmux};
 use std::path::PathBuf;
 
@@ -27,6 +27,7 @@ struct World {
     windows: Vec<Observed<tmux::WindowId>>,
     target_dir: TargetDir,
     branch: LocalBranch,
+    from: StartFrom,
 }
 
 impl World {
@@ -37,6 +38,7 @@ impl World {
             windows: Vec::new(),
             target_dir: TargetDir::Free,
             branch: LocalBranch::Missing,
+            from: StartFrom::Base,
         }
     }
 
@@ -51,7 +53,7 @@ impl World {
     }
 
     fn plan(&self) -> Result<StartPlan, StartConflict> {
-        plan_start(&self.obs(), &req(), &layout())
+        plan_start(&self.obs(), &StartRequest { from: self.from.clone(), ..req() }, &layout())
     }
 
     /// Applies one step to the observable world, the way the real
@@ -59,6 +61,7 @@ impl World {
     fn apply(&mut self, step: &Step) {
         match step {
             Step::Fetch(_) => {}
+            Step::FetchFork { .. } => self.branch = LocalBranch::Exists,
             Step::AddWorktree { dir, branch, .. } => {
                 self.worktrees
                     .push(git::Worktree { path: WorktreePath::planned(dir.clone()), branch: Some(branch.clone()) });
@@ -207,6 +210,24 @@ fn plan_for_a_pr_branch_starts_from_its_origin_branch() {
     assert_eq!(got, [add("fix/142-x", None), mark("fix/142-x"), open_step()], "an existing local branch is used as is");
 }
 
+fn from_fork() -> StartFrom {
+    StartFrom::Fork { repo: RepoSlug::parse("maxbeizer/cli").expect("slug"), branch: br("fix-scope") }
+}
+
+#[test]
+fn plan_for_a_fork_pr_fetches_the_fork_branch_into_a_new_local_branch() {
+    let mut w = World::empty();
+    w.from = from_fork();
+    let fetch_fork = Step::FetchFork {
+        repo: RepoSlug::parse("maxbeizer/cli").expect("slug"),
+        head: br("fix-scope"),
+        branch: br("fix/142-x"),
+    };
+    assert_eq!(steps(w.plan()), [fetch_fork, add("fix/142-x", None), mark("fix/142-x"), open_step()]);
+    w.branch = LocalBranch::Exists;
+    assert_eq!(steps(w.plan()), [add("fix/142-x", None), mark("fix/142-x"), open_step()], "no fetch over local work");
+}
+
 #[test]
 fn plan_uses_config_claude_command_hooks_and_plan_mode() {
     let mut l = layout();
@@ -235,7 +256,9 @@ fn plan_converges_after_a_crash_at_any_step() {
         let mut half = World::empty();
         half.worktrees.push(wt(TARGET, Some("fix/142-x")));
         half.target_dir = TargetDir::Taken;
-        vec![fresh, existing, marked, half]
+        let mut fork = World::empty();
+        fork.from = from_fork();
+        vec![fresh, existing, marked, half, fork]
     };
     for mut world in starts {
         let original = steps(world.plan());

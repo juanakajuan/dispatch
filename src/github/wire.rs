@@ -1,10 +1,9 @@
-//! `gh` JSON as serde reads it, and the parse into domain types. A PR from a
-//! fork gets an unusable head here, so no session starts on it.
+//! `gh` JSON as serde reads it, and the parse into domain types.
 
 use super::GhError;
 use crate::domain::{
-    Checks, CommitOid, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
-    PullRequest, Unusable,
+    Checks, CommitOid, ForkPush, GithubRef, Issue, IssueNumber, MergeMethod, Mergeability, PrBranch, PrNumber, PrState,
+    PullRequest, RepoSlug,
 };
 use serde::de::DeserializeOwned;
 
@@ -67,7 +66,9 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         state,
         author: login(w.author),
         head: match w.is_cross_repository {
-            HeadRepo::Fork => PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork },
+            HeadRepo::Fork => {
+                PrBranch::fork(number, w.head_ref_name, fork_push(w.maintainer_can_modify, w.head_repository))
+            }
             HeadRepo::Same => PrBranch::parse(w.head_ref_name),
         },
         head_oid: CommitOid::new(w.head_ref_oid),
@@ -78,6 +79,14 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         mergeability: mergeability(&w.mergeable, &w.merge_state_status),
         closes: w.closing_issues_references.iter().map(|r| IssueNumber(r.number)).collect(),
     })
+}
+
+/// A deleted fork has no `headRepository`, so no one can push to it.
+fn fork_push(edits: Edits, repo: Option<WireRepo>) -> ForkPush {
+    match (edits, repo.and_then(|r| RepoSlug::parse(&r.name_with_owner))) {
+        (Edits::Allowed, Some(slug)) => ForkPush::Allowed(slug),
+        (Edits::Allowed | Edits::Denied, _) => ForkPush::Denied,
+    }
 }
 
 /// `mergeable` is MERGEABLE, CONFLICTING, or UNKNOWN. `mergeStateStatus` is
@@ -166,6 +175,8 @@ pub(super) struct WirePr {
     updated_at: String,
     head_ref_name: String,
     is_cross_repository: HeadRepo,
+    head_repository: Option<WireRepo>,
+    maintainer_can_modify: Edits,
     head_ref_oid: String,
     base_ref_name: String,
     additions: u32,
@@ -199,6 +210,27 @@ enum HeadRepo {
 impl From<bool> for HeadRepo {
     fn from(is_cross_repository: bool) -> Self {
         if is_cross_repository { HeadRepo::Fork } else { HeadRepo::Same }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireRepo {
+    name_with_owner: String,
+}
+
+/// `maintainerCanModify`: whether the PR lets maintainers of the base repo
+/// push to its head.
+#[derive(serde::Deserialize, Clone, Copy)]
+#[serde(from = "bool")]
+enum Edits {
+    Allowed,
+    Denied,
+}
+
+impl From<bool> for Edits {
+    fn from(maintainer_can_modify: bool) -> Self {
+        if maintainer_can_modify { Edits::Allowed } else { Edits::Denied }
     }
 }
 
@@ -296,6 +328,7 @@ enum WireCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{BranchName, ForkHead};
     use crate::github::{ISSUE_FIELDS, PR_FIELDS};
 
     const PRS: &str = include_str!("../../fixtures/prs.json");
@@ -327,8 +360,12 @@ mod tests {
         assert_eq!((open.state, open.checks, open.mergeability), (PrState::Open, Checks::Pass, Mergeability::Clean));
         assert_eq!(open.closes, [IssueNumber(711)]);
         assert_eq!(open.head.display(), "feature/711-hardware-metadata");
-        assert_eq!(open.head.branch(), None, "a fork's branch is not on origin");
-        assert!(pr(14927).head.branch().is_some(), "a branch in the repo itself");
+        assert_eq!(
+            open.head.branch().map(BranchName::as_str),
+            Some("fork/pr-1028"),
+            "a fork's branch is not on origin"
+        );
+        assert!(matches!(pr(14927).head, PrBranch::Valid(_)), "a branch in the repo itself");
         assert_eq!(open.base.display(), "master");
         assert_eq!(pr(1002).updated_at.to_string(), "2026-10-12T08:33:48Z");
         assert_eq!(pr(1002).state, PrState::Merged);
@@ -352,7 +389,7 @@ mod tests {
     #[test]
     fn mixed_check_shapes_parse_by_typename() {
         let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"author":{"login":"a"},
-            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
+            "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRepository":null,"maintainerCanModify":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
                                  {"__typename":"Future","x":1}],
@@ -408,6 +445,17 @@ mod tests {
         assert_eq!(first.created_at.to_string(), "2026-09-08T10:31:38Z");
         assert_eq!(first.updated_at.to_string(), "2026-10-04T12:33:40Z");
         assert_eq!(first.author, "A4-Tacks");
+    }
+
+    #[test]
+    fn a_fork_pr_can_take_a_push_only_when_it_allows_maintainer_edits() {
+        let push = |n| match pr(n).head {
+            PrBranch::Fork(ForkHead { push, .. }) => push,
+            other => panic!("#{n} is from a fork: {other:?}"),
+        };
+        assert_eq!(push(14035), ForkPush::Allowed(RepoSlug::parse("maxbeizer/cli").expect("slug")));
+        assert_eq!(push(1002), ForkPush::Denied, "maintainerCanModify is false");
+        assert_eq!(push(1028), ForkPush::Denied, "the fork is gone");
     }
 
     /// The fixtures are real gh output for today's queries. A field dropped
