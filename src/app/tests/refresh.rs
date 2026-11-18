@@ -1,10 +1,11 @@
 use super::*;
 
 #[test]
-fn init_asks_for_all_three_reads() {
+fn init_asks_for_all_three_feeds_and_the_login() {
     let (state, cmds) = init(Instant::now(), Config::default(), Context::default());
-    let jobs: Vec<_> = cmds.iter().map(|c| matches!(c, Cmd::Job(_))).collect();
-    assert_eq!(jobs, [true, true, true]);
+    let jobs: Vec<_> =
+        cmds.iter().filter_map(|c| if let Cmd::Job(Job::Read(j)) = c { Some(*j) } else { None }).collect();
+    assert_eq!(jobs, [ReadJob::FetchIssues, ReadJob::FetchPrs, ReadJob::ObserveSessions, ReadJob::FetchViewer]);
     assert!(state.issues.poll.in_flight() && state.prs.poll.in_flight() && state.observe.in_flight());
 }
 

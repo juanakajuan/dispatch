@@ -25,6 +25,14 @@ fn login(author: Option<WireAuthor>) -> String {
     author.map_or_else(|| "ghost".to_string(), |a| a.login)
 }
 
+fn names(labels: Vec<WireLabel>) -> Vec<String> {
+    labels.into_iter().map(|l| l.name).collect()
+}
+
+fn logins(users: Vec<WireAuthor>) -> Vec<String> {
+    users.into_iter().map(|u| u.login).collect()
+}
+
 /// Pure. Tested against fixture text captured from real `gh` output.
 pub(super) fn issues_from_wire(wire: Vec<WireIssue>) -> Result<Vec<Issue>, GhError> {
     wire.into_iter()
@@ -35,7 +43,9 @@ pub(super) fn issues_from_wire(wire: Vec<WireIssue>) -> Result<Vec<Issue>, GhErr
                 created_at: timestamp(&w.created_at, "createdAt", item)?,
                 updated_at: timestamp(&w.updated_at, "updatedAt", item)?,
                 title: w.title,
-                labels: w.labels.into_iter().map(|l| l.name).collect(),
+                labels: names(w.labels),
+                assignees: logins(w.assignees),
+                milestone: w.milestone.map(|m| m.title),
                 author: login(w.author),
                 comment_count: w.comments.len(),
             })
@@ -65,6 +75,9 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         updated_at: timestamp(&w.updated_at, "updatedAt", item)?,
         title: w.title,
         state,
+        labels: names(w.labels),
+        assignees: logins(w.assignees),
+        milestone: w.milestone.map(|m| m.title),
         author: login(w.author),
         head: match w.is_cross_repository {
             HeadRepo::Fork => PrBranch::Unusable { raw: w.head_ref_name, why: Unusable::InFork },
@@ -136,6 +149,8 @@ pub(super) struct WireIssue {
     number: u32,
     title: String,
     labels: Vec<WireLabel>,
+    assignees: Vec<WireAuthor>,
+    milestone: Option<WireMilestone>,
     #[serde(default)]
     author: Option<WireAuthor>,
     created_at: String,
@@ -146,6 +161,11 @@ pub(super) struct WireIssue {
 #[derive(serde::Deserialize)]
 struct WireLabel {
     name: String,
+}
+
+#[derive(serde::Deserialize)]
+struct WireMilestone {
+    title: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +180,9 @@ pub(super) struct WirePr {
     title: String,
     state: String,
     is_draft: Readiness,
+    labels: Vec<WireLabel>,
+    assignees: Vec<WireAuthor>,
+    milestone: Option<WireMilestone>,
     #[serde(default)]
     author: Option<WireAuthor>,
     created_at: String,
@@ -351,7 +374,7 @@ mod tests {
 
     #[test]
     fn mixed_check_shapes_parse_by_typename() {
-        let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"author":{"login":"a"},
+        let json = r#"[{"number":1,"title":"t","state":"OPEN","isDraft":false,"labels":[],"assignees":[],"milestone":null,"author":{"login":"a"},
             "createdAt":"2026-01-02T03:04:05Z","updatedAt":"2026-01-03T03:04:05Z","headRefName":"h","isCrossRepository":false,"headRefOid":"abc","baseRefName":"b","additions":1,"deletions":2,
             "statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""},
                                  {"__typename":"StatusContext","state":"SUCCESS"},
@@ -408,6 +431,16 @@ mod tests {
         assert_eq!(first.created_at.to_string(), "2026-09-08T10:31:38Z");
         assert_eq!(first.updated_at.to_string(), "2026-10-04T12:33:40Z");
         assert_eq!(first.author, "A4-Tacks");
+        assert!(first.assignees.is_empty() && first.milestone.is_none());
+        let assigned = issues.iter().find(|i| i.number == IssueNumber(788)).expect("issue in fixture");
+        assert_eq!(assigned.assignees, ["sharkdp"]);
+        assert_eq!(assigned.milestone.as_deref(), Some("hyperfine 2.0"));
+    }
+
+    #[test]
+    fn real_prs_map_labels() {
+        assert_eq!(pr(14035).labels, ["needs-triage", "external"]);
+        assert!(pr(1028).labels.is_empty() && pr(1028).assignees.is_empty() && pr(1028).milestone.is_none());
     }
 
     /// The fixtures are real gh output for today's queries. A field dropped

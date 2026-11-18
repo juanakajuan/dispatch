@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 mod batch;
 mod dialog;
+mod filter;
 mod hover;
 mod keys;
 mod list;

@@ -56,7 +56,10 @@
    }
   ],
   "title": "feat(export): report CPU, memory and disk in JSON metadata",
-  "updatedAt": "2026-11-08T00:07:11Z"
+  "updatedAt": "2026-11-08T00:07:11Z",
+  "labels": [],
+  "assignees": [],
+  "milestone": null
  },
  {
   "additions": 1,
@@ -115,7 +118,10 @@
    }
   ],
   "title": "test(integration): ignore ambient forced color",
-  "updatedAt": "2026-10-12T08:33:48Z"
+  "updatedAt": "2026-10-12T08:33:48Z",
+  "labels": [],
+  "assignees": [],
+  "milestone": null
  },
  {
   "additions": 4835,
@@ -160,7 +166,10 @@
    }
   ],
   "title": "Add guided multi-account setup and evaluation",
-  "updatedAt": "2026-11-03T21:29:03Z"
+  "updatedAt": "2026-11-03T21:29:03Z",
+  "labels": [],
+  "assignees": [],
+  "milestone": null
  },
  {
   "additions": 13779,
@@ -198,6 +207,22 @@
   "state": "OPEN",
   "statusCheckRollup": [],
   "title": "Fix project scope errors during issue creation",
-  "updatedAt": "2026-10-23T15:08:26Z"
+  "updatedAt": "2026-10-23T15:08:26Z",
+  "labels": [
+   {
+    "id": "LA_kwDODKw3uc7QD3p7",
+    "name": "needs-triage",
+    "description": "needs to be reviewed",
+    "color": "D6393F"
+   },
+   {
+    "id": "LA_kwDODKw3uc7Vepyn",
+    "name": "external",
+    "description": "pull request originating outside of the CLI core team",
+    "color": "2700AF"
+   }
+  ],
+  "assignees": [],
+  "milestone": null
  }
 ]

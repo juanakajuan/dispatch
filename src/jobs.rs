@@ -47,6 +47,7 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, transcripts: &Mutex<transcript::Reader
             let result = github::fetch_prs(ws.repo_root());
             Msg::Prs { result, at: Instant::now() }
         }
+        ReadJob::FetchViewer => Msg::Viewer(github::viewer_login(ws.repo_root())),
         ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
             let mut reader = transcripts.lock().unwrap_or_else(PoisonError::into_inner);
             let transcripts = reader.read(sessions.values().map(|s| (s.issue, s.worktree.as_path())));
