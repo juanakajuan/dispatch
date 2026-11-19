@@ -89,7 +89,7 @@ Stable handles on the screen (line numbers are `capture-pane` lines, from 1):
 - The prompt line, between two rules, shows a hint such as `❯ / to filter issues · s to start a session`, or the kept filter `❯ /word`.
 - The key bar (last line) shows `<key> to <action>` pairs joined by ` · `, only for keys that work on the selected row, for example `? to keys · s to start session · m to merge · o to open on GitHub · q to quit`. `S sort: <order>` is at its right end. A dialog or menu has its own key bar.
 - The start dialog title is `Start session for #<n> <title>`. Its `Runs` block shows the exact commands.
-- Session states: `● running`, `▲ needs you`, `○ exited`, `✓` merged (a purple `✓` when the PR on the session's branch is merged; unicode icon set; the `icons` setting can change it to Nerd Font glyphs).
+- Session state glyphs: `●` running, `▲` needs you, `○` exited, and a purple `✓` when the PR on the session's branch is merged (unicode icon set; the `icons` setting can change them to Nerd Font glyphs). A row shows only the glyph. To wait for a state, match the header count (`● 1 working`, `○ 1 exited`) or the group heading (`Working 1`, `Exited 1`).
 
 Wait for text, never sleep for a fixed time. dispatch draws every 100 ms, and gh calls take 1 to 3 s.
 
