@@ -11,7 +11,7 @@ Over SSH (`SSH_CONNECTION` or `SSH_TTY` is set), `gh … --web` would open a bro
 - `open-session` opens the issue of the selected session.
 - `open-toast` shows `Opening issue #N on GitHub` or `Opening PR #P on GitHub`. A success adds no other toast. A failure shows `Open issue #N failed: <gh error>` or `Open PR #P failed: <gh error>`.
 - `open-empty` shows `Nothing to open.` and calls no gh when no row is selected, for example when a filter hides every row.
-- `copy-over-ssh` shows `Copying the PR #P URL`, then `Copied <url>`. The toast shows the URL because a terminal can ignore OSC 52 and give no error. A failure shows `Copy PR #P URL failed: <gh error>`.
+- `copy-over-ssh` shows `Copying the PR #P URL` (or `Copying the issue #N URL` on an issue or session row), then `Copied <url>`. The toast shows the URL because a terminal can ignore OSC 52 and give no error. A failure of gh or of the copy shows `Copy PR #P URL failed: <error>`, for example `gh pr view printed no URL`.
 
 ## How to get to it (user POV)
 
