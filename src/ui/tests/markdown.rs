@@ -173,7 +173,7 @@ fn md_state(title: &str, said: &str) -> State {
     let mut state = full_state();
     state.issues.items[0].title = title.to_string();
     let summary = Summary { kind: SummaryKind::Message, text: said.to_string() };
-    state.transcripts.insert(IssueNumber(3), Transcript { said: Some(summary) });
+    state.transcripts.insert(issue_key(3), Transcript { said: Some(summary) });
     state
 }
 

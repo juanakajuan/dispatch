@@ -189,7 +189,7 @@ fn the_summary_shows_all_of_what_claude_said_wrapped_and_scrolled() {
     let long = "word ".repeat(40);
     let text = format!("Fixed the retry queue.\n\n{long}\nEnd of the recap.");
     let said = Summary { kind: SummaryKind::Recap, text };
-    state.transcripts.insert(IssueNumber(3), Transcript { said: Some(said) });
+    state.transcripts.insert(issue_key(3), Transcript { said: Some(said) });
     send(&mut state, KeyCode::Char('3'));
     send(&mut state, KeyCode::Char('i'));
     let screen = draw_into(&mut state, 60, 40);
@@ -229,7 +229,7 @@ fn the_diff_overlay_reads_then_shows_colored_lines_and_untracked_files() {
     let long = format!("+{}", "x".repeat(200));
     let patch = format!("{patch}{long}\n");
     let diff = Diff { untracked: vec!["notes.txt".to_string()], patch };
-    state.focus = Focus::Diff { issue: IssueNumber(3), scroll: 0, body: DiffBody::Read(diff) };
+    state.focus = Focus::Diff { key: issue_key(3), scroll: 0, body: DiffBody::Read(diff) };
     let buf = frame(&mut state, 60, 20);
     let screen = text(&buf);
     assert!(!screen.contains("Reading the diff"), "{screen}");

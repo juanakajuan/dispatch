@@ -1,10 +1,10 @@
 use crate::config::{AgentCommand, Config, Harness};
-use crate::domain::{BranchName, Issue, IssueNumber, Mode, RepoSlug};
+use crate::domain::{BranchName, Issue, Mode, PullRequest, RepoSlug, SessionKey};
 
 /// What the start dialog hands over after validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StartRequest {
-    pub issue: IssueNumber,
+    pub key: SessionKey,
     pub branch: BranchName,
     pub mode: Mode,
     pub prompt: String,
@@ -93,5 +93,15 @@ pub(super) fn prompt_for(issue: &Issue) -> String {
     format!(
         "Implement GitHub issue #{n}: {}\n\nRead the issue and its comments with `gh issue view {n} --comments`.\nAdd or update tests. Open a ready-for-review PR (not a draft) that closes #{n} when the tests pass.",
         issue.title
+    )
+}
+
+/// The prompt for a session on an open PR. The branch name stays out of it,
+/// because a fork's author chose that name; the worktree is already on it.
+pub fn prompt_for_pr(pr: &PullRequest) -> String {
+    let n = pr.number.0;
+    format!(
+        "Work on GitHub PR #{n}: {}\n\nRead the PR and its comments with `gh pr view {n} --comments`, and its diff with `gh pr diff {n}`. This worktree is on the PR's branch. Review the change, then fix what needs fixing, add or update tests, and push to the PR's branch.",
+        pr.title
     )
 }

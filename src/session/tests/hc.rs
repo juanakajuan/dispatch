@@ -1,9 +1,9 @@
 use super::{GitWorld, launch, req, workspace};
-use crate::domain::IssueNumber;
 use crate::proc::fake;
 use crate::session::mux::Backend;
 use crate::session::{AttachPlan, AttachTo, SessionState, Workspace, hc};
 use crate::testutil::temp_dir;
+use crate::testutil::{issue_key, pr_key};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -150,7 +150,7 @@ fn hc_resume_of_a_dead_terminal_removes_it_then_runs_continue_in_the_same_space(
         ..HcSim::default()
     };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    ws.resume(issue_key(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")]);
 }
 
@@ -161,7 +161,7 @@ fn hc_resume_without_a_terminal_runs_continue_and_removes_nothing() {
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
     let sim = HcSim { git: GitWorld::started(), ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    ws.resume(issue_key(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), [hc_run(&base, "claude --continue")]);
 }
 
@@ -172,10 +172,10 @@ fn hc_a_restored_shell_is_an_exited_session_and_resume_keeps_it() {
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
     let sim = HcSim { git: GitWorld::started(), shells: vec!["t4"], ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+    let session = ws.observe().expect("observe").remove(&issue_key(142)).expect("session");
     assert_eq!(session.state, SessionState::Exited, "a shell is not Claude");
-    assert!(ws.attach_plan(IssueNumber(142), AttachTo::Claude).is_err(), "attach resumes instead");
-    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    assert!(ws.attach_plan(issue_key(142), AttachTo::Claude).is_err(), "attach resumes instead");
+    ws.resume(issue_key(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")], "the shell stays");
 }
 
@@ -191,7 +191,7 @@ fn hc_resume_of_a_live_terminal_does_nothing() {
         ..HcSim::default()
     };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    ws.resume(issue_key(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), Vec::<String>::new());
 }
 
@@ -208,13 +208,13 @@ fn hc_stop_kills_then_removes_and_keeps_the_worktree() {
     };
     let sim = Rc::new(RefCell::new(sim));
     install_hc_world(base.clone(), Rc::clone(&sim));
-    ws.stop(IssueNumber(142)).expect("stop");
+    ws.stop(issue_key(142)).expect("stop");
     assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4"]);
     assert!(!fake::calls().iter().any(|c| c.contains("worktree remove")));
     sim.borrow_mut().gone = true;
-    ws.stop(IssueNumber(142)).expect("a terminal that vanished is already stopped");
+    ws.stop(issue_key(142)).expect("a terminal that vanished is already stopped");
     assert_eq!(hc_calls()[2..], ["hc kill t4"], "not found ends the stop");
-    assert!(ws.stop(IssueNumber(999)).is_ok(), "no session is already stopped");
+    assert!(ws.stop(issue_key(999)).is_ok(), "no session is already stopped");
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn hc_stop_ends_every_terminal_in_the_space() {
         ..HcSim::default()
     };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.stop(IssueNumber(142)).expect("stop");
+    ws.stop(issue_key(142)).expect("stop");
     assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4", "hc kill t7", "hc rm t7"]);
 }
 
@@ -241,7 +241,7 @@ fn hc_stop_of_a_finished_terminal_still_removes_it() {
     let sim =
         HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.stop(IssueNumber(142)).expect("stop");
+    ws.stop(issue_key(142)).expect("stop");
     assert_eq!(hc_calls(), ["hc kill t4", "hc rm t4"]);
 }
 
@@ -253,9 +253,9 @@ fn hc_observe_prefers_a_live_terminal_over_a_newer_finished_one() {
     let terminals = vec![("t2", "live", Some("working")), ("t3", "finished", Some("done"))];
     let sim = HcSim { git: GitWorld::started(), terminals, gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+    let session = ws.observe().expect("observe").remove(&issue_key(142)).expect("session");
     assert_eq!(
-        ws.attach_plan(IssueNumber(142), AttachTo::Claude).expect("plan"),
+        ws.attach_plan(issue_key(142), AttachTo::Claude).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t2"].map(String::from).to_vec())
     );
     assert_eq!(session.state, SessionState::Running);
@@ -277,7 +277,7 @@ fn hc_send_goes_to_the_terminal() {
         ..HcSim::default()
     };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    ws.send(IssueNumber(142), "merge it").expect("send");
+    ws.send(issue_key(142), "merge it").expect("send");
     assert_eq!(hc_calls(), ["hc send --force t4 merge it"]);
 }
 
@@ -289,7 +289,7 @@ fn hc_send_refuses_a_finished_terminal() {
     let sim =
         HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], gone: false, ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    assert!(ws.send(IssueNumber(142), "hi").is_err());
+    assert!(ws.send(issue_key(142), "hi").is_err());
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
     };
     let sim = Rc::new(RefCell::new(sim));
     install_hc_world(base.clone(), Rc::clone(&sim));
-    let id = IssueNumber(142);
+    let id = issue_key(142);
     assert_eq!(
         ws.attach_plan(id, AttachTo::Claude).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
@@ -330,7 +330,7 @@ fn hc_shell_runs_no_argv_and_no_dispatch_labels_and_attaches_to_the_new_terminal
     std::fs::create_dir_all(&dir).expect("mkdir");
     let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], ..HcSim::default() };
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
-    let id = IssueNumber(142);
+    let id = issue_key(142);
     let plan = ws.attach_plan(id, AttachTo::Shell).expect("plan");
     assert_eq!(plan, AttachPlan::Suspend(["hc", "attach", "t9"].map(String::from).to_vec()));
     let space = hc::space_id(&dir);
@@ -347,4 +347,19 @@ fn hc_shell_runs_no_argv_and_no_dispatch_labels_and_attaches_to_the_new_terminal
         ws.attach_plan(id, AttachTo::Shell).expect("plan"),
         AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", space.as_str()].map(String::from).to_vec())
     );
+}
+
+#[test]
+fn a_pr_terminal_carries_the_pr_label_not_the_issue_label() {
+    use crate::session::mux::{Mux, Repo};
+    let base = temp_dir("hc-pr-label");
+    let dir = base.join("orbit/.claude/worktrees/pr-7");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    fake::install(|_| Ok(String::new()));
+    let root = base.join("orbit");
+    let repo = Repo { root: &root, git_common_dir: &root.join(".git") };
+    let dir = crate::domain::WorktreePath::from_observed(dir.to_str().expect("utf8")).expect("dir");
+    let _ = hc::Hc { place: hc::Place::Outside, path: None }.open(repo, &dir, pr_key(7), &["claude".to_string()]);
+    let run = fake::calls().pop().expect("a call");
+    assert!(run.contains("--label dispatch.pr=7") && !run.contains("dispatch.issue"), "{run}");
 }

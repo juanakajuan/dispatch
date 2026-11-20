@@ -143,7 +143,7 @@ pub(super) fn fetch_fork(
     for (key, value) in config {
         git(root, ["config".to_string(), "--replace-all".to_string(), key, value]).map_err(SessionError::Git)?;
     }
-    git(root, ["fetch".to_string(), remote, format!("refs/heads/{h}:refs/heads/{b}")]).map_err(SessionError::Git)?;
+    git(root, super::start_argv::fork_fetch_args(&remote, head, branch)).map_err(SessionError::Git)?;
     Ok(())
 }
 
@@ -177,6 +177,7 @@ pub(super) fn add_worktree(
     git(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
 }
 
+/// Whether `git status --porcelain` in the worktree lists any change,
 /// untracked files included.
 pub(super) fn has_uncommitted(worktree: &Path) -> Result<bool, ProcError> {
     git(worktree, ["status", "--porcelain"]).map(|t| !t.trim().is_empty())

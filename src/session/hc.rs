@@ -11,7 +11,7 @@
 use super::AttachPlan;
 use super::error::MuxError;
 use super::mux::{Liveness, Mux, Observed, Repo};
-use crate::domain::{IssueNumber, WorktreePath};
+use crate::domain::{SessionKey, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
 use std::path::Path;
@@ -67,8 +67,8 @@ impl Mux for Hc {
         list_windows(repo.root)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(repo.root, dir, issue, &self.launch_argv(argv)).map(|_| ())
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError> {
+        open_window(repo.root, dir, key, &self.launch_argv(argv)).map(|_| ())
     }
 
     /// hc cannot restart a finished terminal, so a new one takes its place.
@@ -78,7 +78,7 @@ impl Mux for Hc {
         repo: Repo<'_>,
         window: &Pane,
         dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError> {
         match hc(["rm", window.address.as_str()]) {
@@ -86,7 +86,7 @@ impl Mux for Hc {
             Err(e) if matches!(classify(&e), Some(Gone::NotFound | Gone::Live)) => {}
             Err(e) => return Err(e.into()),
         }
-        self.open(repo, dir, issue, argv)
+        self.open(repo, dir, key, argv)
     }
 
     /// The terminal has no argv, so hc runs the machine's own shell, and it
@@ -96,7 +96,7 @@ impl Mux for Hc {
         &self,
         _repo: Repo<'_>,
         dir: &WorktreePath,
-        _issue: IssueNumber,
+        _key: SessionKey,
         _window: Option<&Pane>,
     ) -> Result<AttachPlan, MuxError> {
         let space = space_id(dir.as_path());
@@ -285,11 +285,14 @@ fn run_terminal(dir: &WorktreePath, labels: &[String], argv: &[String]) -> Resul
     serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| unexpected_json(&e))
 }
 
-fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, MuxError> {
+fn open_window(repo_root: &Path, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<Address, MuxError> {
     let labels = [
         format!("herdr.space={}", space_id(dir.as_path())),
         format!("dispatch.repo={}", repo_root.display()),
-        format!("dispatch.issue={}", issue.0),
+        match key {
+            SessionKey::Issue(n) => format!("dispatch.issue={}", n.0),
+            SessionKey::Pr(n) => format!("dispatch.pr={}", n.0),
+        },
     ];
     run_terminal(dir, &labels, argv)
 }

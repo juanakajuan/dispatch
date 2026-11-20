@@ -16,7 +16,7 @@ This directory is the maintained source for verifying what a dispatch user sees 
     -q '.[] | select(.state == "OPEN") | "#\(.number) draft=\(.isDraft) fork=\(.isCrossRepository) edits=\(.maintainerCanModify) \(.mergeStateStatus) closes=\([.closingIssuesReferences[].number])"'
   ```
 
-  A direct merge needs a `CLEAN` PR with `draft=false`. The merge new-session and handoff journeys need a PR with `draft=false`, `fork=false` (or `fork=true edits=true`), a state such as `UNSTABLE`, `DIRTY`, `BEHIND`, or `BLOCKED`, and a `closes=` issue.
+  A direct merge needs a `CLEAN` PR with `draft=false`. The merge new-session and handoff journeys need a PR with `draft=false`, `fork=false` (or `fork=true edits=true`), and a state such as `UNSTABLE`, `DIRTY`, `BEHIND`, or `BLOCKED`. With a `closes=` issue the fix session is for that issue. With `closes=[]` it is a PR session (`PR #P`). A PR session from `s` needs only an open PR.
 - Never drive a dispatch that this run did not start.
 
 ## Driving conventions
@@ -46,9 +46,9 @@ Each feature file starts with an H1 title and one paragraph about the user-visib
 ## Features
 
 - [Issue and PR lists](./lists.md): tabs, fetch freshness, refresh, filter, sort, PR icons on issue rows.
-- [Start a session](./start-session.md): the start dialog, its fields, and the worktree, marker, and window it makes.
+- [Start a session](./start-session.md): the start dialog for an issue or a PR, its fields, and the worktree, marker, and window it makes.
 - [Start several sessions](./batch-start.md): Space marks issues, and one dialog starts a session for each.
 - [Sessions](./sessions.md): session states, attach, stop, resume, remove, and bulk clean.
-- [Merge](./merge.md): the two-press `m` flow, direct merge, and the handoff to an agent.
+- [Merge](./merge.md): the two-press `m` flow, direct merge, the fix session (for an issue or for the PR), and the handoff to an agent.
 - [Open on GitHub](./open-on-github.md): `o` on an issue, a PR, or a session.
 - [Settings and keys](./settings-and-keybinds.md): the `,` settings menu, the `?` keys menu, and the key bar.

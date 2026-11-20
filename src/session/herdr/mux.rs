@@ -2,7 +2,7 @@ use super::{
     PaneRef, Place, close_workspace, create_worktree, herdr, launch, list_windows, open_window, open_worktree,
     script_file, send_line, source,
 };
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, OriginRef, SessionKey, WorktreePath};
 use crate::session::AttachPlan;
 use crate::session::error::MuxError;
 use crate::session::mux::{Mux, Observed, Repo};
@@ -23,13 +23,13 @@ impl Mux for Place {
         dir: &Path,
         branch: &BranchName,
         from: Option<&OriginRef>,
-        issue: IssueNumber,
+        key: SessionKey,
     ) -> Result<(), MuxError> {
-        create_worktree(self, repo.root, dir, branch, from, issue)
+        create_worktree(self, repo.root, dir, branch, from, key)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(self, repo.root, dir, issue, argv, &script_file(repo.git_common_dir, issue))
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError> {
+        open_window(self, repo.root, dir, key, argv, &script_file(repo.git_common_dir, key))
     }
 
     fn relaunch(
@@ -37,10 +37,10 @@ impl Mux for Place {
         repo: Repo<'_>,
         window: &PaneRef,
         _dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError> {
-        launch(window, argv, &script_file(repo.git_common_dir, issue))
+        launch(window, argv, &script_file(repo.git_common_dir, key))
     }
 
     fn stop(&self, window: &PaneRef) -> Result<(), MuxError> {
@@ -57,11 +57,11 @@ impl Mux for Place {
         &self,
         repo: Repo<'_>,
         dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         window: Option<&PaneRef>,
     ) -> Result<AttachPlan, MuxError> {
         if let Some(window) = window {
-            let (cwd, label) = (dir.as_path().to_string_lossy(), format!("{issue} shell"));
+            let (cwd, label) = (dir.as_path().to_string_lossy(), format!("{key} shell"));
             herdr([
                 "tab",
                 "create",
@@ -75,7 +75,7 @@ impl Mux for Place {
             ])?;
             Ok(self.attach(window))
         } else {
-            let pane = open_worktree(&source(self, repo.root)?, dir, issue)?;
+            let pane = open_worktree(&source(self, repo.root)?, dir, key)?;
             Ok(self.attach(&pane))
         }
     }

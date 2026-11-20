@@ -168,7 +168,7 @@ fn tab_completes_the_fixed_words_of_each_tab() {
 fn the_pr_tab_completes_from_pr_data_and_the_session_tab_from_its_issues() {
     let (mut state, _) = app();
     state.prs.items[0].labels = vec!["ci".to_string()];
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Running));
     press(&mut state, key('2'));
     press(&mut state, key('/'));
     type_text(&mut state, "label:");

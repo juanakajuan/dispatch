@@ -43,8 +43,8 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.extend(filter_spans(state, Style::default()));
             spans.push(span("▏", palette::ACCENT));
         }
-        (Focus::Message { issue, text }, _) => {
-            spans.push(span(format!("message to {issue}: "), palette::LABEL));
+        (Focus::Message { key, text }, _) => {
+            spans.push(span(format!("message to {key}: "), palette::LABEL));
             spans.push(Span::raw(text.clone()));
             spans.push(span("▏", palette::ACCENT));
         }
@@ -55,7 +55,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
         (_, true) => spans.push(span(
             match state.tab {
                 Tab::Issues => "/ to filter issues · s to start a session",
-                Tab::Prs => "/ to filter pull requests",
+                Tab::Prs => "/ to filter pull requests · s to start a session",
                 Tab::Sessions => "/ to filter sessions · enter to attach",
             },
             palette::DIM,

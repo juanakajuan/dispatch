@@ -37,7 +37,7 @@ pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
 use crate::config::{Harness, Multiplexer};
-use crate::domain::{BranchName, CommitOid, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, CommitOid, OriginRef, SessionKey, WorktreePath};
 use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
@@ -45,11 +45,11 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 
-/// One issue being worked in one worktree. Derived, never stored.
+/// One issue or PR being worked in one worktree. Derived, never stored.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
-    pub issue: IssueNumber,
-    /// The branch marked for the issue. PRs and `D` go by this branch.
+    pub key: SessionKey,
+    /// The branch marked for the session. PRs and `D` go by this branch.
     pub branch: BranchName,
     pub checkout: Checkout,
     pub worktree: WorktreePath,
@@ -93,8 +93,8 @@ impl SessionState {
     }
 }
 
-/// At most one session per issue, by construction of the map.
-pub type Sessions = BTreeMap<IssueNumber, Session>;
+/// At most one session per key, by construction of the map.
+pub type Sessions = BTreeMap<SessionKey, Session>;
 
 /// A converged start. `warnings` hold non-fatal problems, such as a failed
 /// `git fetch` that fell back to the local base.
@@ -122,15 +122,15 @@ pub enum RemoveRefusal {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RemoveTarget {
-    pub issue: IssueNumber,
+    pub key: SessionKey,
     pub merged_head: Option<CommitOid>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CleanReport {
-    pub removed: Vec<IssueNumber>,
-    pub skipped: Vec<(IssueNumber, RemoveRefusal)>,
-    pub failed: Vec<(IssueNumber, SessionError)>,
+    pub removed: Vec<SessionKey>,
+    pub skipped: Vec<(SessionKey, RemoveRefusal)>,
+    pub failed: Vec<(SessionKey, SessionError)>,
 }
 
 /// What an attach shows: the session's Claude window, or a plain shell in
@@ -203,15 +203,15 @@ impl Workspace {
     /// Runs `claude --continue` for an exited session: in the dead window
     /// when it is still there, else in a new window as in `start`. No-op if
     /// the window is alive.
-    pub fn resume(&self, issue: IssueNumber, launch: &Launch) -> Result<(), SessionError> {
-        each_backend!(&self.mux, mux => ops::resume(self, mux, issue, launch))
+    pub fn resume(&self, key: SessionKey, launch: &Launch) -> Result<(), SessionError> {
+        each_backend!(&self.mux, mux => ops::resume(self, mux, key, launch))
     }
 
     /// Kills the window. The worktree and branch stay. A window that is
     /// already gone counts as success. Under hc this ends every terminal in
     /// the worktree's space, as herdr closes its whole workspace.
-    pub fn stop(&self, issue: IssueNumber) -> Result<(), SessionError> {
-        each_backend!(&self.mux, mux => ops::stop(self, mux, issue))
+    pub fn stop(&self, key: SessionKey) -> Result<(), SessionError> {
+        each_backend!(&self.mux, mux => ops::stop(self, mux, key))
     }
 
     pub fn remove(&self, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
@@ -228,24 +228,24 @@ impl Workspace {
 
     /// Types `text` into the session's Claude prompt and submits it. Refuses
     /// a dead window, where the keys would go nowhere.
-    pub fn send(&self, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
-        each_backend!(&self.mux, mux => ops::send(self, mux, issue, text))
+    pub fn send(&self, key: SessionKey, text: &str) -> Result<(), SessionError> {
+        each_backend!(&self.mux, mux => ops::send(self, mux, key, text))
     }
 
-    /// How to show the issue's live Claude window, or, for `AttachTo::Shell`,
+    /// How to show the session's live Claude window, or, for `AttachTo::Shell`,
     /// a new plain shell in its worktree (also for an exited session). Claude
     /// fails when the window died since the last poll; the next poll shows
     /// the session as exited.
-    pub fn attach_plan(&self, issue: IssueNumber, to: AttachTo) -> Result<AttachPlan, SessionError> {
-        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, issue, to))
+    pub fn attach_plan(&self, key: SessionKey, to: AttachTo) -> Result<AttachPlan, SessionError> {
+        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, key, to))
     }
 
     /// The worktree's changes against the base: commits ahead, uncommitted
     /// tracked changes, and untracked files. Read with git only.
-    pub fn diff(&self, issue: IssueNumber) -> Result<Diff, SessionError> {
-        let dir = worktree::worktree_dir_for(&self.repo_root, issue);
+    pub fn diff(&self, key: SessionKey) -> Result<Diff, SessionError> {
+        let dir = worktree::worktree_dir_for(&self.repo_root, key);
         if !dir.exists() {
-            return Err(SessionError::NoSession(issue));
+            return Err(SessionError::NoSession(key));
         }
         diff::read(&dir, &self.base)
     }

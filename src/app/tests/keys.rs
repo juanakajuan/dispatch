@@ -7,10 +7,10 @@ fn key_bar_follows_the_context() {
     assert!(names(&state).contains(&"s start session".to_string()));
     assert!(names(&state).contains(&"o open on GitHub".to_string()));
     assert!(!names(&state).iter().any(|k| k.starts_with("x ")));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     assert!(names(&state).contains(&"a attach".to_string()));
     assert!(names(&state).contains(&"x stop".to_string()));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     assert!(names(&state).contains(&"a resume".to_string()));
     press(&mut state, key('2'));
     assert!(names(&state).contains(&"enter go to issue".to_string()));
@@ -18,6 +18,7 @@ fn key_bar_follows_the_context() {
         names(&state),
         [
             "? keys",
+            "s start session",
             "enter go to issue",
             "a resume",
             "d show diff",

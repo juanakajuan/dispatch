@@ -6,7 +6,7 @@ use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, DiffBody, State};
 use crate::config::Config;
 use crate::config::settings::SETTINGS;
-use crate::domain::IssueNumber;
+use crate::domain::SessionKey;
 use crate::transcript::SummaryKind;
 use crossterm::event::KeyCode;
 use ratatui::Frame;
@@ -112,14 +112,14 @@ pub(super) fn draw_summary(
     frame: &mut Frame,
     screen: Rect,
     state: &State,
-    issue: IssueNumber,
+    key: SessionKey,
     scroll: u16,
     hits: &mut HitMap,
 ) -> u16 {
-    let said = state.transcripts.get(&issue).and_then(|t| t.said.as_ref());
+    let said = state.transcripts.get(&key).and_then(|t| t.said.as_ref());
     let title = match said.map(|s| s.kind) {
-        Some(SummaryKind::Recap) => format!(" {issue} recap "),
-        Some(SummaryKind::Message) | None => format!(" {issue} last message "),
+        Some(SummaryKind::Recap) => format!(" {key} recap "),
+        Some(SummaryKind::Message) | None => format!(" {key} last message "),
     };
     let width = screen.width.min(84);
     let text_width = usize::from(width.saturating_sub(6)).max(1);
@@ -139,7 +139,7 @@ pub(super) fn draw_summary(
 pub(super) fn draw_diff(
     frame: &mut Frame,
     screen: Rect,
-    issue: IssueNumber,
+    key: SessionKey,
     scroll: u16,
     body: &DiffBody,
     hits: &mut HitMap,
@@ -160,7 +160,7 @@ pub(super) fn draw_diff(
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
-    let inner = draw_box(frame, centered(screen, width, height), format!(" {issue} diff "), hits);
+    let inner = draw_box(frame, centered(screen, width, height), format!(" {key} diff "), hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
     max_scroll

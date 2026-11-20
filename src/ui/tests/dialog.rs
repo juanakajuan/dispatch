@@ -154,3 +154,21 @@ fn a_click_in_a_scrolled_branch_lands_on_the_character_under_the_pointer() {
     let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
     assert_eq!(d.branch.cursor(), (0, first + 4));
 }
+
+#[test]
+fn the_pr_dialog_names_the_pr_marks_the_branch_as_fixed_and_previews_that_origin() {
+    let mut state = full_state();
+    state.prs.items.push(crate::testutil::pr(11, "chore/dep", &[]));
+    send(&mut state, KeyCode::Char('2'));
+    state.tabs.prs.selected = Some(crate::domain::PrNumber(11));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = text(&render(&state, 120, 30));
+    for want in ["Start session for PR #11 PR 11", "chore/dep (PR branch)", "Work on GitHub PR #11: PR 11"] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+    assert_eq!(
+        previewed_commands(&screen).first().map(String::as_str),
+        Some("git worktree add .claude/worktrees/pr-11 -b chore/dep origin/chore/dep"),
+        "{screen}"
+    );
+}

@@ -29,10 +29,10 @@ done
 
 # `WorktreePath::from_observed` canonicalizes, which is what makes every
 # `WorktreePath` canonical. `proc::fake::fail` only builds a `ProcError` value.
-pure="src/app src/ui src/domain.rs src/merge/plan.rs src/session/join.rs src/session/plan.rs src/session/start_argv.rs src/session/worktree.rs"
+pure="src/app src/ui src/domain src/merge/plan.rs src/session/join.rs src/session/plan.rs src/session/start_argv.rs src/session/worktree.rs"
 # shellcheck disable=SC2086
 if grep -rnE 'crate::proc|std::process|std::fs|std::env|jobs::' $pure |
-  grep -vE '^src/domain\.rs:[0-9]+: +std::fs::canonicalize\(raw\)|crate::proc::fake::fail\(' ; then
+  grep -vE '^src/domain/mod\.rs:[0-9]+: +std::fs::canonicalize\(raw\)|crate::proc::fake::fail\(' ; then
   echo "A pure module runs a process, reads a file, or reads the environment. In app, return a Cmd (Cmd::Job with a ReadJob or WriteJob) and let jobs.rs run it; in ui, take the value as a parameter, or move the code to the boundary module that already does that IO (proc, jobs, session/git, config, github)."; fail=1
 fi
 

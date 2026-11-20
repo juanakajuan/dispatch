@@ -109,8 +109,8 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
         for cmd in std::mem::take(&mut cmds) {
             match cmd {
                 Cmd::Quit => return Ok(()),
-                Cmd::Attach { issue, to } => {
-                    pending.push(Msg::Attached { issue, to, result: attach(terminal, ws, issue, to) });
+                Cmd::Attach { key, to } => {
+                    pending.push(Msg::Attached { key, to, result: attach(terminal, ws, key, to) });
                 }
                 Cmd::Copy { target, text } => {
                     #[expect(
@@ -147,10 +147,10 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
 fn attach(
     terminal: &mut ratatui::DefaultTerminal,
     ws: &Workspace,
-    issue: domain::IssueNumber,
+    key: domain::SessionKey,
     to: AttachTo,
 ) -> Result<(), AttachError> {
-    match ws.attach_plan(issue, to).map_err(AttachError::Session)? {
+    match ws.attach_plan(key, to).map_err(AttachError::Session)? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(AttachError::Run)

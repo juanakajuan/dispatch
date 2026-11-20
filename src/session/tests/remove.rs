@@ -1,8 +1,9 @@
 use super::{GitWorld, workspace};
-use crate::domain::{CommitOid, IssueNumber};
+use crate::domain::CommitOid;
 use crate::proc::fake;
 use crate::session::error::SessionError;
 use crate::session::{CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget};
+use crate::testutil::issue_key;
 use crate::testutil::temp_dir;
 use std::cell::Cell;
 use std::fmt::Write;
@@ -24,11 +25,11 @@ enum Window {
 }
 
 fn target(issue: u32) -> RemoveTarget {
-    RemoveTarget { issue: IssueNumber(issue), merged_head: None }
+    RemoveTarget { key: issue_key(issue), merged_head: None }
 }
 
 fn merged_target(issue: u32, sha: &str) -> RemoveTarget {
-    RemoveTarget { issue: IssueNumber(issue), merged_head: Some(CommitOid::new(sha.to_string())) }
+    RemoveTarget { key: issue_key(issue), merged_head: Some(CommitOid::new(sha.to_string())) }
 }
 
 /// A started session for issue 142 with a window, `dirty` or clean, with
@@ -117,7 +118,7 @@ fn without_a_window_nothing_is_closed() {
 fn an_issue_without_a_session_is_an_error() {
     let (ws, _) = started("remove-none", Tree::Clean, 0, Window::Gone);
     let err = ws.remove(&target(999)).expect_err("no session");
-    assert_eq!(err, SessionError::NoSession(IssueNumber(999)));
+    assert_eq!(err, SessionError::NoSession(issue_key(999)));
     assert!(changed(&fake::calls()).is_empty());
 }
 
@@ -170,7 +171,7 @@ fn a_session_on_another_branch_is_listed_and_removes_its_marked_branch() {
         }
     });
     let listed = ws.observe().expect("observed");
-    assert_eq!(listed[&IssueNumber(142)].checked_out(), "try-other");
+    assert_eq!(listed[&issue_key(142)].checked_out(), "try-other");
     assert_eq!(ws.remove(&target(142)).expect("removed"), RemoveOutcome::Removed);
     assert!(fake::calls().iter().any(|c| c == "git branch -D fix/142-x"), "{:?}", fake::calls());
 }
@@ -329,12 +330,9 @@ fn clean_removes_clean_sessions_skips_refusals_and_errors_without_aborting_and_p
     assert_eq!(
         report,
         CleanReport {
-            removed: vec![IssueNumber(142)],
-            skipped: vec![
-                (IssueNumber(143), RemoveRefusal::Uncommitted),
-                (IssueNumber(144), RemoveRefusal::Unpushed(two)),
-            ],
-            failed: vec![(IssueNumber(999), SessionError::NoSession(IssueNumber(999)))],
+            removed: vec![issue_key(142)],
+            skipped: vec![(issue_key(143), RemoveRefusal::Uncommitted), (issue_key(144), RemoveRefusal::Unpushed(two)),],
+            failed: vec![(issue_key(999), SessionError::NoSession(issue_key(999)))],
         }
     );
     let calls = fake::calls();

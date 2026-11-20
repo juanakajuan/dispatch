@@ -1,6 +1,6 @@
 # Start a session
 
-A user selects an open issue and starts a Claude session for it. A dialog shows the branch, the mode, the prompt, and the commands that a start of a new branch runs. On Ctrl-S dispatch makes a git worktree on a new branch, marks the branch with the issue number, and opens a multiplexer window that runs `claude` in the worktree. The sandbox pins the multiplexer to tmux.
+A user selects an open issue and starts a Claude session for it. A dialog shows the branch, the mode, the prompt, and the commands that a start of a new branch runs. On Ctrl-S dispatch makes a git worktree on a new branch, marks the branch with the issue number, and opens a multiplexer window that runs `claude` in the worktree. A user can also select an open PR and start a session for the PR itself, on the PR's own branch. A session has a key: `#N` for an issue, `PR #P` for a PR. The sandbox pins the multiplexer to tmux.
 
 ## Sub-features
 
@@ -11,6 +11,10 @@ A user selects an open issue and starts a Claude session for it. A dialog shows 
 - `start-trust` shows the session as `needs you` while Claude asks to trust the worktree, and `running` after you answer. dispatch sets the waiting flag on the new window, and Claude's `SessionStart` hook clears it.
 - `start-plan-mode` adds `--permission-mode plan` to the argv when the mode is plan first.
 - `start-idempotent` goes to the existing session instead of making a second worktree. While a start is still running, `s` shows `#N is already starting`.
+- `start-pr` opens `Start session for PR #P <title>` from the Pull requests tab with `s`, for an open or draft PR. The branch line is `<head> (PR branch)`, and typing does not change it. The mode is `Implement directly`. The prompt starts `Work on GitHub PR #P: <title>` and tells Claude to read `gh pr view P --comments` and `gh pr diff P`, then fix and push to the PR's branch. `Runs` shows `$ git worktree add .claude/worktrees/pr-P -b <head> origin/<head>`. Ctrl-S makes the worktree `.claude/worktrees/pr-P`, the marker `branch.<head>.dispatch-pr P`, and a tagged tmux window named `PR #P`.
+- `start-pr-fork`: for a PR from a fork that lets maintainers push, the branch line is `fork/pr-P (PR branch)`, and `Runs` starts with `$ git fetch dispatch-fork-pr-P refs/heads/<head>:refs/heads/fork/pr-P`, then `$ git worktree add .claude/worktrees/pr-P fork/pr-P`. The start adds the fork remote as in [Merge](./merge.md) `merge-fork`. The prompt does not name the fork's branch.
+- `start-pr-refuse`: `s` on a merged or closed PR shows `PR #P is not open.` and opens no dialog. The key bar still shows `s to start session` on that row.
+- `start-pr-existing`: `s` on a PR whose head branch already has a session (an issue session or a PR session) goes to that session on the Sessions tab. No dialog opens.
 - `start-batch`: with issues marked by Space, `s` opens the batch dialog instead. See [Start several sessions](./batch-start.md).
 - `start-cancel` closes the dialog with Esc and changes nothing.
 - `start-mouse`: a click on a field label focuses it, a click on a mode option picks it, a click in a text input puts the cursor there, and the `[ Start ]` and `[ Cancel ]` buttons on the last dialog row act as Ctrl-S and Esc.
@@ -18,6 +22,7 @@ A user selects an open issue and starts a Claude session for it. A dialog shows 
 ## How to get to it (user POV)
 
 - On the Issues tab, select an issue and press `s`.
+- On the Pull requests tab, select an open or draft PR and press `s`.
 - On the Issues tab, select an issue and press Enter.
 - Double-click an issue row.
 
@@ -37,6 +42,10 @@ Preconditions:
 - **Claude argv.** Read `$RUN/evidence/claude-calls.log`. The first line has `cwd=$RUN/work/<repo>/.claude/worktrees/N` and an argv with `--settings` (the hooks JSON) and the prompt as one argument. With plan mode, the argv starts with `--permission-mode plan`. The next lines are `hook SessionStart`, `hook UserPromptSubmit`, and `hook Stop`.
 - **Trust question.** Before a start, run `touch $RUN/ask-trust`. Start an issue `#N` as above. Run `$V wait "$RUN" '▲ 1 needs you' 20`, then `$V keys "$RUN" a` to attach. The pane shows `FAKE-CLAUDE Accessing workspace: do you trust this folder?`. `claude-calls.log` has no `hook` line after the argv line yet. Type `yes` and Enter, detach with `C-b d`. The row glyph goes to `●` (header `● 1 working`), then `▲` after 2 s. Run `rm $RUN/ask-trust` after.
 - **Start again.** Press `1`, select `#N`, press `s`. The UI goes to the existing session and no dialog opens. `$V state` still shows one worktree for `N`.
+- **PR session.** Needs an open PR `#P` from the run's repo whose head branch has no session. Press `2`, select `#P`, press `s`. Run `$V wait "$RUN" 'Start session for PR #P '`. The dialog shows `› Branch` and `<head> (PR branch)`, `● Implement directly`, a prompt that starts `Work on GitHub PR #P: <title>`, and under `Runs` the lines `$ git worktree add .claude/worktrees/pr-P -b <head>` and `origin/<head>`, then `$ $RUN/bin/fake-claude --settings "<waiting` with the prompt. Run `$V shot "$RUN" pr-start-dialog`. Type `zzz` and press `BSpace` twice: the branch line does not change. Press Ctrl-S and run `$V wait "$RUN" '▲ 1 needs you' 20`. The Sessions tab shows the row `❯ ▲ PR #P <title>  PR #P open`. `$V state "$RUN" pr-after-start` shows the worktree `.claude/worktrees/pr-P` on `[<head>]` at the commit of `origin/<head>`, the marker `branch.<head>.dispatch-pr P`, and the window `PR #P` with the worktree tag. The argv in `claude-calls.log` ends with `$'Work on GitHub PR #P: <title>\n\nRead the PR and its comments with `gh pr view P --comments`, and its diff with `gh pr diff P`. This worktree is on the PR\'s branch. …'`.
+- **Fork PR session.** Needs an open fork PR with `fork=true edits=true` (README check command). Press `2`, select it, press `s`. The branch line is `fork/pr-P (PR branch)`. `Runs` has `$ git fetch dispatch-fork-pr-P` and wraps to `refs/heads/<head>:refs/heads/fork/pr-P`, then `$ git worktree add .claude/worktrees/pr-P fork/pr-P`. After Ctrl-S, `git -C "$RUN/work/<repo>" config --get-regexp 'dispatch|branch\.fork/'` shows the `remote.dispatch-fork-pr-P.*` lines, `branch.fork/pr-P.remote`, `branch.fork/pr-P.merge`, and `branch.fork/pr-P.dispatch-pr P`. The argv prompt does not contain `<head>`.
+- **PR not open.** Press `2`, select a merged or closed PR `#P`, press `s`. The message row shows `PR #P is not open.` and no dialog opens.
+- **PR branch has a session.** Start an issue session whose branch is the head branch of an open PR `#P` (the issue row shows `PR #P open`). Press `2`, select `#P`, press `s`. dispatch goes to the Sessions tab with that session selected, and no dialog opens.
 
 ## Gotchas
 
@@ -46,4 +55,5 @@ Preconditions:
 - An empty `pane=` or no `--settings` in `claude-calls.log` means dispatch did not use tmux. Hooks are added only on tmux.
 - The default mode is `Implement directly`. The Mode radio changes with Left, Right, or Space only when the `Mode` field has focus (`›` before `Mode`).
 - Enter starts the session when `Branch` or `Mode` has focus, as Ctrl-S and Ctrl-Enter do. So `s` then Enter starts at once. Use `C-s` in recipes.
+- A PR session window is named `PR #P`, with a space. Quote it: `$V window "$RUN" 'PR #P'`. For `send-keys`, use the target `'drive:=PR #P'`.
 - `down` deletes the worktrees, because they are under `$RUN/work`. The evidence files keep the paths.

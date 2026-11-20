@@ -3,7 +3,7 @@ use super::mux::{Liveness, Observed};
 use super::worktree::worktree_dir_for;
 use super::{Checkout, Session, SessionState, Sessions, git};
 use crate::config::Harness;
-use crate::domain::{BranchName, IssueNumber, WorktreePath};
+use crate::domain::{BranchName, SessionKey, WorktreePath};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -27,12 +27,12 @@ impl<W> Row<W> {
     }
 }
 
-/// At most one row per issue, by construction of the map.
-pub(super) type Joined<W> = BTreeMap<IssueNumber, Row<W>>;
+/// At most one row per key, by construction of the map.
+pub(super) type Joined<W> = BTreeMap<SessionKey, Row<W>>;
 
 pub(super) fn sessions<W>(joined: &Joined<W>) -> Sessions {
-    let session = |(&issue, row): (&IssueNumber, &Row<W>)| Session {
-        issue,
+    let session = |(&key, row): (&SessionKey, &Row<W>)| Session {
+        key,
         branch: row.branch.clone(),
         checkout: row.checkout.clone(),
         worktree: row.worktree.clone(),
@@ -43,15 +43,15 @@ pub(super) fn sessions<W>(joined: &Joined<W>) -> Sessions {
 }
 
 /// Joins the three observations. Pure; the main unit-test target.
-/// - A worktree whose branch has a valid `dispatch-issue` is that issue's
+/// - A worktree whose branch has a valid `dispatch-key` is that key's
 ///   session.
-/// - A worktree at `worktree_dir_for(root, N)` is issue N's session when some
+/// - A worktree at `worktree_dir_for(root, N)` is key N's session when some
 ///   branch is marked N, whatever it has checked out. So a session stays
 ///   when its worktree changes branch. A match by branch wins over a match
 ///   by path, and one worktree is at most one session.
 /// - A marker with an unparseable value is ignored (boundary rule).
 /// - A branch with no known `dispatch-harness` runs Claude.
-/// - Two worktrees marked with one issue: the first by path wins, so the map
+/// - Two worktrees marked with one key: the first by path wins, so the map
 ///   invariant holds even after manual meddling.
 /// - A tagged window whose worktree is gone is ignored; it is not a session.
 /// - Two windows tagged for one worktree: the first live one wins.
@@ -76,8 +76,8 @@ pub(super) fn join<W: Clone>(
     let mut unmatched = Vec::new();
     for w in by_path {
         match w.branch.as_ref().and_then(|b| Some((b, *markers.get(b)?))) {
-            Some((branch, issue)) => {
-                joined.entry(issue).or_insert_with(|| Row {
+            Some((branch, key)) => {
+                joined.entry(key).or_insert_with(|| Row {
                     branch: branch.clone(),
                     checkout: Checkout::SessionBranch,
                     worktree: w.path.clone(),
@@ -89,10 +89,10 @@ pub(super) fn join<W: Clone>(
         }
     }
     for w in unmatched {
-        let at_dir = markers.iter().find(|&(_, &issue)| worktree_dir_for(root, issue) == w.path.as_path());
-        let Some((branch, &issue)) = at_dir else { continue };
+        let at_dir = markers.iter().find(|&(_, &key)| worktree_dir_for(root, key) == w.path.as_path());
+        let Some((branch, &key)) = at_dir else { continue };
         let checkout = w.branch.clone().map_or(Checkout::Detached, Checkout::Other);
-        joined.entry(issue).or_insert_with(|| Row {
+        joined.entry(key).or_insert_with(|| Row {
             branch: branch.clone(),
             checkout,
             worktree: w.path.clone(),

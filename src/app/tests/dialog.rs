@@ -12,11 +12,11 @@ fn s_on_an_issue_opens_the_dialog_with_label_defaults() {
 #[test]
 fn s_on_an_issue_with_a_session_goes_to_it_and_opens_no_dialog() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('s'));
     assert!(cmds.is_empty());
     assert_eq!(state.tab, Tab::Sessions);
-    assert_eq!(selected_row(&state), Some(RowKey::Session(IssueNumber(3))));
+    assert_eq!(selected_row(&state), Some(RowKey::Session(issue_key(3))));
     assert!(matches!(state.focus, Focus::List));
 }
 
@@ -40,11 +40,11 @@ fn confirm_starts_once_and_a_second_s_emits_no_start() {
     let cmds = press(&mut state, ctrl('s'));
     let reqs = starts(&cmds);
     assert_eq!(reqs.len(), 1);
-    assert_eq!(reqs[0].issue, IssueNumber(3));
+    assert_eq!(reqs[0].key, issue_key(3));
     assert_eq!(reqs[0].branch.as_str(), "fix/3-retry-queue-drops-jobs");
     assert!(reqs[0].prompt.starts_with("Implement GitHub issue #3"));
     assert_eq!(state.tab, Tab::Sessions);
-    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(3))]);
+    assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(3))]);
 
     press(&mut state, key('1'));
     let again = press(&mut state, key('s'));
@@ -170,7 +170,7 @@ fn list_targets_do_nothing_while_the_dialog_is_open() {
     press(&mut state, click(1, 1, now));
     press(&mut state, click(1, 1, now + Duration::from_millis(50)));
     assert_eq!(state.tab, Tab::Issues);
-    assert_eq!(dialog(&state).issue, IssueNumber(3), "the same dialog is still open");
+    assert_eq!(dialog(&state).key, issue_key(3), "the same dialog is still open");
 }
 
 #[test]

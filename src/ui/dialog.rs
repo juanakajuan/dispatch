@@ -16,8 +16,14 @@ pub(super) fn preview(state: &State, dialog: &app::dialog::StartDialog) -> Vec<S
     let branch = dialog.branch.lines().join("");
     let prompt = dialog.prompt.lines().join("\n");
     let launch = Launch::from_config(&state.config);
-    let commands =
-        state.context.start_preview.commands(dialog.issue, branch.trim(), dialog.mode, prompt.trim(), &launch);
+    let commands = state.context.start_preview.commands(
+        dialog.key,
+        branch.trim(),
+        &dialog.from,
+        dialog.mode,
+        prompt.trim(),
+        &launch,
+    );
     commands
         .into_iter()
         .map(|argv| {
@@ -98,7 +104,7 @@ pub(super) fn draw_dialog(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(palette::DIM)
-        .title(span(format!(" Start session for {} {} ", d.issue, fit(&d.title, 50)), palette::HEADING))
+        .title(span(format!(" Start session for {} {} ", d.key, fit(&d.title, 50)), palette::HEADING))
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -122,7 +128,12 @@ pub(super) fn draw_dialog(
     let indent = |r: Rect| Rect { x: r.x.saturating_add(2), width: r.width.saturating_sub(2), ..r };
     let focus = |f: DialogField| Focus::of(d, f);
     frame.render_widget(Paragraph::new(field_label("Branch", focus(DialogField::Branch))), branch_l);
-    frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
+    if d.branch_editable() {
+        frame.render_widget(&styled_input(&d.branch, focus(DialogField::Branch)), indent(branch));
+    } else {
+        let name = d.branch.lines().join("");
+        frame.render_widget(Paragraph::new(span(format!("{name} (PR branch)"), palette::DIM)), indent(branch));
+    }
     hits.targets.push((branch_l, HitTarget::Field(DialogField::Branch)));
     hits.targets.push(text_target(&d.branch, DialogField::Branch, indent(branch)));
 

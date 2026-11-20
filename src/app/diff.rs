@@ -3,7 +3,7 @@ use super::list::current_session;
 use super::msg::{Cmd, Job, ReadJob};
 use super::toast;
 use super::{DiffBody, Focus, State};
-use crate::domain::IssueNumber;
+use crate::domain::SessionKey;
 use crate::session::Diff;
 use crate::session::error::SessionError;
 use crossterm::event::{KeyCode, KeyEvent};
@@ -11,12 +11,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 /// `d`: show the diff of the selected session's worktree. The read runs on a
 /// worker, and the overlay says so until it lands.
 pub(super) fn diff_key(state: &mut State) -> Vec<Cmd> {
-    let Some(issue) = current_session(state).map(|s| s.issue) else {
+    let Some(key) = current_session(state).map(|s| s.key) else {
         toast::info(state, "No session for this issue. Press s to start one.".to_string());
         return Vec::new();
     };
-    state.focus = Focus::Diff { issue, scroll: 0, body: DiffBody::Reading };
-    vec![Cmd::Job(Job::Read(ReadJob::Diff(issue)))]
+    state.focus = Focus::Diff { key, scroll: 0, body: DiffBody::Reading };
+    vec![Cmd::Job(Job::Read(ReadJob::Diff(key)))]
 }
 
 pub(super) fn diff_overlay_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
@@ -33,20 +33,20 @@ pub(super) fn diff_overlay_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 }
 
 /// A result for an overlay that closed, or that shows another issue, is dropped.
-pub(super) fn read_diff(state: &mut State, issue: IssueNumber, result: Result<Diff, SessionError>) -> Vec<Cmd> {
-    let waiting = matches!(state.focus, Focus::Diff { issue: i, body: DiffBody::Reading, .. } if i == issue);
+pub(super) fn read_diff(state: &mut State, key: SessionKey, result: Result<Diff, SessionError>) -> Vec<Cmd> {
+    let waiting = matches!(state.focus, Focus::Diff { key: i, body: DiffBody::Reading, .. } if i == key);
     if !waiting {
         return Vec::new();
     }
     match result {
         Ok(diff) if diff.is_empty() => {
             state.focus = Focus::List;
-            toast::info(state, format!("{issue} has no changes."));
+            toast::info(state, format!("{key} has no changes."));
         }
-        Ok(diff) => state.focus = Focus::Diff { issue, scroll: 0, body: DiffBody::Read(diff) },
+        Ok(diff) => state.focus = Focus::Diff { key, scroll: 0, body: DiffBody::Read(diff) },
         Err(e) => {
             state.focus = Focus::List;
-            toast::error(state, format!("Reading the diff of {issue} failed: {e}"));
+            toast::error(state, format!("Reading the diff of {key} failed: {e}"));
         }
     }
     Vec::new()
