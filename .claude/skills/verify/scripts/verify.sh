@@ -284,7 +284,7 @@ cmd_state() {
   out="$RUN/evidence/$n-$label.state.txt"
   {
     echo "## git worktree list"; git -C "$CLONE" worktree list
-    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-issue$' || echo "(none)"
+    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-(issue|pr)$' || echo "(none)"
     echo "## tmux windows (id name dead tag waiting)"
     t list-windows -a -F '#{window_id} #{window_name} dead=#{pane_dead} tag=#{@dispatch-worktree} waiting=#{@dispatch-waiting}'
   } >"$out"
@@ -356,7 +356,7 @@ case "$sub" in
   state) cmd_state "$@" ;;
   client) load "$1"; cmd_client ;;
   tmux) load "$1"; shift; t "$@" ;;
-  window) load "$1"; t capture-pane -p -t "$(t list-windows -a -F '#{window_id} #{window_name}' | awk -v n="$2" '$2==n {print $1; exit}')" ;;
+  window) load "$1"; t capture-pane -p -t "$(t list-windows -a -F '#{window_id} #{window_name}' | awk -v n="$2" '{id=$1; sub(/^[^ ]+ /, "")} $0==n {print id; exit}')" ;;
   restart) cmd_restart "$@" ;;
   down) cmd_down "$@" ;;
   list) cmd_list ;;

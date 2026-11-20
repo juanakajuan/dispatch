@@ -72,7 +72,7 @@ $V keys "$RUN" 1 j s           # tmux key names: j k s a x m o r S / q Enter Esc
 $V type "$RUN" 'text'          # literal text, for the filter or a dialog field
 $V wait "$RUN" 'needs you' 20  # wait until the screen matches a grep -E regex; on timeout prints the screen, exits 1
 $V screen "$RUN"               # print the screen now
-$V window "$RUN" '#26'         # print the pane of a session window (the fake claude output)
+$V window "$RUN" '#26'         # print the pane of a session window by name ('#26', 'PR #12')
 $V client "$RUN"               # attach a headless tmux client; needed before testing `a`
 $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
 $V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
@@ -111,7 +111,7 @@ Proof standards:
 
 - Drive the real user path: keys in the dispatch pane. Do not call `git worktree add` or `tmux new-window` yourself to make a state.
 - Capture the action and the result: a `shot` before the key and after it.
-- Check side effects with `state` and the logs, not only the screen. A start is proven by the worktree, the `branch.<b>.dispatch-issue` marker, the tagged window, and the argv in `claude-calls.log`.
+- Check side effects with `state` and the logs, not only the screen. A start is proven by the worktree, the `branch.<b>.dispatch-issue` (or `dispatch-pr`) marker, the tagged window, and the argv in `claude-calls.log`.
 - The fake claude is the one mock. It stands at the `claude_command` boundary that the config already exposes. The hooks it runs are dispatch's real hooks.
 - The gh guard does not fake answers. It passes reads to GitHub and refuses writes. A blocked merge proves the exact argv dispatch would run (in `gh-blocked.log`). It does not prove that GitHub accepts the merge.
 
