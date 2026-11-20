@@ -122,7 +122,7 @@ Put `-` before a term to keep the rows that it does not match, for example `-lab
 
 On the Sessions tab, terms read the issue of the session. On the Issues tab, `checks:` and `is:fork` read the lead PR of the issue.
 
-Press Tab to complete the word that you type. It completes a term key, or a value from the items that the tab already shows. Press Tab again for the next choice, and Shift-Tab for the previous one. Any other key ends the completion. Completion makes no call to GitHub.
+Press Tab to complete the word that you type. It completes a term key, or a value from the items that the tab already shows. Press Tab again for the next choice, and Shift-Tab for the previous one. When a key is the only choice, the next Tab completes its values. Any other key ends the completion. Completion makes no call to GitHub.
 
 ## Order
 

@@ -39,6 +39,18 @@ fn tab_completes_a_key_prefix_and_keeps_a_minus() {
 }
 
 #[test]
+fn tab_after_a_sole_key_goes_on_to_its_values() {
+    let mut state = state_with_data();
+    type_text(&mut state, "ha");
+    tab(&mut state);
+    assert_eq!(state.filter, "has:");
+    tab(&mut state);
+    assert_eq!(state.filter, "has:pr");
+    tab(&mut state);
+    assert_eq!(state.filter, "has:session");
+}
+
+#[test]
 fn tab_on_an_empty_word_cycles_all_keys_and_wraps_both_ways() {
     let mut state = state_with_data();
     tab(&mut state);
