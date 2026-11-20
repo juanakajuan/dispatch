@@ -176,6 +176,7 @@ fn s_on_a_merged_or_closed_pr_only_says_it_is_not_open() {
         let (mut state, _) = app();
         state.prs.items[1].state = closed;
         on_pr(&mut state, 11);
+        assert!(!shows(&state, "s", "start session"));
         assert!(press(&mut state, key('s')).is_empty());
         assert!(matches!(state.focus, Focus::List));
         assert_eq!(toast(&state), "PR #11 is not open.");
