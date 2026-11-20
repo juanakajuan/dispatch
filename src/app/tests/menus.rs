@@ -123,10 +123,10 @@ fn enter_toggles_remove_on_merge_and_saves_it() {
 }
 
 #[test]
-fn an_invalid_claude_command_shows_an_error_and_keeps_editing() {
+fn an_invalid_command_shows_an_error_and_keeps_editing() {
     for bad in ["claude 'oops", "''", ""] {
         let (mut state, _) = app();
-        open_menu_at(&mut state, Setting::ClaudeCommand);
+        open_menu_at(&mut state, Setting::Command);
         press(&mut state, code(KeyCode::Enter));
         clear_input(&mut state);
         type_text(&mut state, bad);
@@ -141,31 +141,31 @@ fn an_invalid_claude_command_shows_an_error_and_keeps_editing() {
 }
 
 #[test]
-fn the_claude_command_error_says_what_the_file_says() {
+fn the_command_error_says_what_the_file_says() {
     let (mut state, _) = app();
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " 'oops");
     press(&mut state, code(KeyCode::Enter));
     let error = menu(&state).edit.as_ref().and_then(|e| e.error.clone());
-    assert_eq!(error, Some("invalid config: claude_command has a quote that never closes".to_string()));
+    assert_eq!(error, Some("invalid config: command has a quote that never closes".to_string()));
 }
 
 #[test]
-fn a_claude_command_edit_applies_and_saves() {
+fn a_command_edit_applies_and_saves() {
     let (mut state, _) = app();
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " --model 'big one'");
     let cmds = press(&mut state, code(KeyCode::Enter));
-    assert_eq!(state.config.claude_command.argv(&[]), ["claude", "--model", "big one"]);
-    assert_eq!(saves(&cmds)[0].0, Setting::ClaudeCommand);
+    assert_eq!(state.config.agent_command(state.config.harness).argv(&[]), ["claude", "--model", "big one"]);
+    assert_eq!(saves(&cmds)[0].0, Setting::Command);
 }
 
 #[test]
-fn a_blank_claude_command_is_refused() {
+fn a_blank_command_is_refused() {
     let (mut state, _) = app();
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     clear_input(&mut state);
     assert!(press(&mut state, code(KeyCode::Enter)).is_empty());
@@ -176,12 +176,12 @@ fn a_blank_claude_command_is_refused() {
 #[test]
 fn esc_while_editing_cancels_the_edit_only() {
     let (mut state, _) = app();
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " --x");
     press(&mut state, code(KeyCode::Esc));
     assert!(menu(&state).edit.is_none(), "the menu stays open");
-    assert_eq!(menu(&state).at, Setting::ClaudeCommand);
+    assert_eq!(menu(&state).at, Setting::Command);
     assert_eq!(state.config, Config::default());
     press(&mut state, code(KeyCode::Esc));
     assert!(matches!(state.focus, Focus::List));
@@ -190,10 +190,10 @@ fn esc_while_editing_cancels_the_edit_only() {
 #[test]
 fn keys_in_the_editor_do_not_move_or_close_the_menu() {
     let (mut state, _) = app();
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, "j,q");
-    assert_eq!(menu(&state).at, Setting::ClaudeCommand);
+    assert_eq!(menu(&state).at, Setting::Command);
     assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.lines().join("")), Some("claudej,q".to_string()));
 }
 
@@ -215,7 +215,7 @@ fn a_resume_uses_the_changed_command() {
     let (mut state, _) = app();
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
     state.transcripts.insert(IssueNumber(3), crate::transcript::Transcript { said: None });
-    open_menu_at(&mut state, Setting::ClaudeCommand);
+    open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " --x");
     press(&mut state, code(KeyCode::Enter));
@@ -223,7 +223,7 @@ fn a_resume_uses_the_changed_command() {
     press(&mut state, key('3'));
     let cmds = press(&mut state, key('a'));
     let [Cmd::Job(Job::Write(WriteJob::Resume(_, launch)))] = cmds.as_slice() else { panic!("one resume") };
-    assert_eq!(launch.claude.words(), "claude --x");
+    assert_eq!(launch.command.words(), "claude --x");
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn menu_with_rows() -> (State, Instant) {
     state.hits.targets = vec![
         (Rect::new(0, 0, 20, 1), HitTarget::Setting(Setting::DetectWaiting)),
         (Rect::new(0, 1, 20, 1), HitTarget::Setting(Setting::Icons)),
-        (Rect::new(0, 3, 20, 1), HitTarget::Setting(Setting::ClaudeCommand)),
+        (Rect::new(0, 3, 20, 1), HitTarget::Setting(Setting::Command)),
         (Rect::new(30, 0, 5, 1), HitTarget::Key(Key::Code(KeyCode::Esc))),
     ];
     (state, now)
@@ -271,7 +271,7 @@ fn clicking_a_typed_setting_twice_opens_its_editor_and_rows_stop_reacting_there(
     let detect = state.config.detect_waiting;
     press(&mut state, click(1, 0, now + Duration::from_secs(2)));
     press(&mut state, click(1, 0, now + Duration::from_secs(3)));
-    assert_eq!((menu(&state).at, state.config.detect_waiting), (Setting::ClaudeCommand, detect));
+    assert_eq!((menu(&state).at, state.config.detect_waiting), (Setting::Command, detect));
 }
 
 #[test]

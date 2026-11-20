@@ -195,7 +195,7 @@ fn overlay_footers_are_clickable_and_the_base_screen_is_not() {
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Key(key));
     }
-    for _ in 0..3 {
+    for _ in 0..4 {
         send(&mut state, KeyCode::Char('j'));
     }
     send(&mut state, KeyCode::Enter);

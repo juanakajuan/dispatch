@@ -13,6 +13,7 @@ fn sessions(branches: &[(u32, &str)]) -> Sessions {
                 branch: br(b),
                 checkout: Checkout::SessionBranch,
                 worktree: wp(&format!("/w/{n}")),
+                harness: crate::config::Harness::Claude,
                 state: SessionState::Running,
             };
             (s.issue, s)

@@ -1,5 +1,5 @@
 use super::{br, markers, req, win, wp, wt};
-use crate::config::ClaudeCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{IssueNumber, Mode, OriginRef, RepoSlug, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
@@ -17,13 +17,14 @@ fn layout() -> Layout {
         repo_root: PathBuf::from("/a/orbit"),
         base: origin("origin/main"),
         hooks: None,
-        claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+        harness: Harness::Claude,
+        command: AgentCommand::default_for(Harness::Claude),
     }
 }
 
 struct World {
     worktrees: Vec<git::Worktree>,
-    markers: git::Markers,
+    markers: markers::Markers,
     windows: Vec<Observed<tmux::WindowId>>,
     target_dir: TargetDir,
     branch: LocalBranch,
@@ -34,7 +35,7 @@ impl World {
     fn empty() -> World {
         World {
             worktrees: vec![wt("/a/orbit", Some("main"))],
-            markers: git::Markers::new(),
+            markers: markers::Markers::new(),
             windows: Vec::new(),
             target_dir: TargetDir::Free,
             branch: LocalBranch::Missing,
@@ -44,7 +45,13 @@ impl World {
 
     fn obs(&self) -> StartObservation {
         StartObservation {
-            sessions: sessions(&join(&layout().repo_root, &self.worktrees, &self.markers, &self.windows)),
+            sessions: sessions(&join(
+                &layout().repo_root,
+                &self.worktrees,
+                &self.markers,
+                &markers::Harnesses::new(),
+                &self.windows,
+            )),
             worktrees: self.worktrees.clone(),
             markers: self.markers.clone(),
             target_dir: self.target_dir,
@@ -68,7 +75,7 @@ impl World {
                 self.branch = LocalBranch::Exists;
                 self.target_dir = TargetDir::Taken;
             }
-            Step::Mark { branch, issue } => {
+            Step::Mark { branch, issue, .. } => {
                 self.markers.insert(branch.clone(), *issue);
             }
             Step::OpenWindow { dir, .. } => {
@@ -100,7 +107,7 @@ fn origin(remote_ref: &str) -> OriginRef {
 }
 
 fn mark(branch: &str) -> Step {
-    Step::Mark { branch: br(branch), issue: IssueNumber(142) }
+    Step::Mark { branch: br(branch), issue: IssueNumber(142), harness: Harness::Claude }
 }
 
 fn steps(plan: Result<StartPlan, StartConflict>) -> Vec<Step> {
@@ -229,10 +236,10 @@ fn plan_for_a_fork_pr_fetches_the_fork_branch_into_a_new_local_branch() {
 }
 
 #[test]
-fn plan_uses_config_claude_command_hooks_and_plan_mode() {
+fn plan_uses_the_command_hooks_and_plan_mode() {
     let mut l = layout();
-    l.claude =
-        ClaudeCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
+    l.command =
+        AgentCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
     l.hooks = Some("{}");
     let mut r = req();
     r.mode = Mode::PlanFirst;
@@ -286,4 +293,18 @@ fn a_session_whose_worktree_changed_branch_reopens_and_marks_nothing() {
     w.markers = markers(&[("fix/142-x", 142)]);
     w.target_dir = TargetDir::Taken;
     assert_eq!(steps(w.plan()), [open_step()]);
+}
+
+#[test]
+fn plan_marks_and_launches_the_chosen_harness() {
+    let mut l = layout();
+    l.harness = Harness::Codex;
+    l.command = AgentCommand::default_for(Harness::Codex);
+    l.hooks = None;
+    let mut r = req();
+    r.mode = Mode::PlanFirst;
+    let got = steps(plan_start(&World::empty().obs(), &r, &l));
+    assert!(got.contains(&Step::Mark { branch: br("fix/142-x"), issue: IssueNumber(142), harness: Harness::Codex }));
+    let Some(Step::OpenWindow { argv, .. }) = got.last() else { panic!("no OpenWindow") };
+    assert_eq!(argv, &["codex", "--sandbox", "read-only", "p"]);
 }

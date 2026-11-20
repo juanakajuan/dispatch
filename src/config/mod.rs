@@ -11,105 +11,32 @@
 //! ```json
 //! {
 //!   "detect_waiting": true,
-//!   "claude_command": ["claude"],
+//!   "harness": "claude",
+//!   "command": ["claude"],
 //!   "icons": "unicode",
 //!   "multiplexer": "auto",
 //!   "remove_on_merge": false,
 //!   "saved_filters": ["assignee:@me", "label:bug"]
 //! }
 //! ```
+//!
+//! `harness` is `claude`, `codex`, `opencode`, or `antigravity`. `command` is
+//! the program and leading args for that harness, and its default is the
+//! harness's own program. The old `claude_command` key still loads, as
+//! `"harness": "claude"` with that command.
 
+mod command;
+pub mod harness;
 pub mod settings;
+
+pub use command::AgentCommand;
+pub use harness::Harness;
 
 use crate::glyphs::IconSet;
 use serde::Deserialize;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-/// The program and leading args that start Claude. Dispatch appends its own
-/// args after these. The program is separate from the args, so an empty
-/// command can not exist.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClaudeCommand {
-    pub program: String,
-    pub args: Vec<String>,
-}
-
-impl ClaudeCommand {
-    /// The full argv for a start or resume.
-    pub fn argv(&self, tail: &[String]) -> Vec<String> {
-        let mut argv = vec![self.program.clone()];
-        argv.extend(self.args.iter().cloned());
-        argv.extend(tail.iter().cloned());
-        argv
-    }
-
-    /// The config boundary: an argv with a program and no blank program name.
-    pub fn from_argv(argv: Vec<String>) -> Result<ClaudeCommand, ConfigError> {
-        let mut parts = argv.into_iter();
-        let program = parts.next().ok_or(ConfigError::BadCommand("is empty"))?;
-        if program.trim().is_empty() {
-            return Err(ConfigError::BadCommand("starts with an empty program name"));
-        }
-        Ok(ClaudeCommand { program, args: parts.collect() })
-    }
-
-    /// One line of words, for editing. Split on whitespace. `'...'` and
-    /// `"..."` group words, and there are no escapes.
-    pub fn from_words(text: &str) -> Result<ClaudeCommand, ConfigError> {
-        let mut argv = Vec::new();
-        let mut word = String::new();
-        let mut started = false;
-        let mut quote: Option<char> = None;
-        for c in text.chars() {
-            match (quote, c) {
-                (Some(q), c) if c == q => quote = None,
-                (Some(_), c) => word.push(c),
-                (None, '\'' | '"') => {
-                    quote = Some(c);
-                    started = true;
-                }
-                (None, c) if c.is_whitespace() => {
-                    if started {
-                        argv.push(std::mem::take(&mut word));
-                        started = false;
-                    }
-                }
-                (None, c) => {
-                    word.push(c);
-                    started = true;
-                }
-            }
-        }
-        if quote.is_some() {
-            return Err(ConfigError::BadCommand("has a quote that never closes"));
-        }
-        if started {
-            argv.push(word);
-        }
-        ClaudeCommand::from_argv(argv)
-    }
-
-    /// The inverse of `from_words`.
-    pub fn words(&self) -> String {
-        let quoted = |arg: &str| {
-            let plain = !arg.is_empty() && !arg.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"');
-            match (plain, arg.contains('\''), arg.contains('"')) {
-                (true, _, _) => arg.to_string(),
-                (false, false, _) => format!("'{arg}'"),
-                (false, true, false) => format!("\"{arg}\""),
-                // Both quotes: single-quote each run, and put each `'` between them in double quotes.
-                (false, true, true) => arg.split('\'').map(|run| format!("'{run}'")).collect::<Vec<_>>().join("\"'\""),
-            }
-        };
-        std::iter::once(self.program.as_str())
-            .chain(self.args.iter().map(String::as_str))
-            .map(quoted)
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -183,7 +110,10 @@ pub struct Config {
     /// on their tmux window (see `session::mux::WAITING_HOOKS`). Turn it off if the
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
-    pub claude_command: ClaudeCommand,
+    /// The agent that new sessions run.
+    pub harness: Harness,
+    /// Replaces the program of `harness`. `None` runs the harness's own program.
+    pub command: Option<AgentCommand>,
     /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
     pub icons: IconSet,
     pub multiplexer: Multiplexer,
@@ -198,7 +128,8 @@ impl Default for Config {
         Config {
             github_refresh: Duration::from_mins(1),
             detect_waiting: true,
-            claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+            harness: Harness::default(),
+            command: None,
             icons: IconSet::default(),
             multiplexer: Multiplexer::default(),
             remove_on_merge: RemoveOnMerge::default(),
@@ -207,13 +138,36 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// The command that starts `harness`. The `command` override belongs to
+    /// the configured harness only, so a session of another harness never
+    /// gets its args.
+    pub fn agent_command(&self, harness: Harness) -> AgentCommand {
+        match &self.command {
+            Some(command) if harness == self.harness => command.clone(),
+            _ => AgentCommand::default_for(harness),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
-    Read { path: PathBuf, source: std::io::Error },
-    Json { path: PathBuf, message: String },
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    Json {
+        path: PathBuf,
+        message: String,
+    },
     BadCommand(&'static str),
+    /// Two keys that cannot both be set.
+    Conflict(&'static str),
     BlankSavedFilter,
-    Write { path: PathBuf, source: std::io::Error },
+    Write {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     NoConfigDir,
 }
 
@@ -222,7 +176,8 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::Read { path, source } => write!(f, "cannot read {}: {source}", path.display()),
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
-            ConfigError::BadCommand(why) => write!(f, "invalid config: claude_command {why}"),
+            ConfigError::BadCommand(why) => write!(f, "invalid config: command {why}"),
+            ConfigError::Conflict(why) => write!(f, "invalid config: {why}"),
             ConfigError::BlankSavedFilter => f.write_str("invalid config: saved_filters has an empty filter"),
             ConfigError::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             ConfigError::NoConfigDir => f.write_str("cannot save: neither XDG_CONFIG_HOME nor HOME is set"),
@@ -234,6 +189,9 @@ impl fmt::Display for ConfigError {
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
     detect_waiting: Option<bool>,
+    harness: Option<Harness>,
+    command: Option<Vec<String>>,
+    /// The old spelling of `command` for Claude.
     claude_command: Option<Vec<String>>,
     /// Removed with the classic layout. Old files that still set it load,
     /// and the value is ignored.
@@ -253,9 +211,19 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     if let Some(detect) = file.detect_waiting {
         config.detect_waiting = detect;
     }
-    if let Some(argv) = file.claude_command {
-        config.claude_command = ClaudeCommand::from_argv(argv)?;
+    if let Some(harness) = file.harness {
+        config.harness = harness;
     }
+    let command = match (file.command, file.claude_command) {
+        (Some(_), Some(_)) => {
+            return Err(ConfigError::Conflict("claude_command and command are both set; keep command"));
+        }
+        (None, Some(_)) if config.harness != Harness::Claude => {
+            return Err(ConfigError::Conflict("claude_command only works with the claude harness; use command"));
+        }
+        (command, claude_command) => command.or(claude_command),
+    };
+    config.command = command.map(AgentCommand::from_argv).transpose()?;
     if let Some(icons) = file.icons {
         config.icons = icons;
     }
@@ -323,7 +291,8 @@ mod tests {
     fn default_covers_every_literal() {
         let c = Config::default();
         assert!(c.detect_waiting);
-        assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
+        assert_eq!(c.harness, Harness::Claude);
+        assert_eq!(c.agent_command(c.harness).argv(&["x".to_string()]), ["claude", "x"]);
         assert_eq!(c.icons, IconSet::Unicode);
         assert_eq!(c.remove_on_merge, RemoveOnMerge::Off);
     }
@@ -332,19 +301,20 @@ mod tests {
     fn empty_object_is_the_default() {
         let c = parse_str("{}").expect("valid");
         assert!(c.detect_waiting);
-        assert_eq!(c.claude_command, Config::default().claude_command);
+        assert_eq!(c, Config::default());
         assert_eq!(c.remove_on_merge, RemoveOnMerge::Off);
     }
 
     #[test]
     fn fields_replace_defaults() {
         let c = parse_str(
-            r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"icons":"nerdfont","remove_on_merge":true}"#,
+            r#"{"detect_waiting":false,"command":["sh","-c","echo","_"],"icons":"nerdfont","remove_on_merge":true}"#,
         )
         .expect("valid");
         assert!(!c.detect_waiting);
-        assert_eq!(c.claude_command.program, "sh");
-        assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
+        let command = c.command.expect("override");
+        assert_eq!(command.program, "sh");
+        assert_eq!(command.args, ["-c", "echo", "_"]);
         assert_eq!(c.icons, IconSet::NerdFont);
         assert_eq!(c.remove_on_merge, RemoveOnMerge::On);
     }
@@ -353,11 +323,44 @@ mod tests {
     fn invalid_files_are_errors() {
         assert!(matches!(parse_str("not json"), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"skills":[]}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"command":[]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"claude_command":[]}"#), Err(ConfigError::BadCommand(_))));
-        assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
+        assert!(matches!(parse_str(r#"{"command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"harness":"gemini"}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"icons":"emoji"}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"remove_on_merge":"yes"}"#), Err(ConfigError::Json { .. })));
+    }
+
+    #[test]
+    fn harness_and_command_load() {
+        let c = parse_str(r#"{"harness":"codex","command":["my-codex","--x"]}"#).expect("loads");
+        assert_eq!(c.harness, Harness::Codex);
+        assert_eq!(c.agent_command(Harness::Codex).argv(&[]), ["my-codex", "--x"]);
+        assert_eq!(parse_str(r#"{"harness":"opencode"}"#).expect("loads").command, None);
+    }
+
+    #[test]
+    fn the_command_override_belongs_to_the_configured_harness() {
+        let c = parse_str(r#"{"harness":"codex","command":["my-codex"]}"#).expect("loads");
+        assert_eq!(c.agent_command(Harness::Claude).argv(&[]), ["claude"]);
+        assert_eq!(c.agent_command(Harness::Antigravity).argv(&[]), ["agy"]);
+    }
+
+    #[test]
+    fn the_old_claude_command_key_still_loads_as_claude() {
+        let c = parse_str(r#"{"claude_command":["sh","-c","echo","_"]}"#).expect("loads");
+        assert_eq!(c.harness, Harness::Claude);
+        assert_eq!(c.agent_command(Harness::Claude).argv(&[]), ["sh", "-c", "echo", "_"]);
+        let c = parse_str(r#"{"harness":"claude","claude_command":["my-claude"]}"#).expect("loads");
+        assert_eq!(c.agent_command(Harness::Claude).program, "my-claude");
+    }
+
+    #[test]
+    fn claude_command_conflicts_are_errors() {
+        for text in [r#"{"claude_command":["a"],"command":["b"]}"#, r#"{"harness":"codex","claude_command":["a"]}"#] {
+            assert!(matches!(parse_str(text), Err(ConfigError::Conflict(_))), "{text}");
+        }
     }
 
     #[test]
@@ -388,29 +391,6 @@ mod tests {
         assert_eq!(path(Some("/x"), Some("/h")), Some(PathBuf::from("/x/dispatch/config.json")));
         assert_eq!(path(Some(""), Some("/h")), Some(PathBuf::from("/h/.config/dispatch/config.json")));
         assert_eq!(path(None, None), None);
-    }
-
-    #[test]
-    fn words_and_from_words_round_trip() {
-        for argv in [
-            vec!["claude"],
-            vec!["sh", "-c", "echo hi"],
-            vec!["a", "", "b c"],
-            vec!["x", "it's", "say \"hi\"", "both ' and \" here"],
-        ] {
-            let command = ClaudeCommand::from_argv(argv.iter().map(ToString::to_string).collect()).expect("valid");
-            let again = ClaudeCommand::from_words(&command.words()).expect("valid");
-            assert_eq!(again, command, "{}", command.words());
-        }
-        assert_eq!(ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid").args, ["-c", "echo hi"]);
-        assert_eq!(ClaudeCommand::from_words("a\"b c\"d").expect("valid").program, "ab cd");
-    }
-
-    #[test]
-    fn words_reject_an_empty_or_blank_program_or_an_open_quote() {
-        for text in ["", "   ", "''", "' ' x", "claude 'oops"] {
-            assert!(matches!(ClaudeCommand::from_words(text), Err(ConfigError::BadCommand(_))), "{text:?}");
-        }
     }
 
     #[test]

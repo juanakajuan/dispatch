@@ -1,4 +1,4 @@
-use crate::config::{ClaudeCommand, Config};
+use crate::config::{AgentCommand, Config, Harness};
 use crate::domain::{BranchName, Issue, IssueNumber, Mode, RepoSlug};
 
 /// What the start dialog hands over after validation.
@@ -29,12 +29,19 @@ pub enum StartFrom {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launch {
     pub detect_waiting: bool,
-    pub claude: ClaudeCommand,
+    pub harness: Harness,
+    pub command: AgentCommand,
 }
 
 impl Launch {
     pub fn from_config(config: &Config) -> Launch {
-        Launch { detect_waiting: config.detect_waiting, claude: config.claude_command.clone() }
+        Launch::for_session(config, config.harness)
+    }
+
+    /// For a session that already runs `harness`, which may not be the
+    /// configured one.
+    pub fn for_session(config: &Config, harness: Harness) -> Launch {
+        Launch { detect_waiting: config.detect_waiting, harness, command: config.agent_command(harness) }
     }
 }
 

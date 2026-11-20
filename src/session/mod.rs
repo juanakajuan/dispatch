@@ -1,10 +1,10 @@
 //! Session truth lives in git and the multiplexer, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
-//! - `git config branch.<b>.dispatch-issue`: which
-//!   branches dispatch made, for which issue
+//! - `git config branch.<b>.dispatch-issue` and `dispatch-harness`: which
+//!   branches dispatch made, for which issue, and which agent runs on them
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
-//!   window runs Claude in which worktree
+//!   window runs the agent in which worktree
 //!
 //! `observe()` reads all three and joins them on the worktree path. A
 //! worktree at `.claude/worktrees/<issue>` stays that issue's session when it
@@ -22,6 +22,7 @@ mod git;
 mod hc;
 mod herdr;
 mod join;
+mod markers;
 mod mux;
 mod ops;
 mod plan;
@@ -35,7 +36,7 @@ pub use diff::Diff;
 pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
-use crate::config::Multiplexer;
+use crate::config::{Harness, Multiplexer};
 use crate::domain::{BranchName, CommitOid, IssueNumber, OriginRef, WorktreePath};
 use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
@@ -52,6 +53,8 @@ pub struct Session {
     pub branch: BranchName,
     pub checkout: Checkout,
     pub worktree: WorktreePath,
+    /// From `dispatch-harness`. Claude when the branch has none.
+    pub harness: Harness,
     pub state: SessionState,
 }
 

@@ -6,7 +6,7 @@ use super::herdr;
 use super::mux::Backend;
 use super::request::Launch;
 use super::worktree::WORKTREES_DIR;
-use crate::config::ClaudeCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{IssueNumber, Mode, OriginRef};
 
 /// The start dialog's "Runs" preview.
@@ -41,7 +41,7 @@ impl StartPreview {
         };
         let create = std::iter::once(program.to_string()).chain(args).collect();
         let hooks = self.mux.hooks(launch).map(|_| "<waiting hooks>");
-        vec![create, claude_argv(&launch.claude, hooks, mode, prompt)]
+        vec![create, agent_argv(&launch.command, launch.harness, hooks, mode, prompt)]
     }
 
     #[cfg(test)]
@@ -62,8 +62,79 @@ impl Default for StartPreview {
     }
 }
 
-pub(super) fn claude_argv(claude: &ClaudeCommand, hooks: Option<&str>, mode: Mode, prompt: &str) -> Vec<String> {
-    claude.argv(&claude_args(mode, prompt, hooks))
+/// The line that stands in for a plan flag when the harness has none.
+const PLAN_FIRST_LINE: &str = "Plan first. Do not change any files until I approve the plan.";
+
+/// The argv that starts `harness` on a prompt. Built as argv, never as a
+/// shell string, so the prompt needs no quoting (tmux execs multi-arg
+/// commands directly, without `sh -c`). Only a harness that takes the
+/// waiting hooks gets them.
+pub(super) fn agent_argv(
+    command: &AgentCommand,
+    harness: Harness,
+    hooks: Option<&str>,
+    mode: Mode,
+    prompt: &str,
+) -> Vec<String> {
+    let plan = mode == Mode::PlanFirst;
+    let tail: Vec<String> = match harness {
+        Harness::Claude => {
+            let mut tail = Vec::new();
+            if plan {
+                tail.extend(["--permission-mode", "plan"].map(String::from));
+            }
+            if let Some(json) = hooks {
+                tail.extend(["--settings".to_string(), json.to_string()]);
+            }
+            tail.push(prompt.to_string());
+            tail
+        }
+        Harness::Codex => {
+            let mut tail = Vec::new();
+            if plan {
+                tail.extend(["--sandbox", "read-only"].map(String::from));
+            }
+            tail.push(prompt.to_string());
+            tail
+        }
+        Harness::OpenCode => {
+            let prompt = if plan { format!("{PLAN_FIRST_LINE}\n\n{prompt}") } else { prompt.to_string() };
+            vec!["--prompt".to_string(), prompt]
+        }
+        Harness::Antigravity => {
+            let mut tail = Vec::new();
+            if plan {
+                tail.extend(["--mode", "plan"].map(String::from));
+            }
+            tail.extend(["--prompt-interactive".to_string(), prompt.to_string()]);
+            tail
+        }
+    };
+    command.argv(&tail)
+}
+
+impl Launch {
+    /// What a resume runs, as one line for a toast. The waiting hooks JSON is
+    /// left out.
+    pub fn resume_words(&self) -> String {
+        resume_argv(&self.command, self.harness, None).join(" ")
+    }
+}
+
+/// The argv that continues the last conversation in the worktree.
+pub(super) fn resume_argv(command: &AgentCommand, harness: Harness, hooks: Option<&str>) -> Vec<String> {
+    let tail: Vec<String> = match harness {
+        Harness::Claude => {
+            let mut tail = vec!["--continue".to_string()];
+            if let Some(json) = hooks {
+                tail.extend(["--settings".to_string(), json.to_string()]);
+            }
+            tail
+        }
+        Harness::Codex => ["resume", "--last"].map(String::from).to_vec(),
+        Harness::OpenCode | Harness::Antigravity => vec!["--continue".to_string()],
+    };
+    command.argv(&tail)
 }
 
 /// `git` argv after the program name.
@@ -90,29 +161,4 @@ pub(super) fn herdr_worktree_create_args(
     let label = herdr::label(issue);
     args.extend(["--path", dir, "--label", label.as_str(), "--no-focus"].map(String::from));
     args
-}
-
-/// `claude` argv after the program name. Built as argv, never as a shell
-/// string, so the prompt needs no quoting (tmux execs multi-arg commands
-/// directly, without `sh -c`).
-pub(super) fn claude_args(mode: Mode, prompt: &str, hooks_json: Option<&str>) -> Vec<String> {
-    let mut args = Vec::new();
-    if mode == Mode::PlanFirst {
-        args.extend(["--permission-mode".to_string(), "plan".to_string()]);
-    }
-    args.extend(settings_args(hooks_json));
-    args.push(prompt.to_string());
-    args
-}
-
-/// `claude` argv after the program name, to continue the last conversation
-/// in the worktree.
-pub(super) fn continue_args(hooks_json: Option<&str>) -> Vec<String> {
-    let mut args = vec!["--continue".to_string()];
-    args.extend(settings_args(hooks_json));
-    args
-}
-
-fn settings_args(hooks_json: Option<&str>) -> Vec<String> {
-    hooks_json.map_or_else(Vec::new, |json| vec!["--settings".to_string(), json.to_string()])
 }

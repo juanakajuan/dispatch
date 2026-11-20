@@ -27,6 +27,18 @@ fn dialog_shows_fields_and_the_exact_commands() {
 }
 
 #[test]
+fn dialog_previews_the_chosen_harness_with_no_hooks() {
+    let mut state = full_state();
+    state.config.harness = crate::config::Harness::Codex;
+    open_dialog(&mut state);
+    let screen = text(&render(&state, 120, 30));
+    let commands = previewed_commands(&screen);
+    let run = commands.last().expect("a run line");
+    assert!(run.starts_with("codex \"Implement GitHub issue #2"), "{run}\n{screen}");
+    assert!(!screen.contains("waiting hooks"), "{screen}");
+}
+
+#[test]
 fn dialog_previews_the_herdr_command_on_herdr() {
     let mut state = full_state();
     state.context.start_preview = StartPreview::herdr_inside("w-orbit");
