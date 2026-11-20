@@ -19,7 +19,7 @@ use batch::draw_batch;
 use dialog::draw_dialog;
 use footer::{draw_footer, draw_prompt, message};
 use header::draw_header;
-use menus::{draw_keybinds, draw_settings, draw_summary};
+use menus::{draw_diff, draw_keybinds, draw_settings, draw_summary};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::Color;
@@ -95,6 +95,9 @@ fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
         Focus::Keybinds { scroll } => hits.max_scroll = draw_keybinds(frame, frame.area(), *scroll, hits),
         Focus::Summary { issue, scroll } => {
             hits.max_scroll = draw_summary(frame, frame.area(), state, *issue, *scroll, hits);
+        }
+        Focus::Diff { issue, scroll, body } => {
+            hits.max_scroll = draw_diff(frame, frame.area(), *issue, *scroll, body, hits);
         }
         Focus::List | Focus::Filter | Focus::Message { .. } => {}
     }

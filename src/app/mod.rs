@@ -5,7 +5,7 @@
 
 use crate::config::Config;
 use crate::domain::{Issue, IssueNumber, PullRequest};
-use crate::session::Sessions;
+use crate::session::{Diff, Sessions};
 use crossterm::event::KeyEventKind;
 use ratatui::layout::Position;
 use std::collections::BTreeSet;
@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use batch::{BatchStart, batch_key};
 use dialog::{StartDialog, dialog_key};
+use diff::{diff_overlay_key, read_diff};
 use feed::{Due, Feed, Poll, observed, tick};
 use filter::{Viewer, filter_key};
 use keys::{act, action_for};
@@ -30,6 +31,7 @@ use toast::Toast;
 
 pub mod batch;
 pub mod dialog;
+pub mod diff;
 pub mod feed;
 pub mod filter;
 pub mod keys;
@@ -70,6 +72,18 @@ pub enum Focus {
         issue: IssueNumber,
         scroll: u16,
     },
+    /// The session's worktree diff, scrolled down by `scroll` lines.
+    Diff {
+        issue: IssueNumber,
+        scroll: u16,
+        body: DiffBody,
+    },
+}
+
+/// What the diff overlay holds: the read is in flight, or it landed.
+pub enum DiffBody {
+    Reading,
+    Read(Diff),
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -178,6 +192,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Focus::Settings(_) => settings_key(state, &ev),
             Focus::Keybinds { .. } => keybinds_key(state, &ev),
             Focus::Summary { .. } => summary_overlay_key(state, &ev),
+            Focus::Diff { .. } => diff_overlay_key(state, &ev),
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
@@ -214,7 +229,8 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Copied { target, result } => copied(state, target, result),
         Msg::Sent { issue, kind, result } => sent(state, issue, kind, result),
         Msg::Merged { ask, run } => merged(state, ask, run),
-        Msg::Attached(result) => attached(state, result),
+        Msg::Attached { issue, to, result } => attached(state, issue, to, result),
+        Msg::Diff { issue, result } => read_diff(state, issue, result),
         Msg::Saved(result) => {
             if let Err(e) = result {
                 toast::error(state, format!("Saving settings failed: {e}"));

@@ -1,4 +1,5 @@
 use super::batch::mark_key;
+use super::diff::diff_key;
 use super::feed::{observe_now, refresh_github};
 use super::list::{Move, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
 use super::menus::SettingsMenu;
@@ -7,7 +8,7 @@ use super::message::open_message;
 use super::msg::Cmd;
 use super::open::open_key;
 use super::remove::{clean_key, has_merged_sessions, removable, remove_key};
-use super::sessions::{attach_key, start_key, stop_key};
+use super::sessions::{attach_key, shell_key, start_key, stop_key};
 use super::summary::summary_key;
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
@@ -42,6 +43,8 @@ pub enum Action {
     Settings,
     Keybinds,
     Summary,
+    Diff,
+    Shell,
     Message,
     Quit,
 }
@@ -83,6 +86,8 @@ pub enum When {
     SessionExited,
     /// The selected session's Claude has said something.
     Said,
+    /// The selection has a session.
+    HasSession,
     /// The session exited, or its PR is merged.
     Removable,
     HasMergedSessions,
@@ -226,6 +231,20 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("i", "read summary", When::Said)],
     },
     Binding {
+        keys: &[Key::Char('d')],
+        action: Action::Diff,
+        group: KeyGroup::Sessions,
+        desc: "show the diff of the session's worktree",
+        bar: &[bar("d", "show diff", When::HasSession)],
+    },
+    Binding {
+        keys: &[Key::Char('!')],
+        action: Action::Shell,
+        group: KeyGroup::Sessions,
+        desc: "open a shell in the session's worktree",
+        bar: &[bar("!", "open shell", When::HasSession)],
+    },
+    Binding {
         keys: &[Key::Char('D')],
         action: Action::Remove,
         group: KeyGroup::Sessions,
@@ -333,7 +352,7 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
         Focus::Settings(_) => {
             vec![hint("j/k", "move", Key::Char('j')), hint("enter", "change", enter), hint("esc", "close", esc)]
         }
-        Focus::Keybinds { .. } | Focus::Summary { .. } => {
+        Focus::Keybinds { .. } | Focus::Summary { .. } | Focus::Diff { .. } => {
             vec![hint("j/k", "scroll", Key::Char('j')), hint("esc", "close", esc)]
         }
         Focus::List => key_bar(state),
@@ -353,6 +372,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
         When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),
         When::Said => said,
+        When::HasSession => current.is_some(),
         When::Removable => removable(state),
         When::HasMergedSessions => state.tab == Tab::Sessions && has_merged_sessions(state),
         When::Mergeable => merge_target(state).is_ok(),
@@ -419,6 +439,8 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
         Action::Summary => return summary_key(state),
+        Action::Diff => return diff_key(state),
+        Action::Shell => return shell_key(state),
         Action::Message => return open_message(state),
         Action::Quit => return vec![Cmd::Quit],
     }

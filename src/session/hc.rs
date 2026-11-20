@@ -84,6 +84,21 @@ impl Mux for Hc {
         self.open(repo, dir, issue, argv)
     }
 
+    /// The terminal has no argv, so hc runs the machine's own shell, and it
+    /// carries no `dispatch.*` label, so `list` never sees it. It joins the
+    /// worktree's space by its `herdr.space` label.
+    fn shell(
+        &self,
+        _repo: Repo<'_>,
+        dir: &WorktreePath,
+        _issue: IssueNumber,
+        _window: Option<&Pane>,
+    ) -> Result<AttachPlan, MuxError> {
+        let space = space_id(dir.as_path());
+        let address = run_terminal(dir, &[format!("herdr.space={space}")], &[])?;
+        Ok(self.attach(&Pane { address, space }))
+    }
+
     /// The app shows a space for as long as one terminal carries its label,
     /// so ending only Claude's terminal would leave the space open, and any
     /// terminal the user opened there with it.
@@ -233,22 +248,29 @@ pub(super) fn space_id(worktree: &Path) -> Space {
     Space(format!("sp{:016x}{:016x}", fnv1a(FNV_OFFSET, bytes), fnv1a(FNV_OFFSET_2, bytes)))
 }
 
-/// `--no-parent` keeps the terminal alive when dispatch exits.
-fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, MuxError> {
+/// `--no-parent` keeps the terminal alive when dispatch exits. An empty
+/// `argv` runs the machine's own shell, so no `--` goes in.
+fn run_terminal(dir: &WorktreePath, labels: &[String], argv: &[String]) -> Result<Address, MuxError> {
     let cwd = dir.as_path().to_string_lossy().into_owned();
+    let mut run = vec!["run", "--bg", "--json", "--no-parent", "--no-notify", "--cwd", cwd.as_str()];
+    for label in labels {
+        run.extend(["--label", label.as_str()]);
+    }
+    if !argv.is_empty() {
+        run.push("--");
+        run.extend(argv.iter().map(String::as_str));
+    }
+    let text = hc(run)?;
+    serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| unexpected_json(&e))
+}
+
+fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, MuxError> {
     let labels = [
         format!("herdr.space={}", space_id(dir.as_path())),
         format!("dispatch.repo={}", repo_root.display()),
         format!("dispatch.issue={}", issue.0),
     ];
-    let mut run = vec!["run", "--bg", "--json", "--no-parent", "--no-notify", "--cwd", cwd.as_str()];
-    for label in &labels {
-        run.extend(["--label", label.as_str()]);
-    }
-    run.push("--");
-    run.extend(argv.iter().map(String::as_str));
-    let text = hc(run)?;
-    serde_json::from_str::<Started>(&text).map(|s| s.address).map_err(|e| unexpected_json(&e))
+    run_terminal(dir, &labels, argv)
 }
 
 fn remove(address: &Address) -> Result<(), MuxError> {

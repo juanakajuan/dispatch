@@ -55,6 +55,7 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, transcripts: &Mutex<transcript::Reader
             Observation { sessions, transcripts, work }
         })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
+        ReadJob::Diff(issue) => Msg::Diff { issue, result: ws.diff(issue) },
         ReadJob::FetchPageUrl(target) => Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) },
     };
     let _ = tx.send(msg);

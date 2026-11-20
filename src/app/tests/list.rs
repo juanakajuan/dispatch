@@ -191,7 +191,7 @@ fn double_click_on_a_session_row_attaches_to_it() {
     state.tab = Tab::Sessions;
     assert!(press(&mut state, click(0, 0, now)).is_empty(), "one click only selects");
     let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
-    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach { issue: IssueNumber(3), to: AttachTo::Claude }]));
 }
 
 #[test]
