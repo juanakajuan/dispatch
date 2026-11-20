@@ -22,14 +22,16 @@ pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     match key {
         Some(Key::Code(KeyCode::Enter)) => state.focus = Focus::List,
         Some(Key::Code(KeyCode::Esc)) => {
-            state.filter.clear();
+            state.filter_mut().clear();
             state.focus = Focus::List;
         }
         Some(Key::Code(KeyCode::Backspace)) => {
-            state.filter.pop();
+            state.filter_mut().pop();
         }
+        Some(Key::Code(KeyCode::Down)) => cycle_saved(state, Step::Next),
+        Some(Key::Code(KeyCode::Up)) => cycle_saved(state, Step::Previous),
         Some(Key::Ctrl('c')) => return vec![Cmd::Quit],
-        Some(Key::Char(c)) => state.filter.push(c),
+        Some(Key::Char(c)) => state.filter_mut().push(c),
         _ => {}
     }
     Vec::new()
@@ -38,6 +40,20 @@ pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 fn tab(state: &mut State, step: Step) -> Vec<Cmd> {
     complete::complete(state, step);
     Vec::new()
+}
+
+/// `Down` puts the saved filter after the one in the prompt, and `Up` the one
+/// before it, wrapping at the ends. Text that is not a saved filter goes to
+/// the first one (`Down`) or the last one (`Up`).
+fn cycle_saved(state: &mut State, step: Step) {
+    let saved = &state.config.saved_filters;
+    let n = saved.len();
+    if n == 0 {
+        return;
+    }
+    let at = saved.iter().position(|f| f == state.filter());
+    let next = saved[step.from(at, n)].clone();
+    *state.filter_mut() = next;
 }
 
 /// One word of the typed filter, with the bytes it came from, so the prompt

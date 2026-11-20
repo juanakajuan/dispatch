@@ -7,7 +7,9 @@ use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{CleanReport, RemoveOutcome, RemoveTarget, SessionState, Sessions, StartOutcome, Works};
+use crate::session::{
+    AttachTo, CleanReport, Diff, RemoveOutcome, RemoveTarget, SessionState, Sessions, StartOutcome, Works,
+};
 use crate::transcript::Transcript;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
@@ -53,7 +55,15 @@ pub enum Msg {
         result: Result<RemoveOutcome, SessionError>,
     },
     Cleaned(CleanReport),
-    Attached(Result<(), AttachError>),
+    Attached {
+        issue: IssueNumber,
+        to: AttachTo,
+        result: Result<(), AttachError>,
+    },
+    Diff {
+        issue: IssueNumber,
+        result: Result<Diff, SessionError>,
+    },
     Opened {
         target: GithubRef,
         result: Result<(), GhError>,
@@ -96,7 +106,10 @@ pub struct Observation {
 pub enum Cmd {
     Job(Job),
     /// Runs on the main thread: `AttachPlan::Suspend` must own the terminal.
-    Attach(IssueNumber),
+    Attach {
+        issue: IssueNumber,
+        to: AttachTo,
+    },
     /// Runs on the main thread: the copy writes to the terminal.
     Copy {
         target: GithubRef,
@@ -126,6 +139,8 @@ pub enum ReadJob {
     Open(GithubRef),
     /// Look up the page URL, for `OpenWith::Clipboard`.
     FetchPageUrl(GithubRef),
+    /// The session's worktree changes, for the `d` overlay.
+    Diff(IssueNumber),
 }
 
 /// Writes share one thread, because two concurrent `git config` writes can

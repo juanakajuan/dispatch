@@ -31,27 +31,28 @@ pub(super) fn complete(state: &mut State, step: Step) {
     let live = state
         .completion
         .take()
-        .filter(|c| c.choices.len() > 1 && state.filter.get(c.start..) == c.choices.get(c.at).map(String::as_str));
+        .filter(|c| c.choices.len() > 1 && state.filter().get(c.start..) == c.choices.get(c.at).map(String::as_str));
     let c = if let Some(mut c) = live {
         c.at = step.from(Some(c.at), c.choices.len());
         c
     } else {
-        let start = word_start(&state.filter);
-        let choices = choices(state, &state.filter[start..]);
+        let start = word_start(state.filter());
+        let choices = choices(state, &state.filter()[start..]);
         if choices.is_empty() {
             return;
         }
         let at = step.from(None, choices.len());
         Completion { start, choices, at }
     };
-    state.filter.truncate(c.start);
-    state.filter.push_str(&c.choices[c.at]);
+    let filter = state.filter_mut();
+    filter.truncate(c.start);
+    filter.push_str(&c.choices[c.at]);
     state.completion = Some(c);
 }
 
 impl Step {
     /// The index after `at`, wrapping. With no `at`, the first or last.
-    fn from(self, at: Option<usize>, len: usize) -> usize {
+    pub(super) fn from(self, at: Option<usize>, len: usize) -> usize {
         match (self, at) {
             (Step::Next, Some(at)) => (at + 1) % len,
             (Step::Next, None) => 0,

@@ -1,14 +1,14 @@
 use super::batch::open_batch;
 use super::dialog::open_dialog;
 use super::feed::observe_now;
-use super::list::{RowKey, Tab, current_session, selected_row};
+use super::list::{RowKey, Tab, current_session, jump_to, selected_row};
 use super::msg::{Cmd, Job, WriteJob};
 use super::toast;
 use super::{Focus, State};
 use crate::domain::IssueNumber;
-use crate::session::StartOutcome;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
+use crate::session::{AttachTo, StartOutcome};
 
 /// `s` or Enter on an issue, or a double-click on one.
 pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
@@ -41,9 +41,7 @@ pub(super) fn begin_start(state: &mut State, req: StartRequest) -> Cmd {
 }
 
 pub(super) fn goto_session(state: &mut State, n: IssueNumber) {
-    state.tab = Tab::Sessions;
-    state.tabs.sessions.selected = Some(n);
-    state.filter.clear();
+    jump_to(state, RowKey::Session(n));
 }
 
 pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
@@ -53,7 +51,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
     };
     let issue = session.issue;
     if session.state.is_live() {
-        vec![Cmd::Attach(issue)]
+        vec![Cmd::Attach { issue, to: AttachTo::Claude }]
     } else if !state.transcripts.contains_key(&issue) {
         start_again(state, issue);
         Vec::new()
@@ -73,6 +71,16 @@ fn start_again(state: &mut State, n: IssueNumber) {
         }
         None => toast::error(state, format!("{n} has no conversation to continue, and the issue is not listed.")),
     }
+}
+
+/// `!`: a plain shell in the session's worktree, for a live session or an
+/// exited one.
+pub(super) fn shell_key(state: &mut State) -> Vec<Cmd> {
+    let Some(issue) = current_session(state).map(|s| s.issue) else {
+        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        return Vec::new();
+    };
+    vec![Cmd::Attach { issue, to: AttachTo::Shell }]
 }
 
 pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
@@ -119,9 +127,17 @@ pub(super) fn resumed(state: &mut State, issue: IssueNumber, result: Result<(), 
     observe_now(state)
 }
 
-pub(super) fn attached(state: &mut State, result: Result<(), AttachError>) -> Vec<Cmd> {
+pub(super) fn attached(
+    state: &mut State,
+    issue: IssueNumber,
+    to: AttachTo,
+    result: Result<(), AttachError>,
+) -> Vec<Cmd> {
     if let Err(e) = result {
-        toast::error(state, format!("attach failed: {e}"));
+        match to {
+            AttachTo::Claude => toast::error(state, format!("attach failed: {e}")),
+            AttachTo::Shell => toast::error(state, format!("Opening a shell in {issue} failed: {e}")),
+        }
     }
     observe_now(state)
 }

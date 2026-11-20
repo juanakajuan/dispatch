@@ -16,7 +16,17 @@ fn key_bar_follows_the_context() {
     assert!(names(&state).contains(&"enter go to issue".to_string()));
     assert_eq!(
         names(&state),
-        ["? keys", "enter go to issue", "a resume", "D remove", "m merge", "o open on GitHub", "q quit"]
+        [
+            "? keys",
+            "enter go to issue",
+            "a resume",
+            "d show diff",
+            "! open shell",
+            "D remove",
+            "m merge",
+            "o open on GitHub",
+            "q quit"
+        ]
     );
 }
 

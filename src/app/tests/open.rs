@@ -50,7 +50,7 @@ fn o_while_filtering_types_into_the_filter() {
     let (mut state, _) = app();
     press(&mut state, key('/'));
     assert!(press(&mut state, key('o')).is_empty());
-    assert_eq!(state.filter, "o");
+    assert_eq!(state.filter(), "o");
 }
 
 #[test]

@@ -1,5 +1,6 @@
+use super::markdown;
 use super::palette;
-use super::text::{age, cells, fit, one_line, span};
+use super::text::{age, fit_spans, span, spans_width};
 use crate::app::feed::LastFetch;
 use crate::app::list::{Group, IssueGroup, PrGroup, RowKey, SessionGroup, Tab};
 use crate::app::mouse::{HitMap, HitTarget};
@@ -64,7 +65,7 @@ pub(super) fn empty_text(state: &State) -> String {
         Tab::Prs => ("pull requests", matches!(state.prs.last, LastFetch::Never)),
         Tab::Sessions => return "No sessions. Press s on an issue to start one.".to_string(),
     };
-    match (loading, state.filter.is_empty()) {
+    match (loading, state.filter().is_empty()) {
         (true, _) => format!("Loading {name}…"),
         (false, true) => format!("No {name}."),
         (false, false) => format!("No {name} match the filter."),
@@ -78,7 +79,7 @@ pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> 
     if s.kind == crate::transcript::SummaryKind::Recap {
         v.push(span("※ ", palette::ACCENT));
     }
-    v.push(span(one_line(&s.text), palette::DIM));
+    v.extend(markdown::inline(&s.text, palette::DIM));
     Some(v)
 }
 
@@ -120,16 +121,23 @@ fn work_spans(w: Work, icons: &Icons) -> Vec<Span<'static>> {
     v
 }
 
+/// `#3 ` in front of a row's name.
+fn numbered(n: impl std::fmt::Display, name: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    let mut v = vec![Span::raw(format!("{n} "))];
+    v.extend(name);
+    v
+}
+
 pub(super) struct RowParts {
     glyph: Span<'static>,
-    name: String,
+    name: Vec<Span<'static>>,
     summary: Vec<Span<'static>>,
     work: Vec<Span<'static>>,
     age: String,
 }
 
 impl RowParts {
-    fn new(glyph: Span<'static>, name: String, summary: Vec<Span<'static>>, age: String) -> RowParts {
+    fn new(glyph: Span<'static>, name: Vec<Span<'static>>, summary: Vec<Span<'static>>, age: String) -> RowParts {
         RowParts { glyph, name, summary, work: Vec::new(), age }
     }
 }
@@ -158,7 +166,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
     match key {
         RowKey::Issue(n) => {
             let Some(i) = issue_of(state, n) else {
-                return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), Vec::new(), Vec::new(), String::new());
             };
             let glyph = session_glyph(n).unwrap_or_else(|| {
                 if state.marked.contains(&n) {
@@ -179,11 +187,16 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 }
                 (None, None) => vec![span(format!("{} · {} comments", i.author, i.comment_count), palette::DIM)],
             };
-            RowParts::new(glyph, format!("{n} {}", one_line(&i.title)), summary, age(i.updated_at, now))
+            RowParts::new(
+                glyph,
+                numbered(n, markdown::title(&i.title, Style::default())),
+                summary,
+                age(i.updated_at, now),
+            )
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
-                return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), Vec::new(), Vec::new(), String::new());
             };
             let mut summary = vec![
                 span(format!("{} → {}  ", p.head.display(), p.base.display()), palette::DIM),
@@ -202,15 +215,20 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 PrState::Closed => span(icons.pr_closed, palette::DIM),
                 PrState::Open => checks_span(p.checks, icons),
             };
-            RowParts::new(glyph, format!("{n} {}", one_line(&p.title)), summary, age(p.updated_at, now))
+            RowParts::new(
+                glyph,
+                numbered(n, markdown::title(&p.title, Style::default())),
+                summary,
+                age(p.updated_at, now),
+            )
         }
         RowKey::Session(n) => {
             let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
             let issue = issue_of(state, n);
             let session = state.sessions.get(&n);
             let name = issue
-                .map(|i| one_line(&i.title))
-                .or_else(|| session.map(|s| s.branch.as_str().to_string()))
+                .map(|i| markdown::title(&i.title, Style::default()))
+                .or_else(|| session.map(|s| vec![Span::raw(s.branch.as_str().to_string())]))
                 .unwrap_or_default();
             let summary = session
                 .and_then(off_branch)
@@ -220,7 +238,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
             let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
             let work = state.work.get(&n).map(|w| work_spans(*w, icons)).unwrap_or_default();
-            RowParts { work, ..RowParts::new(glyph, format!("{n} {name}"), summary, age) }
+            RowParts { work, ..RowParts::new(glyph, numbered(n, name), summary, age) }
         }
     }
 }
@@ -241,8 +259,7 @@ pub(super) fn draw_rows(
     let selected = app::list::selected_row(state);
     let age_w = 5;
     let parts: Vec<_> = rows.iter().map(|key| row_parts(state, *key, now, icons)).collect();
-    let width = |spans: &[Span<'static>]| spans.iter().map(|s| cells(&s.content)).sum::<usize>();
-    let work_w = parts.iter().map(|p| width(&p.work)).max().unwrap_or(0);
+    let work_w = parts.iter().map(|p| spans_width(&p.work)).max().unwrap_or(0);
     let work_gap = usize::from(work_w > 0);
     let avail = usize::from(area.width).saturating_sub(age_w + 6 + work_w + work_gap);
     let groups: Vec<Group> = rows.iter().map(|key| app::list::group_of(state, *key)).collect();
@@ -250,8 +267,8 @@ pub(super) fn draw_rows(
     let name_ws: Vec<usize> = groups
         .iter()
         .map(|g| {
-            let name_need = in_group(*g).map(|p| cells(&p.name)).max().unwrap_or(0);
-            let summary_need = in_group(*g).map(|p| width(&p.summary)).max().unwrap_or(0);
+            let name_need = in_group(*g).map(|p| spans_width(&p.name)).max().unwrap_or(0);
+            let summary_need = in_group(*g).map(|p| spans_width(&p.summary)).max().unwrap_or(0);
             name_width(usize::from(area.width), avail, name_need, summary_need)
         })
         .collect();
@@ -276,23 +293,16 @@ pub(super) fn draw_rows(
         let on = selected == Some(*key);
         let marker = if on { span("❯", palette::ACCENT) } else { Span::raw(" ") };
         let name_style = if on { palette::HEADING } else { palette::PLAIN };
-        let mut summary_text: Vec<Span<'static>> = Vec::new();
-        let mut used = 0;
-        for s in summary {
-            let t = fit(&s.content, summary_w.saturating_sub(used));
-            used += cells(&t);
-            summary_text.push(Span::styled(t, s.style));
-        }
-        let mut line = vec![
-            marker,
-            Span::raw(" "),
-            glyph,
-            Span::raw(" "),
-            span(format!("{:<name_w$}", fit(&name, name_w)), name_style),
-            Span::raw("  "),
-        ];
+        let summary_text = fit_spans(summary, summary_w);
+        let used = spans_width(&summary_text);
+        let name =
+            fit_spans(name.into_iter().map(|s| Span::styled(s.content, name_style.patch(s.style))).collect(), name_w);
+        let name_pad = name_w.saturating_sub(spans_width(&name));
+        let mut line = vec![marker, Span::raw(" "), glyph, Span::raw(" ")];
+        line.extend(name);
+        line.push(span(" ".repeat(name_pad + 2), name_style));
         line.extend(summary_text);
-        line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used) + work_gap + work_w - width(&work))));
+        line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used) + work_gap + work_w - spans_width(&work))));
         line.extend(work);
         line.push(span(format!("{age:>age_w$}"), palette::DIM));
         lines.push((Some(*key), Line::from(line)));
