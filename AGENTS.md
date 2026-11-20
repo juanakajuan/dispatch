@@ -9,6 +9,14 @@ The checks hold most rules. This file holds only what the code cannot say.
 - If you change a key, a screen, or a flow, update its recipe in `.claude/skills/verify/features/` in the same commit. No check catches a stale recipe.
 - Ask before you add a dependency.
 
+## Issues and PRs
+
+If an issue or PR is about something a user sees, put images of it in the body. Words alone are not sufficient. Add images for a PR that changes a screen, a key bar, a dialog, a toast, or a flow, and for an issue that reports a visible bug. A PR that changes only internals, tests, or docs needs no images.
+
+- Show one state with a PNG. Show a flow (press a key, then see the result) with a GIF. GitHub cannot play an mp4 that `gh` uploads, so do not use video.
+- Make the images from the `verify` run that proves the change. Do not make up a screen. Use `media.sh png` or `media.sh gif` on the `shot` files, then use `media.sh publish pr-<n>` (or `issue-<n>`) and paste the Markdown lines that it prints. The "Evidence" section of the `verify` skill gives the commands.
+- For a PR, show the screen before the change and after it, when the change replaces something that a user already saw.
+
 ## Where a feature lives
 
 A feature has one name. `src/app/<name>.rs` holds its state and flow, and `src/<name>/` or `src/session/` holds its rules and I/O. `src/ui/` is split by screen region (header, rows, footer, dialog, menus), not by feature. In `app/`, `ui/`, and `session/`, tests are in a `tests/` folder, one file per feature. Other modules keep an inline `mod tests`.

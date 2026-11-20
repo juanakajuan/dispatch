@@ -100,6 +100,17 @@ $V shot "$RUN" start-dialog    # evidence/NN-start-dialog.txt and .ansi (with co
 $V state "$RUN" after-start    # evidence/NN-after-start.state.txt: git worktree list, dispatch markers, tmux windows
 ```
 
+To put shots in an issue or PR (AGENTS.md says when), make images from the `.ansi` files and publish them:
+
+```sh
+M=.claude/skills/verify/scripts/media.sh
+$M png "$RUN"/evidence/03-after.ansi                       # evidence/03-after.png
+$M gif "$RUN"/evidence/flow.gif "$RUN"/evidence/0[1-3]-*.ansi  # one GIF frame per shot, in order
+$M publish pr-117 "$RUN"/evidence/03-after.png "$RUN"/evidence/flow.gif
+```
+
+`publish` pushes the files to the `media` branch (it has no code, and nothing merges it) and prints one `![name](url)` line for each file. Paste these lines into the body. Each URL contains the commit, so an image does not change after you publish it. Run `publish` before `down` or after it: `down` keeps `evidence/`. Do the steps in this order: make the shots, make the images, publish them, then use `gh pr create` or `gh issue create`. `media.sh` needs `aha`, `chromium`, and `magick`.
+
 The run also writes these logs to `$RUN/evidence/` by itself:
 
 - `gh-calls.log`: each gh call dispatch made.
