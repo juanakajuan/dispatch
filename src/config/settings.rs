@@ -1,4 +1,4 @@
-use super::{ClaudeCommand, Config, ConfigError, env_path, parse, read};
+use super::{AgentCommand, Config, ConfigError, env_path, parse, read};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
@@ -73,7 +73,7 @@ impl Setting {
     /// unchanged on an error. A setting that is not typed ignores the text.
     pub fn set_text(self, config: &mut Config, text: &str) -> Result<(), ConfigError> {
         match self {
-            Setting::ClaudeCommand => config.claude_command = ClaudeCommand::from_words(text)?,
+            Setting::ClaudeCommand => config.claude_command = AgentCommand::from_words(text)?,
             Setting::DetectWaiting | Setting::Icons | Setting::Multiplexer | Setting::RemoveOnMerge => {}
         }
         Ok(())
@@ -158,7 +158,7 @@ mod tests {
     fn a_changed_field_keeps_the_others_and_their_order() {
         let before = "{\n  \"split\": 30,\n  \"icons\": \"nerdfont\",\n  \"detect_waiting\": false\n}\n";
         let config = Config { detect_waiting: true, ..parse_str(before).expect("valid") };
-        let config = Config { claude_command: ClaudeCommand::from_words("my-claude --x").expect("valid"), ..config };
+        let config = Config { claude_command: AgentCommand::from_words("my-claude --x").expect("valid"), ..config };
         let after = edit(Some(before), Setting::ClaudeCommand, &config).expect("ok").expect("written");
         let keys: Vec<_> = serde_json::from_str::<Map<String, Value>>(&after).expect("json").keys().cloned().collect();
         assert_eq!(keys, ["split", "icons", "detect_waiting", "claude_command"]);
@@ -210,7 +210,7 @@ mod tests {
             detect_waiting: false,
             icons: IconSet::NerdFont,
             multiplexer: Multiplexer::Herdr,
-            claude_command: ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid"),
+            claude_command: AgentCommand::from_words("sh -c 'echo hi'").expect("valid"),
             remove_on_merge: RemoveOnMerge::On,
             ..Config::default()
         };

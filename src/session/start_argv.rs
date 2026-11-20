@@ -6,7 +6,7 @@ use super::herdr;
 use super::mux::Backend;
 use super::request::Launch;
 use super::worktree::WORKTREES_DIR;
-use crate::config::ClaudeCommand;
+use crate::config::AgentCommand;
 use crate::domain::{IssueNumber, Mode, OriginRef};
 
 /// The start dialog's "Runs" preview.
@@ -62,7 +62,7 @@ impl Default for StartPreview {
     }
 }
 
-pub(super) fn claude_argv(claude: &ClaudeCommand, hooks: Option<&str>, mode: Mode, prompt: &str) -> Vec<String> {
+pub(super) fn claude_argv(claude: &AgentCommand, hooks: Option<&str>, mode: Mode, prompt: &str) -> Vec<String> {
     claude.argv(&claude_args(mode, prompt, hooks))
 }
 

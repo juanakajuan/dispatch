@@ -26,16 +26,16 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// The program and leading args that start Claude. Dispatch appends its own
+/// The program and leading args that start the agent. Dispatch appends its own
 /// args after these. The program is separate from the args, so an empty
 /// command can not exist.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClaudeCommand {
+pub struct AgentCommand {
     pub program: String,
     pub args: Vec<String>,
 }
 
-impl ClaudeCommand {
+impl AgentCommand {
     /// The full argv for a start or resume.
     pub fn argv(&self, tail: &[String]) -> Vec<String> {
         let mut argv = vec![self.program.clone()];
@@ -45,18 +45,18 @@ impl ClaudeCommand {
     }
 
     /// The config boundary: an argv with a program and no blank program name.
-    pub fn from_argv(argv: Vec<String>) -> Result<ClaudeCommand, ConfigError> {
+    pub fn from_argv(argv: Vec<String>) -> Result<AgentCommand, ConfigError> {
         let mut parts = argv.into_iter();
         let program = parts.next().ok_or(ConfigError::BadCommand("is empty"))?;
         if program.trim().is_empty() {
             return Err(ConfigError::BadCommand("starts with an empty program name"));
         }
-        Ok(ClaudeCommand { program, args: parts.collect() })
+        Ok(AgentCommand { program, args: parts.collect() })
     }
 
     /// One line of words, for editing. Split on whitespace. `'...'` and
     /// `"..."` group words, and there are no escapes.
-    pub fn from_words(text: &str) -> Result<ClaudeCommand, ConfigError> {
+    pub fn from_words(text: &str) -> Result<AgentCommand, ConfigError> {
         let mut argv = Vec::new();
         let mut word = String::new();
         let mut started = false;
@@ -87,7 +87,7 @@ impl ClaudeCommand {
         if started {
             argv.push(word);
         }
-        ClaudeCommand::from_argv(argv)
+        AgentCommand::from_argv(argv)
     }
 
     /// The inverse of `from_words`.
@@ -182,7 +182,7 @@ pub struct Config {
     /// on their tmux window (see `session::mux::WAITING_HOOKS`). Turn it off if the
     /// `--settings` hooks interfere with the user's own hooks.
     pub detect_waiting: bool,
-    pub claude_command: ClaudeCommand,
+    pub claude_command: AgentCommand,
     /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
     pub icons: IconSet,
     pub multiplexer: Multiplexer,
@@ -194,7 +194,7 @@ impl Default for Config {
         Config {
             github_refresh: Duration::from_mins(1),
             detect_waiting: true,
-            claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+            claude_command: AgentCommand { program: "claude".to_string(), args: Vec::new() },
             icons: IconSet::default(),
             multiplexer: Multiplexer::default(),
             remove_on_merge: RemoveOnMerge::default(),
@@ -246,7 +246,7 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
         config.detect_waiting = detect;
     }
     if let Some(argv) = file.claude_command {
-        config.claude_command = ClaudeCommand::from_argv(argv)?;
+        config.claude_command = AgentCommand::from_argv(argv)?;
     }
     if let Some(icons) = file.icons {
         config.icons = icons;
@@ -370,18 +370,18 @@ mod tests {
             vec!["a", "", "b c"],
             vec!["x", "it's", "say \"hi\"", "both ' and \" here"],
         ] {
-            let command = ClaudeCommand::from_argv(argv.iter().map(ToString::to_string).collect()).expect("valid");
-            let again = ClaudeCommand::from_words(&command.words()).expect("valid");
+            let command = AgentCommand::from_argv(argv.iter().map(ToString::to_string).collect()).expect("valid");
+            let again = AgentCommand::from_words(&command.words()).expect("valid");
             assert_eq!(again, command, "{}", command.words());
         }
-        assert_eq!(ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid").args, ["-c", "echo hi"]);
-        assert_eq!(ClaudeCommand::from_words("a\"b c\"d").expect("valid").program, "ab cd");
+        assert_eq!(AgentCommand::from_words("sh -c 'echo hi'").expect("valid").args, ["-c", "echo hi"]);
+        assert_eq!(AgentCommand::from_words("a\"b c\"d").expect("valid").program, "ab cd");
     }
 
     #[test]
     fn words_reject_an_empty_or_blank_program_or_an_open_quote() {
         for text in ["", "   ", "''", "' ' x", "claude 'oops"] {
-            assert!(matches!(ClaudeCommand::from_words(text), Err(ConfigError::BadCommand(_))), "{text:?}");
+            assert!(matches!(AgentCommand::from_words(text), Err(ConfigError::BadCommand(_))), "{text:?}");
         }
     }
 

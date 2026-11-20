@@ -1,4 +1,4 @@
-use crate::config::{ClaudeCommand, Config};
+use crate::config::{AgentCommand, Config};
 use crate::domain::{BranchName, Issue, IssueNumber, Mode, RepoSlug};
 
 /// What the start dialog hands over after validation.
@@ -29,7 +29,7 @@ pub enum StartFrom {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launch {
     pub detect_waiting: bool,
-    pub claude: ClaudeCommand,
+    pub claude: AgentCommand,
 }
 
 impl Launch {

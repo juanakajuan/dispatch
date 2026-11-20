@@ -3,7 +3,7 @@ use super::request::{StartFrom, StartRequest};
 use super::start_argv::claude_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
-use crate::config::ClaudeCommand;
+use crate::config::AgentCommand;
 use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
 use std::path::PathBuf;
 
@@ -34,7 +34,7 @@ pub(super) struct Layout {
     pub(super) repo_root: PathBuf,
     pub(super) base: OriginRef,
     pub(super) hooks: Option<&'static str>,
-    pub(super) claude: ClaudeCommand,
+    pub(super) claude: AgentCommand,
 }
 
 #[derive(Debug, PartialEq, Eq)]

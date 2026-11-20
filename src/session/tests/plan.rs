@@ -1,5 +1,5 @@
 use super::{br, markers, req, win, wp, wt};
-use crate::config::ClaudeCommand;
+use crate::config::AgentCommand;
 use crate::domain::{IssueNumber, Mode, OriginRef, RepoSlug, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
@@ -17,7 +17,7 @@ fn layout() -> Layout {
         repo_root: PathBuf::from("/a/orbit"),
         base: origin("origin/main"),
         hooks: None,
-        claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+        claude: AgentCommand { program: "claude".to_string(), args: Vec::new() },
     }
 }
 
@@ -232,7 +232,7 @@ fn plan_for_a_fork_pr_fetches_the_fork_branch_into_a_new_local_branch() {
 fn plan_uses_config_claude_command_hooks_and_plan_mode() {
     let mut l = layout();
     l.claude =
-        ClaudeCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
+        AgentCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
     l.hooks = Some("{}");
     let mut r = req();
     r.mode = Mode::PlanFirst;
