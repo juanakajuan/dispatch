@@ -7,8 +7,8 @@ use super::sessions::goto_session;
 use super::toast;
 use crate::config::RemoveOnMerge;
 use crate::domain::{
-    BranchName, BranchNameError, ForkHead, ForkPush, IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState,
-    PullRequest,
+    BranchName, BranchNameError, CommitOid, ForkHead, ForkPush, IssueNumber, MergeMethod, Mode, PrBranch, PrNumber,
+    PrState, PullRequest,
 };
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
@@ -26,6 +26,7 @@ pub enum Armed {
     /// branch. The next `m` starts `req`, a session that fixes it.
     Fix {
         pr: PrNumber,
+        method: MergeMethod,
         req: StartRequest,
     },
     /// The next `D` removes the worktree and branch of this issue's session.
@@ -139,9 +140,10 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         }
     };
     let n = pr.number;
-    if let Some(Armed::Fix { pr, req }) = armed
+    if let Some(Armed::Fix { pr, method, req }) = armed
         && *pr == n
     {
+        state.handed_off.insert(n, *method);
         return start_fix(state, req.clone());
     }
     let (consent, expect) = match (plan::merge_plan(pr), fixer(state, pr)) {
@@ -241,22 +243,8 @@ fn closed_phrase(issue: IssueNumber, session: SessionState) -> String {
 pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, MergeError>) -> Vec<Cmd> {
     match result {
         Ok(MergeOutcome::Merged { method, head_oid }) => {
-            let mut cmds = Vec::new();
-            match session_on_pr(state, ask.pr) {
-                Some((issue, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
-                    toast::info(state, format!("Merged PR {} ({method}), removing {issue}", ask.pr));
-                    let target = RemoveTarget { issue, merged_head: Some(head_oid) };
-                    cmds.push(Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge { pr: ask.pr, method, session, target })));
-                }
-                Some((issue, session)) => {
-                    toast::info(
-                        state,
-                        format!("Merged PR {} ({method}) and {}", ask.pr, closed_phrase(issue, session)),
-                    );
-                    cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
-                }
-                None => toast::info(state, format!("Merged PR {} ({method})", ask.pr)),
-            }
+            state.handed_off.remove(&ask.pr);
+            let mut cmds = after_merge(state, ask.pr, method, head_oid);
             refresh_github(state, &mut cmds);
             cmds
         }
@@ -276,6 +264,46 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             Vec::new()
         }
     }
+}
+
+/// Stops or removes the session on `pr`'s branch, as `remove_on_merge` says.
+fn after_merge(state: &mut State, pr: PrNumber, method: MergeMethod, head_oid: CommitOid) -> Vec<Cmd> {
+    match session_on_pr(state, pr) {
+        Some((issue, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
+            toast::info(state, format!("Merged PR {pr} ({method}), removing {issue}"));
+            let target = RemoveTarget { issue, merged_head: Some(head_oid) };
+            vec![Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge { pr, method, session, target }))]
+        }
+        Some((issue, session)) => {
+            toast::info(state, format!("Merged PR {pr} ({method}) and {}", closed_phrase(issue, session)));
+            vec![Cmd::Job(Job::Write(WriteJob::Stop(issue)))]
+        }
+        None => {
+            toast::info(state, format!("Merged PR {pr} ({method})"));
+            Vec::new()
+        }
+    }
+}
+
+/// After a PR refresh: each handed-off PR that is now merged gets the stop
+/// or remove of a direct merge, once. A closed one is dropped.
+pub(super) fn handed_off_merged(state: &mut State) -> Vec<Cmd> {
+    let done: Vec<(PrNumber, PrState, CommitOid)> = state
+        .prs
+        .items
+        .iter()
+        .filter(|p| state.handed_off.contains_key(&p.number) && matches!(p.state, PrState::Merged | PrState::Closed))
+        .map(|p| (p.number, p.state, p.head_oid.clone()))
+        .collect();
+    let mut cmds = Vec::new();
+    for (pr, pr_state, head_oid) in done {
+        if let Some(method) = state.handed_off.remove(&pr)
+            && pr_state == PrState::Merged
+        {
+            cmds.extend(after_merge(state, pr, method, head_oid));
+        }
+    }
+    cmds
 }
 
 pub(super) fn removed_after_merge(
@@ -327,6 +355,7 @@ pub(super) fn handoff(
     let issue = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
             toast::info(state, format!("{sentence} Asking {i}'s agent to fix it."));
+            state.handed_off.insert(pr.number, method);
             return vec![Cmd::Job(Job::Write(WriteJob::Send {
                 issue: i,
                 kind: SendKind::MergeFix,
@@ -348,9 +377,10 @@ pub(super) fn handoff(
     };
     if ask.consent == Consent::StartFixSession {
         toast::info(state, format!("{sentence} Starting a session for {issue} to fix it."));
+        state.handed_off.insert(pr.number, method);
         return start_fix(state, req);
     }
-    state.armed = Some(Armed::Fix { pr: pr.number, req });
+    state.armed = Some(Armed::Fix { pr: pr.number, method, req });
     toast::info(state, format!("{sentence} Press m again to start a session for {issue} that fixes it."));
     Vec::new()
 }

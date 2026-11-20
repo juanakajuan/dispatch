@@ -32,6 +32,7 @@ mod complete;
 mod dialog;
 mod diff;
 mod filter;
+mod handed_off;
 mod hover;
 mod keys;
 mod list;
