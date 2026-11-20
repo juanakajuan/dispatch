@@ -72,6 +72,7 @@ impl Mux for Hc {
     }
 
     /// hc cannot restart a finished terminal, so a new one takes its place.
+    /// A restored shell stays, and Claude opens in a new tab of its space.
     fn relaunch(
         &self,
         repo: Repo<'_>,
@@ -80,7 +81,11 @@ impl Mux for Hc {
         issue: IssueNumber,
         argv: &[String],
     ) -> Result<(), MuxError> {
-        remove(&window.address)?;
+        match hc(["rm", window.address.as_str()]) {
+            Ok(_) => {}
+            Err(e) if matches!(classify(&e), Some(Gone::NotFound | Gone::Live)) => {}
+            Err(e) => return Err(e.into()),
+        }
         self.open(repo, dir, issue, argv)
     }
 
@@ -147,6 +152,8 @@ struct TerminalRow {
     address: Address,
     /// The folder the terminal launched in. It stays after a `cd`.
     cwd: String,
+    /// The program hc sees in the terminal, such as `claude-code` or `fish`.
+    agent: Option<String>,
     state: TerminalState,
     status: Option<Status>,
 }
@@ -176,6 +183,16 @@ impl Status {
     }
 }
 
+/// After a restart, the app restores a space with a new shell that keeps
+/// the labels of the terminal it had. That shell runs no Claude.
+const SHELLS: [&str; 9] = ["bash", "dash", "elvish", "fish", "ksh", "nu", "sh", "xonsh", "zsh"];
+
+impl TerminalRow {
+    fn runs_a_shell(&self) -> bool {
+        self.agent.as_deref().is_some_and(|agent| SHELLS.contains(&agent))
+    }
+}
+
 #[derive(Deserialize)]
 struct Started {
     address: Address,
@@ -195,12 +212,15 @@ enum Gone {
     /// hc prints `{"error":{"kind":"not_found",..}}` on stderr and exits 3.
     NotFound,
     Finished,
+    /// `hc rm` of a running terminal exits 1 with `"kind":"live"`.
+    Live,
 }
 
 fn classify(e: &ProcError) -> Option<Gone> {
     match e.exit_code() {
         Some(3) if e.stderr().contains("\"not_found\"") => Some(Gone::NotFound),
         Some(11) => Some(Gone::Finished),
+        Some(1) if e.stderr().contains("\"live\"") => Some(Gone::Live),
         _ => None,
     }
 }
@@ -225,6 +245,7 @@ fn window_obs(list: &TerminalList) -> Vec<Observed<Pane>> {
             let worktree = WorktreePath::from_observed(&row.cwd)?;
             let liveness = match row.state {
                 TerminalState::Other => Liveness::Dead,
+                TerminalState::Live if row.runs_a_shell() => Liveness::Dead,
                 TerminalState::Live if row.status.is_some_and(Status::waiting) => Liveness::Waiting,
                 TerminalState::Live => Liveness::Working,
             };
@@ -287,7 +308,7 @@ fn stop(address: &Address) -> Result<(), MuxError> {
         Err(e) => match classify(&e) {
             Some(Gone::NotFound) => return Ok(()),
             Some(Gone::Finished) => {}
-            None => return Err(e.into()),
+            Some(Gone::Live) | None => return Err(e.into()),
         },
     }
     remove(address)
