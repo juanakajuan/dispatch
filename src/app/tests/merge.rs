@@ -1,6 +1,6 @@
 use super::*;
 use crate::app::merge::{CannotFix, NoTarget};
-use crate::domain::{BranchNameError, ForkPush, PrBranch, RepoSlug};
+use crate::domain::{BranchNameError, CommitOid, ForkPush, PrBranch, RepoSlug};
 use crate::merge::job::DraftStep;
 use crate::merge::plan::MergeRefusal;
 use crate::merge::{Consent, MergeAsk, MergeError};
@@ -243,7 +243,16 @@ fn a_fork_pr_that_allows_maintainer_edits_gets_a_fix_session_on_a_local_branch()
 #[test]
 fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
     let (mut state, _) = app();
-    let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) });
+    let cmds = press(
+        &mut state,
+        Msg::Merged {
+            ask: ASK,
+            run: ran(Ok(MergeOutcome::Merged {
+                method: MergeMethod::Squash,
+                head_oid: CommitOid::new("sha10".to_string()),
+            })),
+        },
+    );
     assert_eq!(toast(&state), "Merged PR #10 (squash)");
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     assert!(sends(&cmds).is_empty());
@@ -260,7 +269,13 @@ fn stops(cmds: &[Cmd]) -> Vec<IssueNumber> {
 }
 
 fn merged_squash() -> Msg {
-    Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Merged(MergeMethod::Squash))) }
+    Msg::Merged {
+        ask: ASK,
+        run: ran(Ok(MergeOutcome::Merged {
+            method: MergeMethod::Squash,
+            head_oid: CommitOid::new("sha10".to_string()),
+        })),
+    }
 }
 
 #[test]
@@ -375,7 +390,13 @@ fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
 #[test]
 fn a_merge_after_marking_ready_has_no_ready_note() {
     let (mut state, _) = app();
-    let msg = Msg::Merged { ask: ASK_READY, run: ran_after_ready(Ok(MergeOutcome::Merged(MergeMethod::Squash))) };
+    let msg = Msg::Merged {
+        ask: ASK_READY,
+        run: ran_after_ready(Ok(MergeOutcome::Merged {
+            method: MergeMethod::Squash,
+            head_oid: CommitOid::new("sha10".to_string()),
+        })),
+    };
     press(&mut state, msg);
     assert_eq!(toast(&state), "Merged PR #10 (squash)");
 }

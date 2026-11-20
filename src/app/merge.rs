@@ -1,9 +1,11 @@
 use super::State;
-use super::feed::refresh_github;
+use super::feed::{observe_now, refresh_github};
 use super::list::{RowKey, lead_pr, pr_for_session, selected_row};
 use super::msg::{Cmd, Job, SendKind, WriteJob};
+use super::remove::short_refusal;
 use super::sessions::goto_session;
 use super::toast;
+use crate::config::RemoveOnMerge;
 use crate::domain::{
     BranchName, BranchNameError, ForkHead, ForkPush, IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState,
     PullRequest,
@@ -11,8 +13,9 @@ use crate::domain::{
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
 use crate::merge::{Consent, MergeAsk, MergeError};
-use crate::session::SessionState;
+use crate::session::error::SessionError;
 use crate::session::request::{Launch, StartFrom, StartRequest};
+use crate::session::{RemoveOutcome, RemoveTarget, SessionState};
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,9 +24,13 @@ pub enum Armed {
     Merge(MergeAsk),
     /// The check found a problem and no running session is on the PR's
     /// branch. The next `m` starts `req`, a session that fixes it.
-    Fix { pr: PrNumber, req: StartRequest },
+    Fix {
+        pr: PrNumber,
+        req: StartRequest,
+    },
     /// The next `D` removes the worktree and branch of this issue's session.
     Remove(IssueNumber),
+    Clean(Vec<IssueNumber>),
 }
 
 /// Who fixes a PR that can not merge.
@@ -209,7 +216,7 @@ fn head_start(pr: &PullRequest) -> Result<(BranchName, StartFrom), CannotFix> {
 
 pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd> {
     let ended_ready = run.draft == DraftStep::MarkedReady
-        && !matches!(run.result, Ok(MergeOutcome::Merged(_) | MergeOutcome::Queued));
+        && !matches!(run.result, Ok(MergeOutcome::Merged { .. } | MergeOutcome::Queued));
     let refused = matches!(run.result, Ok(MergeOutcome::Refused(_)));
     let mut cmds = merge_result(state, ask, run.result);
     if ended_ready {
@@ -224,17 +231,28 @@ pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd
     cmds
 }
 
+fn closed_phrase(issue: IssueNumber, session: SessionState) -> String {
+    match session {
+        SessionState::Running | SessionState::NeedsYou => format!("stopped {issue}'s session"),
+        SessionState::Exited => format!("closed {issue}'s window"),
+    }
+}
+
 pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<MergeOutcome, MergeError>) -> Vec<Cmd> {
     match result {
-        Ok(MergeOutcome::Merged(method)) => {
+        Ok(MergeOutcome::Merged { method, head_oid }) => {
             let mut cmds = Vec::new();
             match session_on_pr(state, ask.pr) {
+                Some((issue, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
+                    toast::info(state, format!("Merged PR {} ({method}), removing {issue}", ask.pr));
+                    let target = RemoveTarget { issue, merged_head: Some(head_oid) };
+                    cmds.push(Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge { pr: ask.pr, method, session, target })));
+                }
                 Some((issue, session)) => {
-                    let closed = match session {
-                        SessionState::Running | SessionState::NeedsYou => format!("stopped {issue}'s session"),
-                        SessionState::Exited => format!("closed {issue}'s window"),
-                    };
-                    toast::info(state, format!("Merged PR {} ({method}) and {closed}", ask.pr));
+                    toast::info(
+                        state,
+                        format!("Merged PR {} ({method}) and {}", ask.pr, closed_phrase(issue, session)),
+                    );
                     cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
                 }
                 None => toast::info(state, format!("Merged PR {} ({method})", ask.pr)),
@@ -258,6 +276,35 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             Vec::new()
         }
     }
+}
+
+pub(super) fn removed_after_merge(
+    state: &mut State,
+    pr: PrNumber,
+    method: MergeMethod,
+    issue: IssueNumber,
+    session: SessionState,
+    result: Result<RemoveOutcome, SessionError>,
+) -> Vec<Cmd> {
+    match result {
+        Ok(RemoveOutcome::Removed) => {
+            toast::info(state, format!("Merged PR {pr} ({method}) and removed {issue}'s worktree and branch"));
+        }
+        Ok(RemoveOutcome::Refused(why)) => {
+            toast::info(
+                state,
+                format!(
+                    "Merged PR {pr} ({method}) and {}. Kept worktree ({}).",
+                    closed_phrase(issue, session),
+                    short_refusal(why)
+                ),
+            );
+        }
+        Err(e) => {
+            toast::error(state, format!("Merged PR {pr} ({method}), but removing {issue} failed: {e}"));
+        }
+    }
+    observe_now(state)
 }
 
 /// The session on the PR's head branch, live or exited. A merged PR needs no

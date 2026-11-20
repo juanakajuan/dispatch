@@ -3,7 +3,7 @@
 
 use super::plan::{self, MergePlan, MergeProblem, MergeRefusal};
 use super::{Consent, MergeAsk, MergeError};
-use crate::domain::{MergeMethod, PrNumber, PrState, PullRequest};
+use crate::domain::{CommitOid, MergeMethod, PrNumber, PrState, PullRequest};
 use crate::{github, proc};
 use std::path::Path;
 
@@ -12,7 +12,10 @@ pub const SETTING: &str = "dispatch.mergeMethod";
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
-    Merged(MergeMethod),
+    Merged {
+        method: MergeMethod,
+        head_oid: CommitOid,
+    },
     /// `gh pr merge` succeeded but the PR is still open: a merge queue took it.
     Queued,
     /// An agent must fix `problem`, then merge with `method`. `pr` is the PR
@@ -74,7 +77,11 @@ fn finish(repo_root: &Path, pr: PrNumber, fresh: &PullRequest) -> Result<MergeOu
         None => {
             github::merge_pr(repo_root, fresh, method)?;
             let merged = github::view_pr(repo_root, pr).map_or(true, |after| after.state == PrState::Merged);
-            Ok(if merged { MergeOutcome::Merged(method) } else { MergeOutcome::Queued })
+            Ok(if merged {
+                MergeOutcome::Merged { method, head_oid: fresh.head_oid.clone() }
+            } else {
+                MergeOutcome::Queued
+            })
         }
         Some(problem) => Ok(MergeOutcome::Handoff { problem, method, pr: Box::new(fresh.clone()) }),
     }
@@ -199,7 +206,13 @@ mod tests {
         let run = merge(Path::new("/r"), ask(Consent::MarkReadyThenMerge));
         assert_eq!(
             run,
-            MergeRun { draft: DraftStep::MarkedReady, result: Ok(MergeOutcome::Merged(MergeMethod::Merge)) }
+            MergeRun {
+                draft: DraftStep::MarkedReady,
+                result: Ok(MergeOutcome::Merged {
+                    method: MergeMethod::Merge,
+                    head_oid: CommitOid::new("abc".to_string()),
+                }),
+            }
         );
         assert_eq!(readies(), ["gh pr ready 10"]);
         assert_eq!(merges(), ["gh pr merge 10 --merge --match-head-commit abc"]);
@@ -251,7 +264,10 @@ mod tests {
     #[test]
     fn a_clean_pr_merges_with_the_configured_method() {
         world(view("MERGEABLE", "CLEAN", ""), Some("squash"), ALL_ALLOWED);
-        assert_eq!(outcome(), Ok(MergeOutcome::Merged(MergeMethod::Squash)));
+        assert_eq!(
+            outcome(),
+            Ok(MergeOutcome::Merged { method: MergeMethod::Squash, head_oid: CommitOid::new("abc".to_string()) })
+        );
         assert_eq!(merges(), ["gh pr merge 10 --squash --match-head-commit abc"]);
         assert!(fake::calls().contains(&"git config --get dispatch.mergeMethod".to_string()));
     }
@@ -260,7 +276,10 @@ mod tests {
     fn without_a_setting_a_clean_pr_merges_with_the_only_allowed_method() {
         let only_rebase = r#"{"mergeCommitAllowed":false,"rebaseMergeAllowed":true,"squashMergeAllowed":false}"#;
         world(view("MERGEABLE", "CLEAN", ""), None, only_rebase);
-        assert_eq!(outcome(), Ok(MergeOutcome::Merged(MergeMethod::Rebase)));
+        assert_eq!(
+            outcome(),
+            Ok(MergeOutcome::Merged { method: MergeMethod::Rebase, head_oid: CommitOid::new("abc".to_string()) })
+        );
         assert_eq!(merges(), ["gh pr merge 10 --rebase --match-head-commit abc"]);
     }
 
