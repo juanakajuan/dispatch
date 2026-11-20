@@ -15,6 +15,9 @@ struct HcSim {
     gone: bool,
     /// Other terminals that carry the space label, such as one the user opened.
     space_mates: Vec<&'static str>,
+    /// Shells the app opened in the space when it restored it after a restart.
+    /// They carry dispatch's labels but run no Claude.
+    shells: Vec<&'static str>,
 }
 
 fn not_found() -> crate::proc::ProcError {
@@ -29,12 +32,18 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
             answer
         } else if call.starts_with("hc ls") {
             let mates = if call.contains("--label herdr.space=") { s.space_mates.as_slice() } else { &[] };
-            let rows: Vec<_> = s
-                .terminals
+            let shells = s
+                .shells
                 .iter()
-                .map(|(a, state, status)| (*a, *state, *status))
-                .chain(mates.iter().map(|a| (*a, "live", Some("idle"))))
-                .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status}))
+                .map(|a| serde_json::json!({"address": a, "agent": "fish", "cwd": dir, "state": "live"}));
+            let rows: Vec<_> = shells
+                .chain(
+                    s.terminals
+                        .iter()
+                        .map(|(a, state, status)| (*a, *state, *status))
+                        .chain(mates.iter().map(|a| (*a, "live", Some("idle"))))
+                        .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status})),
+                )
                 .collect();
             Ok(serde_json::json!({"hidden_finished": 0, "terminals": rows}).to_string())
         } else if call.starts_with("hc run") {
@@ -42,6 +51,8 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
             Ok(r#"{"address":"t9","state":"live"}"#.to_string())
         } else if call.starts_with("hc kill") && s.terminals.iter().all(|(_, state, _)| *state == "finished") {
             Err(fake::fail("hc", 11, r#"{"error":{"kind":"finished"}}"#))
+        } else if call.starts_with("hc rm") && s.shells.iter().any(|a| call == format!("hc rm {a}")) {
+            Err(fake::fail("hc", 1, r#"{"error":{"hint":"kill it first","kind":"live","message":"still running"}}"#))
         } else if call.starts_with("hc rm") || call.starts_with("hc kill") {
             if s.gone { Err(not_found()) } else { Ok("{}".to_string()) }
         } else {
@@ -151,6 +162,20 @@ fn hc_resume_without_a_terminal_runs_continue_and_removes_nothing() {
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     ws.resume(IssueNumber(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), [hc_run(&base, "claude --continue")]);
+}
+
+#[test]
+fn hc_a_restored_shell_is_an_exited_session_and_resume_keeps_it() {
+    let base = temp_dir("hc-restored");
+    let ws = hc_workspace(&base);
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), shells: vec!["t4"], ..HcSim::default() };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+    assert_eq!(session.state, SessionState::Exited, "a shell is not Claude");
+    assert!(ws.attach_plan(IssueNumber(142)).is_err(), "attach resumes instead");
+    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")], "the shell stays");
 }
 
 #[test]
