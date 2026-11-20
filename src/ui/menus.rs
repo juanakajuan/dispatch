@@ -1,5 +1,6 @@
+use super::markdown;
 use super::palette;
-use super::text::{cells, fit, span, wrap};
+use super::text::{cells, fit, span};
 use crate::app::keys::{Action, Key};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, DiffBody, State};
@@ -105,7 +106,7 @@ pub(super) fn draw_settings(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// All of what the session's Claude last said, word-wrapped and scrolled down
+/// All of what the session's Claude last said, as Markdown wrapped to the box and scrolled down
 /// by `scroll` lines. Returns how far it can scroll at this size.
 pub(super) fn draw_summary(
     frame: &mut Frame,
@@ -122,15 +123,7 @@ pub(super) fn draw_summary(
     };
     let width = screen.width.min(84);
     let text_width = usize::from(width.saturating_sub(6)).max(1);
-    let lines: Vec<Line<'static>> = said
-        .map_or("", |s| s.text.as_str())
-        .lines()
-        .flat_map(|line| {
-            let rows = wrap(line, text_width);
-            if rows.is_empty() { vec![String::new()] } else { rows }
-        })
-        .map(|row| Line::from(span(row, palette::PLAIN)))
-        .collect();
+    let lines = markdown::block(said.map_or("", |s| s.text.as_str()), text_width);
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));

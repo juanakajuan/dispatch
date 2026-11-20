@@ -8,6 +8,7 @@ mod batch;
 mod dialog;
 mod footer;
 mod header;
+mod markdown;
 mod menus;
 mod palette;
 mod rows;
