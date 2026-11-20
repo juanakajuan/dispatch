@@ -2,7 +2,7 @@ use super::{GitWorld, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
 use crate::session::mux::Backend;
-use crate::session::{AttachPlan, SessionState, Workspace, hc};
+use crate::session::{AttachPlan, AttachTo, SessionState, Workspace, hc};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -15,6 +15,9 @@ struct HcSim {
     gone: bool,
     /// Other terminals that carry the space label, such as one the user opened.
     space_mates: Vec<&'static str>,
+    /// Shells the app opened in the space when it restored it after a restart.
+    /// They carry dispatch's labels but run no Claude.
+    shells: Vec<&'static str>,
 }
 
 fn not_found() -> crate::proc::ProcError {
@@ -29,12 +32,18 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
             answer
         } else if call.starts_with("hc ls") {
             let mates = if call.contains("--label herdr.space=") { s.space_mates.as_slice() } else { &[] };
-            let rows: Vec<_> = s
-                .terminals
+            let shells = s
+                .shells
                 .iter()
-                .map(|(a, state, status)| (*a, *state, *status))
-                .chain(mates.iter().map(|a| (*a, "live", Some("idle"))))
-                .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status}))
+                .map(|a| serde_json::json!({"address": a, "agent": "fish", "cwd": dir, "state": "live"}));
+            let rows: Vec<_> = shells
+                .chain(
+                    s.terminals
+                        .iter()
+                        .map(|(a, state, status)| (*a, *state, *status))
+                        .chain(mates.iter().map(|a| (*a, "live", Some("idle"))))
+                        .map(|(a, state, status)| serde_json::json!({"address": a, "cwd": dir, "state": state, "status": status})),
+                )
                 .collect();
             Ok(serde_json::json!({"hidden_finished": 0, "terminals": rows}).to_string())
         } else if call.starts_with("hc run") {
@@ -42,6 +51,8 @@ fn install_hc_world(base: PathBuf, sim: Rc<RefCell<HcSim>>) {
             Ok(r#"{"address":"t9","state":"live"}"#.to_string())
         } else if call.starts_with("hc kill") && s.terminals.iter().all(|(_, state, _)| *state == "finished") {
             Err(fake::fail("hc", 11, r#"{"error":{"kind":"finished"}}"#))
+        } else if call.starts_with("hc rm") && s.shells.iter().any(|a| call == format!("hc rm {a}")) {
+            Err(fake::fail("hc", 1, r#"{"error":{"hint":"kill it first","kind":"live","message":"still running"}}"#))
         } else if call.starts_with("hc rm") || call.starts_with("hc kill") {
             if s.gone { Err(not_found()) } else { Ok("{}".to_string()) }
         } else {
@@ -154,6 +165,20 @@ fn hc_resume_without_a_terminal_runs_continue_and_removes_nothing() {
 }
 
 #[test]
+fn hc_a_restored_shell_is_an_exited_session_and_resume_keeps_it() {
+    let base = temp_dir("hc-restored");
+    let ws = hc_workspace(&base);
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), shells: vec!["t4"], ..HcSim::default() };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
+    assert_eq!(session.state, SessionState::Exited, "a shell is not Claude");
+    assert!(ws.attach_plan(IssueNumber(142), AttachTo::Claude).is_err(), "attach resumes instead");
+    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")], "the shell stays");
+}
+
+#[test]
 fn hc_resume_of_a_live_terminal_does_nothing() {
     let base = temp_dir("hc-resume-live");
     let ws = hc_workspace(&base);
@@ -229,7 +254,7 @@ fn hc_observe_prefers_a_live_terminal_over_a_newer_finished_one() {
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
     assert_eq!(
-        ws.attach_plan(IssueNumber(142)).expect("plan"),
+        ws.attach_plan(IssueNumber(142), AttachTo::Claude).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t2"].map(String::from).to_vec())
     );
     assert_eq!(session.state, SessionState::Running);
@@ -282,16 +307,43 @@ fn hc_attach_suspends_outside_the_app_and_switches_space_inside_it() {
     install_hc_world(base.clone(), Rc::clone(&sim));
     let id = IssueNumber(142);
     assert_eq!(
-        ws.attach_plan(id).expect("plan"),
+        ws.attach_plan(id, AttachTo::Claude).expect("plan"),
         AttachPlan::Suspend(["hc", "attach", "t4"].map(String::from).to_vec())
     );
     ws.mux = Backend::Hc(hc::Hc { place: hc::Place::App, path: None });
     let space = hc::space_id(&dir);
     assert_eq!(
-        ws.attach_plan(id).expect("plan"),
+        ws.attach_plan(id, AttachTo::Claude).expect("plan"),
         AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", space.as_str()].map(String::from).to_vec()),
         "the space id is derived from the worktree"
     );
     sim.borrow_mut().terminals = vec![("t4", "finished", None)];
-    assert!(ws.attach_plan(id).is_err(), "a finished terminal has nothing to attach to");
+    assert!(ws.attach_plan(id, AttachTo::Claude).is_err(), "a finished terminal has nothing to attach to");
+}
+
+#[test]
+fn hc_shell_runs_no_argv_and_no_dispatch_labels_and_attaches_to_the_new_terminal() {
+    let base = temp_dir("hc-shell");
+    let mut ws = hc_workspace(&base);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), terminals: vec![("t4", "finished", None)], ..HcSim::default() };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let id = IssueNumber(142);
+    let plan = ws.attach_plan(id, AttachTo::Shell).expect("plan");
+    assert_eq!(plan, AttachPlan::Suspend(["hc", "attach", "t9"].map(String::from).to_vec()));
+    let space = hc::space_id(&dir);
+    let calls = hc_calls();
+    let run = calls.iter().find(|c| c.starts_with("hc run")).expect("a run");
+    assert_eq!(
+        *run,
+        format!("hc run --bg --json --no-parent --no-notify --cwd {} --label herdr.space={space}", dir.display())
+    );
+    assert!(!run.contains("dispatch.") && !run.contains(" -- "), "{run}");
+
+    ws.mux = Backend::Hc(hc::Hc { place: hc::Place::App, path: None });
+    assert_eq!(
+        ws.attach_plan(id, AttachTo::Shell).expect("plan"),
+        AttachPlan::Switch(["herdr-app", "do", "space.select", "--id", space.as_str()].map(String::from).to_vec())
+    );
 }

@@ -76,7 +76,7 @@ fn a_label_term_and_text_filter_the_issues_tab() {
     state.issues.items.push(issue(4, "Retry docs", &["docs"]));
     type_filter(&mut state, "label:bug");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(3))]);
-    state.filter = "retry label:docs".to_string();
+    *state.filter_mut() = "retry label:docs".to_string();
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(4))]);
 }
 
@@ -91,7 +91,7 @@ fn the_pr_tab_filters_by_its_own_labels_assignees_and_milestone() {
     };
     press(&mut state, key('2'));
     for raw in ["label:bug", "assignee:octo", "milestone:v1", "#11 label:bug"] {
-        state.filter = raw.to_string();
+        *state.filter_mut() = raw.to_string();
         assert_eq!(visible_rows(&state), [RowKey::Pr(PrNumber(11))], "{raw}");
     }
 }
@@ -103,7 +103,7 @@ fn the_session_tab_filters_by_the_fields_of_the_sessions_issue() {
     state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
     state.sessions.insert(IssueNumber(9), session(9, SessionState::Running));
     press(&mut state, key('3'));
-    state.filter = "label:docs".to_string();
+    *state.filter_mut() = "label:docs".to_string();
     assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "#9 has no issue, so it has no labels");
 }
 
@@ -120,4 +120,89 @@ fn assignee_me_uses_the_login_once_it_lands() {
     press(&mut state, Msg::Viewer(Err(GhError::EmptyLogin)));
     assert_eq!(state.viewer, Viewer::Failed);
     assert_eq!(visible_rows(&state), []);
+}
+
+#[test]
+fn each_tab_keeps_its_own_filter_across_tab_switches() {
+    let (mut state, _) = app();
+    type_filter(&mut state, "docs");
+    press(&mut state, code(KeyCode::Enter));
+    assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(2))]);
+
+    press(&mut state, key('2'));
+    assert_eq!(state.filter(), "", "the PR tab has no filter of its own yet");
+    assert_eq!(visible_rows(&state).len(), 2, "the issue filter hides no PR");
+    type_filter(&mut state, "other");
+    press(&mut state, code(KeyCode::Esc));
+    assert_eq!(state.filter(), "", "esc clears the PR filter");
+
+    press(&mut state, key('1'));
+    assert_eq!(state.filter(), "docs", "switching back restores the issue filter");
+    assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(2))]);
+}
+
+#[test]
+fn a_jump_keeps_the_origin_filter_and_clears_the_destination_filter_only_when_it_hides_the_target() {
+    let (mut state, _) = app();
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    press(&mut state, key('3'));
+    type_filter(&mut state, "docs");
+    press(&mut state, code(KeyCode::Enter));
+    press(&mut state, key('1'));
+    type_filter(&mut state, "retry");
+    press(&mut state, code(KeyCode::Enter));
+    press(&mut state, code(KeyCode::Enter));
+    assert_eq!(state.tab, Tab::Sessions, "enter on an issue with a session goes to it");
+    assert_eq!(state.filter(), "", "the sessions filter hid #3, so the jump cleared it");
+    assert_eq!(selected_row(&state), Some(RowKey::Session(IssueNumber(3))));
+    assert_eq!(state.tabs.filter(Tab::Issues), "retry", "the origin tab keeps its filter");
+
+    type_filter(&mut state, "retry");
+    press(&mut state, code(KeyCode::Enter));
+    press(&mut state, key('1'));
+    press(&mut state, code(KeyCode::Enter));
+    assert_eq!(state.filter(), "retry", "a destination filter that shows the target stays");
+}
+
+#[test]
+fn going_from_a_pr_to_its_issue_keeps_the_pr_filter() {
+    let (mut state, _) = app();
+    type_filter(&mut state, "docs");
+    press(&mut state, code(KeyCode::Enter));
+    press(&mut state, key('2'));
+    type_filter(&mut state, "fix/3");
+    press(&mut state, code(KeyCode::Enter));
+    press(&mut state, code(KeyCode::Enter));
+    assert_eq!(state.tab, Tab::Issues);
+    assert_eq!(state.filter(), "", "the issue filter hid #3");
+    assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
+    assert_eq!(state.tabs.filter(Tab::Prs), "fix/3");
+}
+
+#[test]
+fn up_and_down_in_the_prompt_cycle_the_saved_filters() {
+    let (mut state, _) = app();
+    press(&mut state, key('/'));
+    press(&mut state, code(KeyCode::Down));
+    assert_eq!(state.filter(), "", "no saved filters: down does nothing");
+    assert!(!footer_hints(&state).iter().any(|h| h.keys == "↑↓"));
+
+    state.config.saved_filters = strings(&["label:bug", "label:docs", "assignee:@me"]);
+    assert!(footer_hints(&state).iter().any(|h| (h.keys, h.desc) == ("↑↓", "saved filters")));
+    let mut down = || {
+        press(&mut state, code(KeyCode::Down));
+        state.filter().to_string()
+    };
+    assert_eq!([down(), down(), down(), down()], ["label:bug", "label:docs", "assignee:@me", "label:bug"]);
+    press(&mut state, code(KeyCode::Up));
+    assert_eq!(state.filter(), "assignee:@me", "up wraps to the last");
+    press(&mut state, code(KeyCode::Up));
+    assert_eq!(state.filter(), "label:docs");
+    press(&mut state, code(KeyCode::Enter));
+    assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(2))], "the saved filter applies");
+
+    press(&mut state, key('/'));
+    press(&mut state, key('x'));
+    press(&mut state, code(KeyCode::Up));
+    assert_eq!(state.filter(), "assignee:@me", "typed text goes to the last saved filter on up");
 }

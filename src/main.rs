@@ -32,7 +32,7 @@ use app::msg::{Cmd, Msg};
 use app::{Context, OpenWith};
 use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use session::error::{AttachError, SetupError};
-use session::{AttachPlan, Workspace};
+use session::{AttachPlan, AttachTo, Workspace};
 use std::fmt;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver};
@@ -109,7 +109,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
         for cmd in std::mem::take(&mut cmds) {
             match cmd {
                 Cmd::Quit => return Ok(()),
-                Cmd::Attach(issue) => pending.push(Msg::Attached(attach(terminal, ws, issue))),
+                Cmd::Attach { issue, to } => {
+                    pending.push(Msg::Attached { issue, to, result: attach(terminal, ws, issue, to) });
+                }
                 Cmd::Copy { target, text } => {
                     #[expect(
                         clippy::disallowed_methods,
@@ -146,8 +148,9 @@ fn attach(
     terminal: &mut ratatui::DefaultTerminal,
     ws: &Workspace,
     issue: domain::IssueNumber,
+    to: AttachTo,
 ) -> Result<(), AttachError> {
-    match ws.attach_plan(issue).map_err(AttachError::Session)? {
+    match ws.attach_plan(issue, to).map_err(AttachError::Session)? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(AttachError::Run)

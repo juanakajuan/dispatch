@@ -65,7 +65,7 @@ pub(super) fn empty_text(state: &State) -> String {
         Tab::Prs => ("pull requests", matches!(state.prs.last, LastFetch::Never)),
         Tab::Sessions => return "No sessions. Press s on an issue to start one.".to_string(),
     };
-    match (loading, state.filter.is_empty()) {
+    match (loading, state.filter().is_empty()) {
         (true, _) => format!("Loading {name}…"),
         (false, true) => format!("No {name}."),
         (false, false) => format!("No {name} match the filter."),
