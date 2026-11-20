@@ -86,6 +86,8 @@ A burst of events makes one load, at most one each 5 seconds.
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
 | `i` | Show all of what the session's Claude said last. `j` / `k` scroll it. `i` or Esc closes it. See [What Claude said](#what-claude-said) |
+| `d` | Show the diff of the session's worktree against the default branch: commits ahead, uncommitted changes, and untracked files. `j` / `k` scroll it. `d` or Esc closes it |
+| `!` | Open a plain shell in the session's worktree, in a new window of the multiplexer. Claude's window stays as it is. It works for an exited session too. With hc, the shell joins the worktree's space |
 | `D` | Remove the worktree and the branch of a session that has exited or whose PR is merged. Press `D` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `c` | Remove all clean merged sessions. Press `c` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |

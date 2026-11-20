@@ -18,7 +18,7 @@ use crate::merge::job::{MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergeProblem};
 use crate::session::error::SessionError;
 use crate::session::request::{Launch, StartFrom, StartRequest};
-use crate::session::{Session, SessionState, StartOutcome};
+use crate::session::{AttachTo, Diff, Session, SessionState, StartOutcome};
 use crate::sort::{Cycle, IssueSort};
 use crate::testutil::{issue, pr};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 mod batch;
 mod dialog;
+mod diff;
 mod filter;
 mod hover;
 mod keys;

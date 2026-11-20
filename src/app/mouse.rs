@@ -68,7 +68,9 @@ pub(super) fn on_mouse(state: &mut State, ev: MouseEvent, now: Instant) -> Vec<C
 fn wheel(state: &mut State, step: Move) -> Vec<Cmd> {
     match &state.focus {
         Focus::List | Focus::Filter => move_selection(state, step),
-        Focus::Keybinds { .. } | Focus::Summary { .. } => return press_key(state, wheel_key(step)),
+        Focus::Keybinds { .. } | Focus::Summary { .. } | Focus::Diff { .. } => {
+            return press_key(state, wheel_key(step));
+        }
         Focus::Settings(menu) if menu.edit.is_none() => return press_key(state, wheel_key(step)),
         Focus::Settings(_) | Focus::Dialog(_) | Focus::Batch(_) | Focus::Message { .. } => {}
     }
