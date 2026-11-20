@@ -28,6 +28,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod batch;
+mod complete;
 mod dialog;
 mod diff;
 mod filter;

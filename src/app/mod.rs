@@ -30,6 +30,7 @@ use summary::summary_overlay_key;
 use toast::Toast;
 
 pub mod batch;
+pub mod complete;
 pub mod dialog;
 pub mod diff;
 pub mod feed;
@@ -123,6 +124,8 @@ pub struct State {
     /// Issues marked with Space for a batch start.
     pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
+    /// Tab completion under way in the filter.
+    pub completion: Option<complete::Completion>,
     pub viewer: Viewer,
     pub focus: Focus,
     pub toast: Option<Toast>,
@@ -152,6 +155,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         starting: BTreeSet::new(),
         marked: BTreeSet::new(),
         tabs: Tabs::default(),
+        completion: None,
         viewer: Viewer::Unknown,
         focus: Focus::List,
         toast: None,
