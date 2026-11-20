@@ -68,6 +68,13 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 WriteJob::Start(req, launch) => Msg::Started { issue: req.issue, result: ws.start(&req, &launch) },
                 WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue) },
                 WriteJob::Remove(target) => Msg::Removed { issue: target.issue, result: ws.remove(&target) },
+                WriteJob::RemoveAfterMerge { pr, method, session, target } => Msg::RemovedAfterMerge {
+                    pr,
+                    method,
+                    issue: target.issue,
+                    session,
+                    result: ws.stop_and_remove(&target),
+                },
                 WriteJob::Clean(targets) => Msg::Cleaned(ws.clean(&targets)),
                 WriteJob::Resume(issue, launch) => Msg::Resumed { issue, result: ws.resume(issue, &launch) },
                 WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),

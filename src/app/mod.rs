@@ -18,7 +18,7 @@ use filter::{Viewer, filter_key};
 use keys::{act, action_for};
 use list::{Tab, Tabs};
 use menus::{SettingsMenu, keybinds_key, settings_key};
-use merge::{Armed, merged};
+use merge::{Armed, merged, removed_after_merge};
 use message::{message_key, sent};
 use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
@@ -205,6 +205,9 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Stopped { issue, result } => stopped(state, issue, result),
         Msg::Resumed { issue, result } => resumed(state, issue, result),
         Msg::Removed { issue, result } => removed(state, issue, result),
+        Msg::RemovedAfterMerge { pr, method, issue, session, result } => {
+            removed_after_merge(state, pr, method, issue, session, result)
+        }
         Msg::Cleaned(report) => cleaned(state, &report),
         Msg::Opened { target, result } => opened(state, target, result),
         Msg::PageUrl { target, result } => page_url(state, target, result),

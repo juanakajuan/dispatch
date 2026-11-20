@@ -1,13 +1,13 @@
 use crate::clipboard::CopyError;
 use crate::config::settings::Setting;
 use crate::config::{Config, ConfigError};
-use crate::domain::{GithubRef, Issue, IssueNumber, PullRequest};
+use crate::domain::{GithubRef, Issue, IssueNumber, MergeMethod, PrNumber, PullRequest};
 use crate::github::GhError;
 use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{CleanReport, RemoveOutcome, RemoveTarget, Sessions, StartOutcome, Works};
+use crate::session::{CleanReport, RemoveOutcome, RemoveTarget, SessionState, Sessions, StartOutcome, Works};
 use crate::transcript::Transcript;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
@@ -43,6 +43,13 @@ pub enum Msg {
     },
     Removed {
         issue: IssueNumber,
+        result: Result<RemoveOutcome, SessionError>,
+    },
+    RemovedAfterMerge {
+        pr: PrNumber,
+        method: MergeMethod,
+        issue: IssueNumber,
+        session: SessionState,
         result: Result<RemoveOutcome, SessionError>,
     },
     Cleaned(CleanReport),
@@ -135,6 +142,12 @@ pub enum WriteJob {
     /// Close the window, then remove the worktree and branch, unless they hold
     /// work that is not saved.
     Remove(RemoveTarget),
+    RemoveAfterMerge {
+        pr: PrNumber,
+        method: MergeMethod,
+        session: SessionState,
+        target: RemoveTarget,
+    },
     Clean(Vec<RemoveTarget>),
     /// Save one setting to the config file.
     SaveConfig {

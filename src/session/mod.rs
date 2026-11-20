@@ -205,6 +205,10 @@ impl Workspace {
         each_backend!(&self.mux, mux => ops::remove(self, mux, target))
     }
 
+    pub fn stop_and_remove(&self, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
+        each_backend!(&self.mux, mux => ops::stop_and_remove(self, mux, target))
+    }
+
     pub fn clean(&self, targets: &[RemoveTarget]) -> CleanReport {
         each_backend!(&self.mux, mux => ops::clean(self, mux, targets))
     }

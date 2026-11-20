@@ -109,7 +109,7 @@ pub(super) fn removed(state: &mut State, issue: IssueNumber, result: Result<Remo
     observe_now(state)
 }
 
-fn short_refusal(why: RemoveRefusal) -> String {
+pub(super) fn short_refusal(why: RemoveRefusal) -> String {
     match why {
         RemoveRefusal::Uncommitted => "uncommitted changes".to_string(),
         RemoveRefusal::Unpushed(n) if n.get() == 1 => "1 unpushed commit".to_string(),

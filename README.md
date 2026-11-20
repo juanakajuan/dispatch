@@ -131,7 +131,7 @@ Press `S` to change the order of the tab that you see. Each tab keeps its own or
 Press `m` twice on a PR, on an issue that has a PR, or on a session that has a PR. You do not need a session. The first press says what dispatch expects to do. The second press reads the PR from GitHub again, because the list can be a minute old. Then:
 
 - If the PR is a draft, the first `m` says that dispatch will mark it ready. The second `m` runs `gh pr ready <n>`, reads the PR again, and goes on with the rules below. dispatch does not undo this. If the PR then can not merge now, it stays ready, and the toast says so.
-- If the PR is clean, dispatch runs `gh pr merge <n> --<method> --match-head-commit <sha>` itself. No agent turn. The toast shows the result. If a push lands after the check, GitHub refuses the merge. If a session on the PR's branch is running or waits for you, dispatch stops it, the same as `x`. The worktree stays. If the repo uses a merge queue, the toast says the PR is in the queue, and the session stays open, because the PR can still drop out of the queue.
+- If the PR is clean, dispatch runs `gh pr merge <n> --<method> --match-head-commit <sha>` itself. No agent turn. The toast shows the result. If a push lands after the check, GitHub refuses the merge. If a session on the PR's branch is running or waits for you, dispatch stops it, the same as `x`. The worktree stays by default. With `remove_on_merge` set to `true`, dispatch also removes the worktree and branch if the worktree is clean and sits on the session branch with no commits beyond the merged PR head. A worktree with uncommitted changes or extra local commits stays intact. If the repo uses a merge queue, the toast says the PR is in the queue, and the session stays open, because the PR can still drop out of the queue.
 - If the PR has a merge conflict, failing checks, is behind a base that must be up to date, or is blocked by a branch rule, an agent fixes it. See [Fix a PR that can not merge](#fix-a-pr-that-can-not-merge).
 - If checks are still running, if a blocked PR has no checks yet, or if GitHub has not yet worked out if the PR can merge, dispatch does nothing and says so. Press `m` twice again later.
 
@@ -173,7 +173,8 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
   "detect_waiting": true,
   "claude_command": ["claude"],
   "icons": "unicode",
-  "multiplexer": "auto"
+  "multiplexer": "auto",
+  "remove_on_merge": false
 }
 ```
 
@@ -185,13 +186,15 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 
   With `"herdr-app"`, each issue runs as a terminal in the app, labelled so the app shows the issue's worktree as its own space under the repo. dispatch makes the worktree with `git worktree add`. Attach in the app switches the app to the issue's space, and dispatch keeps running in its own terminal. Outside the app, attach runs `hc attach` and takes over the current terminal. ctrl+\ detaches. A resume removes the exited terminal and starts a new one in the same space.
 
+- `remove_on_merge` is off by default (`false`). When enabled, a direct `m` merge stops the session on the PR's branch and removes its worktree and branch if the worktree is clean, sits on the session branch, and has no local commits beyond the merged PR head. If the worktree has uncommitted changes or extra local commits, the session window still closes, the worktree and branch stay intact, and one toast reports both. This setting applies at once to the next direct merge.
+
 An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 
 ### Settings menu
 
-Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and cycles `icons` and `multiplexer`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
+Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and `remove_on_merge`, and cycles `icons` and `multiplexer`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
 
-Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` applies at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
+Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` and `remove_on_merge` apply at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
 
 ## What Claude said
 

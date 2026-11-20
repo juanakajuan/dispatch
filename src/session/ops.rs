@@ -174,6 +174,15 @@ pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> 
     Ok(outcome)
 }
 
+pub(super) fn stop_and_remove<M: Mux>(
+    ws: &Workspace,
+    mux: &M,
+    target: &RemoveTarget,
+) -> Result<RemoveOutcome, SessionError> {
+    stop(ws, mux, target.issue)?;
+    remove(ws, mux, target)
+}
+
 pub(super) fn clean<M: Mux>(ws: &Workspace, mux: &M, targets: &[RemoveTarget]) -> CleanReport {
     let mut report = CleanReport::default();
     for target in targets {

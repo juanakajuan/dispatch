@@ -10,10 +10,11 @@ pub enum Setting {
     Icons,
     Multiplexer,
     ClaudeCommand,
+    RemoveOnMerge,
 }
 
-pub const SETTINGS: [Setting; 4] =
-    [Setting::DetectWaiting, Setting::Icons, Setting::Multiplexer, Setting::ClaudeCommand];
+pub const SETTINGS: [Setting; 5] =
+    [Setting::DetectWaiting, Setting::Icons, Setting::Multiplexer, Setting::ClaudeCommand, Setting::RemoveOnMerge];
 
 /// What `enter` does to a setting.
 #[derive(Debug, PartialEq, Eq)]
@@ -32,6 +33,7 @@ impl Setting {
             Setting::Icons => "icons",
             Setting::Multiplexer => "multiplexer",
             Setting::ClaudeCommand => "claude_command",
+            Setting::RemoveOnMerge => "remove_on_merge",
         }
     }
 
@@ -41,7 +43,7 @@ impl Setting {
                 Some("Applies to sessions you start or resume after this change.")
             }
             Setting::Multiplexer => Some("Applies the next time you start dispatch."),
-            Setting::Icons => None,
+            Setting::Icons | Setting::RemoveOnMerge => None,
         }
     }
 
@@ -51,6 +53,7 @@ impl Setting {
             Setting::Icons => config.icons.label().to_string(),
             Setting::Multiplexer => config.multiplexer.label().to_string(),
             Setting::ClaudeCommand => config.claude_command.words(),
+            Setting::RemoveOnMerge => config.remove_on_merge.label().to_string(),
         }
     }
 
@@ -61,6 +64,7 @@ impl Setting {
             Setting::Icons => config.icons = config.icons.next(),
             Setting::Multiplexer => config.multiplexer = config.multiplexer.next(),
             Setting::ClaudeCommand => return Change::Edit(config.claude_command.words()),
+            Setting::RemoveOnMerge => config.remove_on_merge = config.remove_on_merge.toggle(),
         }
         Change::Applied
     }
@@ -70,7 +74,7 @@ impl Setting {
     pub fn set_text(self, config: &mut Config, text: &str) -> Result<(), ConfigError> {
         match self {
             Setting::ClaudeCommand => config.claude_command = ClaudeCommand::from_words(text)?,
-            Setting::DetectWaiting | Setting::Icons | Setting::Multiplexer => {}
+            Setting::DetectWaiting | Setting::Icons | Setting::Multiplexer | Setting::RemoveOnMerge => {}
         }
         Ok(())
     }
@@ -81,6 +85,7 @@ impl Setting {
             Setting::Icons => json!(config.icons.label()),
             Setting::Multiplexer => json!(config.multiplexer.label()),
             Setting::ClaudeCommand => json!(config.claude_command.argv(&[])),
+            Setting::RemoveOnMerge => json!(config.remove_on_merge.as_bool()),
         }
     }
 }
@@ -138,7 +143,7 @@ pub fn save(setting: Setting, config: &Config) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Multiplexer;
+    use crate::config::{Multiplexer, RemoveOnMerge};
     use crate::glyphs::IconSet;
 
     fn parse_str(text: &str) -> Result<Config, ConfigError> {
@@ -206,6 +211,7 @@ mod tests {
             icons: IconSet::NerdFont,
             multiplexer: Multiplexer::Herdr,
             claude_command: ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid"),
+            remove_on_merge: RemoveOnMerge::On,
             ..Config::default()
         };
         let mut text: Option<String> = None;

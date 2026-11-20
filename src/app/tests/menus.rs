@@ -110,6 +110,19 @@ fn enter_cycles_the_icons_and_saves_them() {
 }
 
 #[test]
+fn enter_toggles_remove_on_merge_and_saves_it() {
+    let (mut state, _) = app();
+    open_menu_at(&mut state, Setting::RemoveOnMerge);
+    let cmds = press(&mut state, code(KeyCode::Enter));
+    assert_eq!(state.config.remove_on_merge, crate::config::RemoveOnMerge::On);
+    let [(Setting::RemoveOnMerge, saved)] = saves(&cmds)[..] else { panic!("one save: {}", cmds.len()) };
+    assert_eq!(saved.remove_on_merge, crate::config::RemoveOnMerge::On);
+    let cmds = press(&mut state, code(KeyCode::Enter));
+    assert_eq!(state.config.remove_on_merge, crate::config::RemoveOnMerge::Off);
+    assert_eq!(saves(&cmds)[0].1.remove_on_merge, crate::config::RemoveOnMerge::Off);
+}
+
+#[test]
 fn an_invalid_claude_command_shows_an_error_and_keeps_editing() {
     for bad in ["claude 'oops", "''", ""] {
         let (mut state, _) = app();

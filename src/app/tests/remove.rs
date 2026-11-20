@@ -269,3 +269,137 @@ fn cleaned_reports_counts_and_levels_and_observes_sessions() {
         Level::Error,
     );
 }
+
+#[test]
+fn remove_on_merge_emits_remove_after_merge_with_fresh_head_oid_for_session_on_pr() {
+    use crate::config::RemoveOnMerge;
+    use crate::merge::job::DraftStep;
+    use crate::merge::{Consent, MergeAsk};
+
+    let ask = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
+    let msg = || Msg::Merged {
+        ask,
+        run: MergeRun {
+            draft: DraftStep::WasReady,
+            result: Ok(MergeOutcome::Merged {
+                method: MergeMethod::Squash,
+                head_oid: CommitOid::new("fresh-sha".to_string()),
+            }),
+        },
+    };
+    for session_state in [SessionState::Running, SessionState::NeedsYou, SessionState::Exited] {
+        let (mut state, _) = app();
+        state.config.remove_on_merge = RemoveOnMerge::On;
+        state.sessions.insert(IssueNumber(3), session(3, session_state));
+        let cmds = press(&mut state, msg());
+        assert_eq!(toast(&state), "Merged PR #10 (squash), removing #3");
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge {
+                    pr: PrNumber(10),
+                    method: MergeMethod::Squash,
+                    session: s,
+                    target: RemoveTarget { issue: IssueNumber(3), merged_head: Some(oid) },
+                })) if *s == session_state && oid.as_str() == "fresh-sha"
+            )),
+            "missing RemoveAfterMerge for {session_state:?}"
+        );
+    }
+}
+
+#[test]
+fn remove_on_merge_does_not_stop_or_remove_when_queued_or_no_session() {
+    use crate::config::RemoveOnMerge;
+    use crate::merge::job::DraftStep;
+    use crate::merge::{Consent, MergeAsk};
+
+    let ask = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
+    let has_stop_or_remove = |cmds: &[Cmd]| {
+        cmds.iter().any(|c| {
+            matches!(
+                c,
+                Cmd::Job(Job::Write(WriteJob::Stop(_) | WriteJob::Remove(_) | WriteJob::RemoveAfterMerge { .. }))
+            )
+        })
+    };
+
+    let (mut state, _) = app();
+    state.config.remove_on_merge = RemoveOnMerge::On;
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    let queued = press(
+        &mut state,
+        Msg::Merged { ask, run: MergeRun { draft: DraftStep::WasReady, result: Ok(MergeOutcome::Queued) } },
+    );
+    assert!(!has_stop_or_remove(&queued));
+
+    let (mut state, _) = app();
+    state.config.remove_on_merge = RemoveOnMerge::On;
+    let no_session = press(
+        &mut state,
+        Msg::Merged {
+            ask,
+            run: MergeRun {
+                draft: DraftStep::WasReady,
+                result: Ok(MergeOutcome::Merged {
+                    method: MergeMethod::Squash,
+                    head_oid: CommitOid::new("fresh-sha".to_string()),
+                }),
+            },
+        },
+    );
+    assert!(!has_stop_or_remove(&no_session));
+}
+
+#[test]
+fn removed_after_merge_reports_outcomes_and_observes_sessions() {
+    let check =
+        |session: SessionState, result: Result<RemoveOutcome, SessionError>, want_text: &str, want_level: Level| {
+            let (mut state, _) = app();
+            let cmds = press(
+                &mut state,
+                Msg::RemovedAfterMerge {
+                    pr: PrNumber(10),
+                    method: MergeMethod::Squash,
+                    issue: IssueNumber(3),
+                    session,
+                    result,
+                },
+            );
+            assert_eq!(toast(&state), want_text);
+            assert_eq!(level(&state), Some(want_level));
+            assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::ObserveSessions))]));
+        };
+
+    check(
+        SessionState::Running,
+        Ok(RemoveOutcome::Removed),
+        "Merged PR #10 (squash) and removed #3's worktree and branch",
+        Level::Info,
+    );
+    check(
+        SessionState::Running,
+        Ok(RemoveOutcome::Refused(RemoveRefusal::Uncommitted)),
+        "Merged PR #10 (squash) and stopped #3's session. Kept worktree (uncommitted changes).",
+        Level::Info,
+    );
+    check(
+        SessionState::Exited,
+        Ok(RemoveOutcome::Refused(RemoveRefusal::Uncommitted)),
+        "Merged PR #10 (squash) and closed #3's window. Kept worktree (uncommitted changes).",
+        Level::Info,
+    );
+    check(
+        SessionState::NeedsYou,
+        Ok(RemoveOutcome::Refused(unpushed(1))),
+        "Merged PR #10 (squash) and stopped #3's session. Kept worktree (1 unpushed commit).",
+        Level::Info,
+    );
+    check(
+        SessionState::Running,
+        Err(git_error("boom")),
+        "Merged PR #10 (squash), but removing #3 failed: git failed with code 128: boom",
+        Level::Error,
+    );
+}

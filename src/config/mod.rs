@@ -13,7 +13,8 @@
 //!   "detect_waiting": true,
 //!   "claude_command": ["claude"],
 //!   "icons": "unicode",
-//!   "multiplexer": "auto"
+//!   "multiplexer": "auto",
+//!   "remove_on_merge": false
 //! }
 //! ```
 
@@ -140,6 +141,40 @@ impl Multiplexer {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(from = "bool")]
+pub enum RemoveOnMerge {
+    #[default]
+    Off,
+    On,
+}
+
+impl From<bool> for RemoveOnMerge {
+    fn from(remove: bool) -> Self {
+        if remove { RemoveOnMerge::On } else { RemoveOnMerge::Off }
+    }
+}
+
+impl RemoveOnMerge {
+    pub fn toggle(self) -> RemoveOnMerge {
+        match self {
+            RemoveOnMerge::Off => RemoveOnMerge::On,
+            RemoveOnMerge::On => RemoveOnMerge::Off,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            RemoveOnMerge::Off => "off",
+            RemoveOnMerge::On => "on",
+        }
+    }
+
+    pub fn as_bool(self) -> bool {
+        self == RemoveOnMerge::On
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub github_refresh: Duration,
@@ -151,6 +186,7 @@ pub struct Config {
     /// Which glyph set marks states. `NerdFont` needs a Nerd Font in the terminal.
     pub icons: IconSet,
     pub multiplexer: Multiplexer,
+    pub remove_on_merge: RemoveOnMerge,
 }
 
 impl Default for Config {
@@ -161,6 +197,7 @@ impl Default for Config {
             claude_command: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
             icons: IconSet::default(),
             multiplexer: Multiplexer::default(),
+            remove_on_merge: RemoveOnMerge::default(),
         }
     }
 }
@@ -197,6 +234,7 @@ struct ConfigFile {
     _split: Option<serde::de::IgnoredAny>,
     icons: Option<IconSet>,
     multiplexer: Option<Multiplexer>,
+    remove_on_merge: Option<RemoveOnMerge>,
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -215,6 +253,9 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     }
     if let Some(multiplexer) = file.multiplexer {
         config.multiplexer = multiplexer;
+    }
+    if let Some(remove_on_merge) = file.remove_on_merge {
+        config.remove_on_merge = remove_on_merge;
     }
     Ok(config)
 }
@@ -270,6 +311,7 @@ mod tests {
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command.argv(&["x".to_string()]), ["claude", "x"]);
         assert_eq!(c.icons, IconSet::Unicode);
+        assert_eq!(c.remove_on_merge, RemoveOnMerge::Off);
     }
 
     #[test]
@@ -277,16 +319,20 @@ mod tests {
         let c = parse_str("{}").expect("valid");
         assert!(c.detect_waiting);
         assert_eq!(c.claude_command, Config::default().claude_command);
+        assert_eq!(c.remove_on_merge, RemoveOnMerge::Off);
     }
 
     #[test]
     fn fields_replace_defaults() {
-        let c = parse_str(r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"icons":"nerdfont"}"#)
-            .expect("valid");
+        let c = parse_str(
+            r#"{"detect_waiting":false,"claude_command":["sh","-c","echo","_"],"icons":"nerdfont","remove_on_merge":true}"#,
+        )
+        .expect("valid");
         assert!(!c.detect_waiting);
         assert_eq!(c.claude_command.program, "sh");
         assert_eq!(c.claude_command.args, ["-c", "echo", "_"]);
         assert_eq!(c.icons, IconSet::NerdFont);
+        assert_eq!(c.remove_on_merge, RemoveOnMerge::On);
     }
 
     #[test]
@@ -297,6 +343,7 @@ mod tests {
         assert!(matches!(parse_str(r#"{"claude_command":[" "]}"#), Err(ConfigError::BadCommand(_))));
         assert!(matches!(parse_str(r#"{"detect_waiting":"yes"}"#), Err(ConfigError::Json { .. })));
         assert!(matches!(parse_str(r#"{"icons":"emoji"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"remove_on_merge":"yes"}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]

@@ -36,12 +36,16 @@ fn merged_target(issue: u32, sha: &str) -> RemoveTarget {
 fn install_world(base: &Path, tree: Tree, unpushed: u32, window: Window) {
     let base = base.to_path_buf();
     let mut git = GitWorld::started();
+    let mut open = window == Window::Open;
     let dir = base.join("orbit/.claude/worktrees/142");
     fake::install(move |call| {
         if let Some(answer) = git.answer(call, &base) {
             answer
         } else if call.starts_with("tmux list-windows") {
-            Ok(if window == Window::Open { format!("@4\t0\t{}\t\n", dir.display()) } else { String::new() })
+            Ok(if open { format!("@4\t0\t{}\t\n", dir.display()) } else { String::new() })
+        } else if call.starts_with("tmux kill-window") {
+            open = false;
+            Ok(String::new())
         } else if call.contains("status --porcelain") {
             Ok(if tree == Tree::Dirty { " M src/lib.rs\n".to_string() } else { String::new() })
         } else if call.starts_with("git rev-list") {
@@ -340,4 +344,29 @@ fn clean_removes_clean_sessions_skips_refusals_and_errors_without_aborting_and_p
         [&format!("git worktree remove {}", dir142.display()), "git branch -D fix/142-x", "git worktree prune",]
     );
     assert_eq!(calls.iter().filter(|c| c.as_str() == "git worktree prune").count(), 1);
+}
+
+#[test]
+fn stop_and_remove_stops_window_and_removes_clean_squash_merged_session() {
+    let (ws, base) = started("stop-remove-clean", Tree::Clean, 0, Window::Open);
+    let got = ws.stop_and_remove(&merged_target(142, HEAD_SHA)).expect("removed");
+    assert_eq!(got, RemoveOutcome::Removed);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    assert_eq!(
+        changed(&fake::calls()),
+        [
+            "tmux kill-window -t @4",
+            &format!("git worktree remove {}", dir.display()),
+            "git branch -D fix/142-x",
+            "git worktree prune",
+        ]
+    );
+}
+
+#[test]
+fn stop_and_remove_stops_window_even_when_worktree_is_dirty() {
+    let (ws, _) = started("stop-remove-dirty", Tree::Dirty, 0, Window::Open);
+    let got = ws.stop_and_remove(&merged_target(142, HEAD_SHA)).expect("an answer");
+    assert_eq!(got, RemoveOutcome::Refused(RemoveRefusal::Uncommitted));
+    assert_eq!(changed(&fake::calls()), ["tmux kill-window -t @4"]);
 }
