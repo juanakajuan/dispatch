@@ -317,7 +317,14 @@ const fn hint(keys: &'static str, desc: &'static str, key: Key) -> Hint {
 pub fn footer_hints(state: &State) -> Vec<Hint> {
     let (enter, esc) = (Key::Code(KeyCode::Enter), Key::Code(KeyCode::Esc));
     match &state.focus {
-        Focus::Filter => vec![hint("enter", "keep", enter), hint("esc", "clear", esc)],
+        Focus::Filter if state.config.saved_filters.is_empty() => {
+            vec![hint("enter", "keep", enter), hint("esc", "clear", esc)]
+        }
+        Focus::Filter => vec![
+            hint("enter", "keep", enter),
+            hint("esc", "clear", esc),
+            hint("↑↓", "saved filters", Key::Code(KeyCode::Down)),
+        ],
         Focus::Message { .. } => vec![hint("enter", "send", enter), hint("esc", "cancel", esc)],
         Focus::Dialog(_) => vec![
             hint("ctrl-s", "start", Key::Ctrl('s')),
@@ -408,7 +415,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
             return cmds;
         }
         Action::Filter => state.focus = Focus::Filter,
-        Action::ClearFilter => state.filter.clear(),
+        Action::ClearFilter => state.filter_mut().clear(),
         Action::Sort => {
             // Pin the shown row first, so the first-row fallback can not move it.
             if let Some(key) = selected_row(state) {

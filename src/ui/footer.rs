@@ -38,7 +38,7 @@ const CLEAR_FILTER: &str = "esc to clear";
 /// The prompt opens the filter on a click, and its `esc to clear` clears it.
 pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
     let mut spans = vec![span("❯ ", palette::ACCENT)];
-    match (&state.focus, state.filter.is_empty()) {
+    match (&state.focus, state.filter().is_empty()) {
         (Focus::Filter, _) => {
             spans.extend(filter_spans(state, Style::default()));
             spans.push(span("▏", palette::ACCENT));
@@ -67,7 +67,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
         hits.targets.push((area, HitTarget::Key(Key::Char('/'))));
     }
     let clear_w = cells(CLEAR_FILTER);
-    if !state.filter.is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
+    if !state.filter().is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
         let clear = cell_rect(area, usize::from(area.width) - clear_w, clear_w);
         frame.render_widget(Paragraph::new(span(CLEAR_FILTER, palette::DIM)), clear);
         hits.targets.push((clear, HitTarget::Key(Key::Code(KeyCode::Esc))));
@@ -78,7 +78,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
 /// which words filter by a field. A term key with no value yet is dim, and
 /// `assignee:@me` is red when dispatch could not read the user's login.
 fn filter_spans(state: &State, text: Style) -> Vec<Span<'static>> {
-    let raw = state.filter.as_str();
+    let raw = state.filter();
     let mut spans = Vec::new();
     let mut at = 0;
     for t in tokens(raw) {

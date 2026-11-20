@@ -120,15 +120,18 @@ pub struct Tabs {
     pub sessions: TabState<IssueNumber, SessionSort>,
 }
 
-/// A tab's selected row and sort mode. Selection stores the key, see `RowKey`.
+/// A tab's selected row, sort mode, and `/` filter. Selection stores the
+/// key, see `RowKey`. Each tab has its own filter, so a filter on one tab
+/// never hides rows on another.
 pub struct TabState<K, S> {
     pub selected: Option<K>,
     pub sort: S,
+    pub filter: String,
 }
 
 impl<K, S: Default> Default for TabState<K, S> {
     fn default() -> Self {
-        TabState { selected: None, sort: S::default() }
+        TabState { selected: None, sort: S::default(), filter: String::new() }
     }
 }
 
@@ -147,6 +150,22 @@ impl Tabs {
             Tab::Issues => self.issues.sort.label(),
             Tab::Prs => self.prs.sort.label(),
             Tab::Sessions => self.sessions.sort.label(),
+        }
+    }
+
+    pub fn filter(&self, tab: Tab) -> &str {
+        match tab {
+            Tab::Issues => &self.issues.filter,
+            Tab::Prs => &self.prs.filter,
+            Tab::Sessions => &self.sessions.filter,
+        }
+    }
+
+    pub(super) fn filter_mut(&mut self, tab: Tab) -> &mut String {
+        match tab {
+            Tab::Issues => &mut self.issues.filter,
+            Tab::Prs => &mut self.prs.filter,
+            Tab::Sessions => &mut self.sessions.filter,
         }
     }
 
@@ -171,12 +190,24 @@ pub(super) fn go_to_issue_of_pr(state: &mut State) {
     let Some(RowKey::Pr(n)) = selected_row(state) else { return };
     let closes = state.prs.items.iter().find(|p| p.number == n).and_then(|p| p.closes.first().copied());
     match closes {
-        Some(issue) => {
-            state.tab = Tab::Issues;
-            state.tabs.issues.selected = Some(issue);
-            state.filter.clear();
-        }
+        Some(issue) => jump_to(state, RowKey::Issue(issue)),
         None => toast::info(state, format!("PR {n} closes no issue.")),
+    }
+}
+
+/// Shows the tab of `key` with `key` selected. That tab's filter is cleared
+/// only when it would hide `key`. The filter of the tab the jump came from
+/// stays.
+pub(super) fn jump_to(state: &mut State, key: RowKey) {
+    let tab = match key {
+        RowKey::Issue(_) => Tab::Issues,
+        RowKey::Pr(_) => Tab::Prs,
+        RowKey::Session(_) => Tab::Sessions,
+    };
+    state.tab = tab;
+    state.tabs.select(key);
+    if !visible_rows(state).contains(&key) {
+        state.tabs.filter_mut(tab).clear();
     }
 }
 
@@ -213,7 +244,7 @@ pub fn visible_rows(state: &State) -> Vec<RowKey> {
 }
 
 pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
-    let query = Query::parse(&state.filter, state.viewer.login());
+    let query = Query::parse(state.filter(), state.viewer.login());
     let activity = |n| activity(state, n);
     match state.tab {
         Tab::Issues => {

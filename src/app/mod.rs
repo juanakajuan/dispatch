@@ -109,7 +109,6 @@ pub struct State {
     /// Issues marked with Space for a batch start.
     pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
-    pub filter: String,
     pub viewer: Viewer,
     pub focus: Focus,
     pub toast: Option<Toast>,
@@ -139,7 +138,6 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         starting: BTreeSet::new(),
         marked: BTreeSet::new(),
         tabs: Tabs::default(),
-        filter: String::new(),
         viewer: Viewer::Unknown,
         focus: Focus::List,
         toast: None,
@@ -164,6 +162,17 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         Some(Cmd::Job(msg::Job::Read(ReadJob::FetchViewer))),
     ];
     (state, cmds.into_iter().flatten().collect())
+}
+
+impl State {
+    /// The `/` filter of the shown tab.
+    pub fn filter(&self) -> &str {
+        self.tabs.filter(self.tab)
+    }
+
+    fn filter_mut(&mut self) -> &mut String {
+        self.tabs.filter_mut(self.tab)
+    }
 }
 
 /// The reducer.

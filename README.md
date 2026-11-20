@@ -91,7 +91,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
-| `/` | Filter. Enter keeps it, Esc clears it |
+| `/` | Filter the tab. Enter keeps it, Esc clears it. Up and Down put your saved filters in the prompt. See [Filter](#filter) |
 | `S` | Change the sort order of the tab. See [Order](#order) |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
@@ -102,6 +102,16 @@ In the dialog: Tab and Shift-Tab change the field, Left and Right change the mod
 Mouse: every action works with a click. A click selects a row or a tab, and a double-click acts like Enter on the row. A click on a key bar entry, the `S sort` footer, or the filter prompt presses that key. In the start dialog, click a field to focus it, a mode to pick it, a text input to place the cursor, and `Start` or `Cancel`. In the settings menu, click a row to select it and click it again to change it. `esc ✕` closes a menu. In the keys menu (`?`), click an entry to close it and run that binding, which reaches settings, refresh and the rest. The wheel moves the selection and scrolls the menus. Keyboard bindings are unchanged.
 
 A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+
+## Filter
+
+Press `/` and type to filter the tab that you see. Free text matches the row's number, title, and more. The terms `label:bug`, `assignee:octo`, `assignee:@me`, and `milestone:v1` match one field exactly. Enter keeps the filter. Esc clears it.
+
+Each tab keeps its own filter. A filter on the Issues tab does not hide pull requests or sessions, and when you go back to a tab, its filter is still there. Another tab with a filter shows `/` after its count, for example ` 2  Pull requests 10 /`.
+
+Enter on an issue goes to its session, and Enter on a PR goes to its issue. The filter of the tab you leave stays. If the filter of the tab you go to hides the row, dispatch clears that filter.
+
+To keep filters that you use often, add them to `saved_filters` in the config file (see [Config](#config)). In the filter prompt, Down puts the next saved filter in the prompt, and Up puts the one before. At the end of the list, it goes back to the start. Edit the filter or press Enter to keep it.
 
 ## Order
 
@@ -174,7 +184,8 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
   "claude_command": ["claude"],
   "icons": "unicode",
   "multiplexer": "auto",
-  "remove_on_merge": false
+  "remove_on_merge": false,
+  "saved_filters": []
 }
 ```
 
@@ -187,6 +198,8 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
   With `"herdr-app"`, each issue runs as a terminal in the app, labelled so the app shows the issue's worktree as its own space under the repo. dispatch makes the worktree with `git worktree add`. Attach in the app switches the app to the issue's space, and dispatch keeps running in its own terminal. Outside the app, attach runs `hc attach` and takes over the current terminal. ctrl+\ detaches. A resume removes the exited terminal and starts a new one in the same space.
 
 - `remove_on_merge` is off by default (`false`). When enabled, a direct `m` merge stops the session on the PR's branch and removes its worktree and branch if the worktree is clean, sits on the session branch, and has no local commits beyond the merged PR head. If the worktree has uncommitted changes or extra local commits, the session window still closes, the worktree and branch stay intact, and one toast reports both. This setting applies at once to the next direct merge.
+
+- `saved_filters` is a list of filters, for example `["assignee:@me", "label:bug"]`. It is empty by default. Up and Down in the `/` prompt go through them in this order. A filter that is empty or only spaces is an error. The settings menu does not change this list. Edit the file, then start dispatch again.
 
 An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 

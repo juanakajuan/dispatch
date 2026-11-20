@@ -1,7 +1,7 @@
 use super::batch::open_batch;
 use super::dialog::open_dialog;
 use super::feed::observe_now;
-use super::list::{RowKey, Tab, current_session, selected_row};
+use super::list::{RowKey, Tab, current_session, jump_to, selected_row};
 use super::msg::{Cmd, Job, WriteJob};
 use super::toast;
 use super::{Focus, State};
@@ -41,9 +41,7 @@ pub(super) fn begin_start(state: &mut State, req: StartRequest) -> Cmd {
 }
 
 pub(super) fn goto_session(state: &mut State, n: IssueNumber) {
-    state.tab = Tab::Sessions;
-    state.tabs.sessions.selected = Some(n);
-    state.filter.clear();
+    jump_to(state, RowKey::Session(n));
 }
 
 pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
