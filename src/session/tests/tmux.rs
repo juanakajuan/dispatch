@@ -2,7 +2,7 @@ use super::{GitWorld, br, launch, req, workspace};
 use crate::domain::IssueNumber;
 use crate::proc::fake;
 use crate::session::mux::Backend;
-use crate::session::{AttachPlan, SessionState, tmux};
+use crate::session::{AttachPlan, AttachTo, SessionState, tmux};
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -185,14 +185,14 @@ fn attach_inside_switches_and_outside_suspends() {
     install_world(base.clone(), Rc::clone(&sim));
     let id = IssueNumber(142);
     assert_eq!(
-        ws.attach_plan(id).expect("plan"),
+        ws.attach_plan(id, AttachTo::Claude).expect("plan"),
         AttachPlan::Switch(
             ["tmux", "select-window", "-t", "@4", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
         )
     );
     ws.mux = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
     assert_eq!(
-        ws.attach_plan(id).expect("plan"),
+        ws.attach_plan(id, AttachTo::Claude).expect("plan"),
         AttachPlan::Suspend(
             ["tmux", "select-window", "-t", "@4", ";", "attach-session", "-t", "=dispatch-orbit"]
                 .map(String::from)
@@ -200,6 +200,61 @@ fn attach_inside_switches_and_outside_suspends() {
         )
     );
     sim.borrow_mut().window = false;
-    let gone = ws.attach_plan(id).expect_err("the window is gone");
+    let gone = ws.attach_plan(id, AttachTo::Claude).expect_err("the window is gone");
     assert_eq!(gone.to_string(), "#142 has no running session");
+}
+
+#[test]
+fn shell_opens_an_untagged_window_and_attaches_to_it() {
+    let base = temp_dir("tmux-shell");
+    let mut ws = workspace(&base);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let listed = dir.clone();
+    fake::install(move |call| {
+        let mut git = GitWorld::started();
+        if let Some(answer) = git.answer(call, &base) {
+            answer
+        } else if call.starts_with("tmux list-windows") {
+            Ok(format!("@4\t1\t{}\t\n", listed.display()))
+        } else if call.starts_with("tmux new-window") {
+            Ok("@9\n".to_string())
+        } else {
+            Ok(String::new())
+        }
+    });
+    let id = IssueNumber(142);
+    let plan = ws.attach_plan(id, AttachTo::Shell).expect("plan");
+    assert_eq!(
+        plan,
+        AttachPlan::Switch(
+            ["tmux", "select-window", "-t", "@9", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
+        ),
+        "the new window, not Claude's dead one, though Claude exited"
+    );
+    let calls = fake::calls();
+    let new = calls.iter().find(|c| c.starts_with("tmux new-window")).expect("a new window");
+    assert_eq!(*new, format!("tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 shell", dir.display()));
+    let sets: Vec<&String> = calls.iter().filter(|c| c.starts_with("tmux set-option")).collect();
+    assert_eq!(
+        sets,
+        ["tmux set-option -w -t @9 remain-on-exit off"],
+        "no tag, so observe does not list it, and it closes on exit even when remain-on-exit is on globally"
+    );
+
+    ws.mux = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
+    let plan = ws.attach_plan(id, AttachTo::Shell).expect("plan");
+    assert!(matches!(plan, AttachPlan::Suspend(_)));
+    let calls = fake::calls();
+    assert!(calls.iter().any(|c| c.starts_with("tmux new-window -d -t =dispatch-orbit: -P")), "{calls:?}");
+}
+
+#[test]
+fn shell_for_an_issue_with_no_session_is_refused_before_any_window() {
+    let base = temp_dir("tmux-shell-none");
+    let ws = workspace(&base);
+    install_world(base.clone(), Rc::new(RefCell::new(Sim::default())));
+    let err = ws.attach_plan(IssueNumber(142), AttachTo::Shell).expect_err("no session");
+    assert_eq!(err.to_string(), "no session for #142");
+    assert!(!fake::calls().iter().any(|c| c.starts_with("tmux new-")));
 }

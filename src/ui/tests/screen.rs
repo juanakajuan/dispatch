@@ -178,6 +178,26 @@ fn tab_keys_look_like_key_hints_and_counts_like_counts() {
 }
 
 #[test]
+fn another_tab_with_a_filter_shows_a_slash_after_its_count() {
+    let mut state = full_state();
+    state.tabs.issues.filter = "retry".to_string();
+    state.tabs.prs.filter = "fix".to_string();
+    let buf = frame(&mut state, 120, 20);
+    let row = text(&buf).lines().nth(1).expect("tab row").to_string();
+    assert!(row.contains(" 1  Issues 2 "), "the shown tab's filter is in the prompt, not the tab\n{row}");
+    assert!(!row.contains("Issues 2 /"), "{row}");
+    assert!(row.contains("Pull requests 1 /"), "{row}");
+    assert!(!row.contains("Sessions 1 /"), "no filter, no slash\n{row}");
+    let x = u16::try_from(cells(&row[..row.find("1 /").expect("slash") + 2])).expect("x");
+    assert_eq!(buf[(x, 1)].fg, palette::BLUE, "the slash is in the accent colour");
+    assert_eq!(
+        state.hits.targets.iter().find(|(r, _)| r.contains((x, 1).into())).map(|(_, t)| *t),
+        Some(HitTarget::Tab(Tab::Prs)),
+        "a click on the slash selects its tab"
+    );
+}
+
+#[test]
 fn a_failed_feed_shows_on_the_message_row_above_the_prompt() {
     let mut state = full_state();
     let error = crate::github::GhError::Run(crate::proc::fake::fail("gh", 1, "rate limited"));

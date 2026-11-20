@@ -112,8 +112,8 @@ fn the_sort_applies_to_the_filtered_rows_and_typing_s_in_the_filter_is_text() {
     press(&mut state, key('/'));
     press(&mut state, key('j'));
     press(&mut state, shift_s());
-    assert_eq!(state.filter, "jS");
-    state.filter = "j".to_string();
+    assert_eq!(state.filter(), "jS");
+    *state.filter_mut() = "j".to_string();
     press(&mut state, code(KeyCode::Enter));
     assert_eq!(numbers(&state), [3, 1]);
     press(&mut state, shift_s());

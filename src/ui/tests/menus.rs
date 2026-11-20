@@ -212,3 +212,42 @@ fn the_summary_shows_all_of_what_claude_said_wrapped_and_scrolled() {
     send(&mut state, KeyCode::Esc);
     assert!(matches!(state.focus, Focus::List));
 }
+
+#[test]
+fn the_diff_overlay_reads_then_shows_colored_lines_and_untracked_files() {
+    use crate::app::DiffBody;
+    use crate::session::Diff;
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('3'));
+    send(&mut state, KeyCode::Char('d'));
+    let screen = draw_into(&mut state, 60, 20);
+    for want in [" #3 diff ", "Reading the diff…", "esc ✕"] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+
+    let patch = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n context\n";
+    let long = format!("+{}", "x".repeat(200));
+    let patch = format!("{patch}{long}\n");
+    let diff = Diff { untracked: vec!["notes.txt".to_string()], patch };
+    state.focus = Focus::Diff { issue: IssueNumber(3), scroll: 0, body: DiffBody::Read(diff) };
+    let buf = frame(&mut state, 60, 20);
+    let screen = text(&buf);
+    assert!(!screen.contains("Reading the diff"), "{screen}");
+    let fg_of = |needle: &str| {
+        let (x, y) = find(&screen, needle);
+        buf[(x, y)].fg
+    };
+    assert_eq!(fg_of("untracked: notes.txt"), palette::FG);
+    assert_eq!(fg_of("+new"), palette::GREEN);
+    assert_eq!(fg_of("-old"), palette::RED);
+    assert_eq!(fg_of("@@ -1 +1 @@"), palette::BLUE);
+    assert_eq!(fg_of("+++ b/f"), palette::FG, "a file header is not an added line");
+    assert_eq!(fg_of("--- a/f"), palette::FG, "a file header is not a removed line");
+    assert_eq!(fg_of("context"), palette::FG);
+    assert!(screen.contains('…'), "a long line is cut, not wrapped\n{screen}");
+    assert!(!screen.contains("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+    assert_eq!(state.hits.max_scroll, 0, "it fits");
+
+    let _ = draw_into(&mut state, 60, 8);
+    assert!(state.hits.max_scroll > 0, "a short box scrolls");
+}

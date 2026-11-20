@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::Harness;
 use crate::domain::OriginRef;
-use crate::session::error::StartWarning;
+use crate::session::error::{AttachError, StartWarning};
 use crate::transcript::Transcript;
 
 #[test]
@@ -13,10 +13,13 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
 
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('a'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach { issue: IssueNumber(3), to: AttachTo::Claude }]));
 
     state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
-    assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
+    assert!(
+        matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach { to: AttachTo::Claude, .. }]),
+        "needs-you attaches too"
+    );
 
     state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
     state.transcripts.insert(IssueNumber(3), Transcript { said: None });
@@ -133,4 +136,27 @@ fn a_sent_result_shows_a_toast() {
     let result = Err(SessionError::NotRunning(IssueNumber(3)));
     press(&mut state, Msg::Sent { issue: IssueNumber(3), kind: SendKind::MergeFix, result });
     assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Merge request to #3 failed: #3 has no running session"));
+}
+
+#[test]
+fn bang_opens_a_shell_for_a_live_or_exited_session() {
+    let (mut state, _) = app();
+    assert!(press(&mut state, key('!')).is_empty());
+    assert_eq!(toast(&state), "No session for this issue. Press s to start one.");
+    for st in [SessionState::Running, SessionState::Exited] {
+        state.sessions.insert(IssueNumber(3), session(3, st));
+        let cmds = press(&mut state, key('!'));
+        assert!(matches!(cmds.as_slice(), [Cmd::Attach { issue: IssueNumber(3), to: AttachTo::Shell }]));
+    }
+}
+
+#[test]
+fn an_attach_failure_keeps_its_text_and_a_shell_failure_says_so() {
+    let (mut state, _) = app();
+    let failed = || Err(AttachError::EmptyCommand);
+    update(&mut state, Msg::Attached { issue: IssueNumber(3), to: AttachTo::Claude, result: failed() });
+    assert_eq!(toast(&state), "attach failed: empty attach command");
+    update(&mut state, Msg::Attached { issue: IssueNumber(3), to: AttachTo::Shell, result: failed() });
+    assert_eq!(toast(&state), "Opening a shell in #3 failed: empty attach command");
+    assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Error));
 }

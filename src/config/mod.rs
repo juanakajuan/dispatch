@@ -15,7 +15,8 @@
 //!   "command": ["claude"],
 //!   "icons": "unicode",
 //!   "multiplexer": "auto",
-//!   "remove_on_merge": false
+//!   "remove_on_merge": false,
+//!   "saved_filters": ["assignee:@me", "label:bug"]
 //! }
 //! ```
 //!
@@ -117,6 +118,9 @@ pub struct Config {
     pub icons: IconSet,
     pub multiplexer: Multiplexer,
     pub remove_on_merge: RemoveOnMerge,
+    /// Filters that `Up` and `Down` put in the `/` prompt, in file order.
+    /// Each one has text. The settings menu does not edit them.
+    pub saved_filters: Vec<String>,
 }
 
 impl Default for Config {
@@ -129,6 +133,7 @@ impl Default for Config {
             icons: IconSet::default(),
             multiplexer: Multiplexer::default(),
             remove_on_merge: RemoveOnMerge::default(),
+            saved_filters: Vec::new(),
         }
     }
 }
@@ -158,6 +163,7 @@ pub enum ConfigError {
     BadCommand(&'static str),
     /// Two keys that cannot both be set.
     Conflict(&'static str),
+    BlankSavedFilter,
     Write {
         path: PathBuf,
         source: std::io::Error,
@@ -172,6 +178,7 @@ impl fmt::Display for ConfigError {
             ConfigError::Json { path, message } => write!(f, "invalid config {}: {message}", path.display()),
             ConfigError::BadCommand(why) => write!(f, "invalid config: command {why}"),
             ConfigError::Conflict(why) => write!(f, "invalid config: {why}"),
+            ConfigError::BlankSavedFilter => f.write_str("invalid config: saved_filters has an empty filter"),
             ConfigError::Write { path, source } => write!(f, "cannot write {}: {source}", path.display()),
             ConfigError::NoConfigDir => f.write_str("cannot save: neither XDG_CONFIG_HOME nor HOME is set"),
         }
@@ -193,6 +200,7 @@ struct ConfigFile {
     icons: Option<IconSet>,
     multiplexer: Option<Multiplexer>,
     remove_on_merge: Option<RemoveOnMerge>,
+    saved_filters: Option<Vec<String>>,
 }
 
 /// Pure: config text to `Config`. `path` only labels errors.
@@ -224,6 +232,12 @@ pub fn parse(text: &str, path: &Path) -> Result<Config, ConfigError> {
     }
     if let Some(remove_on_merge) = file.remove_on_merge {
         config.remove_on_merge = remove_on_merge;
+    }
+    if let Some(filters) = file.saved_filters {
+        if filters.iter().any(|f| f.trim().is_empty()) {
+            return Err(ConfigError::BlankSavedFilter);
+        }
+        config.saved_filters = filters;
     }
     Ok(config)
 }
@@ -347,6 +361,20 @@ mod tests {
         for text in [r#"{"claude_command":["a"],"command":["b"]}"#, r#"{"harness":"codex","claude_command":["a"]}"#] {
             assert!(matches!(parse_str(text), Err(ConfigError::Conflict(_))), "{text}");
         }
+    }
+
+    #[test]
+    fn saved_filters_load_in_file_order_and_reject_a_blank_one() {
+        assert!(parse_str("{}").expect("loads").saved_filters.is_empty());
+        let c = parse_str(r#"{"saved_filters":["assignee:@me","label:bug"]}"#).expect("loads");
+        assert_eq!(c.saved_filters, ["assignee:@me", "label:bug"]);
+        for text in [r#"{"saved_filters":[""]}"#, r#"{"saved_filters":["ok","  "]}"#] {
+            let err = parse_str(text).expect_err(text);
+            assert!(matches!(err, ConfigError::BlankSavedFilter), "{text}");
+            assert_eq!(err.to_string(), "invalid config: saved_filters has an empty filter");
+        }
+        assert!(matches!(parse_str(r#"{"saved_filters":"label:bug"}"#), Err(ConfigError::Json { .. })));
+        assert!(matches!(parse_str(r#"{"saved_filters":[1]}"#), Err(ConfigError::Json { .. })));
     }
 
     #[test]

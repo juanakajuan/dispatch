@@ -16,6 +16,7 @@
 //! tmux server restart, and a reboot. `git branch -D` deletes the `branch.<b>`
 //! section, so a deleted branch leaves no stale marker.
 
+mod diff;
 pub mod error;
 mod git;
 mod hc;
@@ -31,6 +32,7 @@ mod tmux;
 mod work;
 mod worktree;
 
+pub use diff::Diff;
 pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
@@ -131,6 +133,14 @@ pub struct CleanReport {
     pub failed: Vec<(IssueNumber, SessionError)>,
 }
 
+/// What an attach shows: the session's Claude window, or a plain shell in
+/// its worktree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachTo {
+    Claude,
+    Shell,
+}
+
 /// How the shell attaches. Pure data, so the choice is unit tested.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AttachPlan {
@@ -222,10 +232,22 @@ impl Workspace {
         each_backend!(&self.mux, mux => ops::send(self, mux, issue, text))
     }
 
-    /// How to show the issue's live window. Fails when the window died since
-    /// the last poll; the next poll shows the session as exited.
-    pub fn attach_plan(&self, issue: IssueNumber) -> Result<AttachPlan, SessionError> {
-        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, issue))
+    /// How to show the issue's live Claude window, or, for `AttachTo::Shell`,
+    /// a new plain shell in its worktree (also for an exited session). Claude
+    /// fails when the window died since the last poll; the next poll shows
+    /// the session as exited.
+    pub fn attach_plan(&self, issue: IssueNumber, to: AttachTo) -> Result<AttachPlan, SessionError> {
+        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, issue, to))
+    }
+
+    /// The worktree's changes against the base: commits ahead, uncommitted
+    /// tracked changes, and untracked files. Read with git only.
+    pub fn diff(&self, issue: IssueNumber) -> Result<Diff, SessionError> {
+        let dir = worktree::worktree_dir_for(&self.repo_root, issue);
+        if !dir.exists() {
+            return Err(SessionError::NoSession(issue));
+        }
+        diff::read(&dir, &self.base)
     }
 }
 

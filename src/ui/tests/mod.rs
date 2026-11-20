@@ -30,6 +30,7 @@ mod columns;
 mod dialog;
 mod footer;
 mod hover;
+mod markdown;
 mod menus;
 mod screen;
 mod text;

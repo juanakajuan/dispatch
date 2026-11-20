@@ -8,8 +8,8 @@ use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, Target
 use super::request::{Launch, StartRequest};
 use super::worktree::{WORKTREES_EXCLUDE, worktree_dir_for};
 use super::{
-    AttachPlan, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome, Workspace,
-    git, start_argv,
+    AttachPlan, AttachTo, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome,
+    Workspace, git, start_argv,
 };
 use crate::domain::IssueNumber;
 use std::num::NonZeroU32;
@@ -203,9 +203,22 @@ pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, text: &s
     }
 }
 
-pub(super) fn attach_plan<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<AttachPlan, SessionError> {
-    match row(ws, mux, issue)?.and_then(|row| row.window) {
-        Some((window, liveness)) if liveness.is_live() => Ok(mux.attach(&window)),
-        _ => Err(SessionError::NotRunning(issue)),
+pub(super) fn attach_plan<M: Mux>(
+    ws: &Workspace,
+    mux: &M,
+    issue: IssueNumber,
+    to: AttachTo,
+) -> Result<AttachPlan, SessionError> {
+    match to {
+        AttachTo::Claude => match row(ws, mux, issue)?.and_then(|row| row.window) {
+            Some((window, liveness)) if liveness.is_live() => Ok(mux.attach(&window)),
+            _ => Err(SessionError::NotRunning(issue)),
+        },
+        AttachTo::Shell => {
+            let Some(row) = row(ws, mux, issue)? else {
+                return Err(SessionError::NoSession(issue));
+            };
+            Ok(mux.shell(ws.repo(), &row.worktree, issue, row.window.as_ref().map(|(w, _)| w))?)
+        }
     }
 }
