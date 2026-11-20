@@ -173,7 +173,7 @@ fn hc_a_restored_shell_is_an_exited_session_and_resume_keeps_it() {
     install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
     let session = ws.observe().expect("observe").remove(&IssueNumber(142)).expect("session");
     assert_eq!(session.state, SessionState::Exited, "a shell is not Claude");
-    assert!(ws.attach_plan(IssueNumber(142)).is_err(), "attach resumes instead");
+    assert!(ws.attach_plan(IssueNumber(142), AttachTo::Claude).is_err(), "attach resumes instead");
     ws.resume(IssueNumber(142), &launch()).expect("resume");
     assert_eq!(hc_calls(), ["hc rm t4".to_string(), hc_run(&base, "claude --continue")], "the shell stays");
 }
