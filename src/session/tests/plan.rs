@@ -1,5 +1,5 @@
 use super::{br, markers, req, win, wp, wt};
-use crate::config::ClaudeCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{Mode, OriginRef, RepoSlug, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
@@ -18,13 +18,14 @@ fn layout() -> Layout {
         repo_root: PathBuf::from("/a/orbit"),
         base: origin("origin/main"),
         hooks: None,
-        claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() },
+        harness: Harness::Claude,
+        command: AgentCommand::default_for(Harness::Claude),
     }
 }
 
 struct World {
     worktrees: Vec<git::Worktree>,
-    markers: crate::session::markers::Markers,
+    markers: markers::Markers,
     windows: Vec<Observed<tmux::WindowId>>,
     target_dir: TargetDir,
     branch: LocalBranch,
@@ -35,7 +36,7 @@ impl World {
     fn empty() -> World {
         World {
             worktrees: vec![wt("/a/orbit", Some("main"))],
-            markers: crate::session::markers::Markers::new(),
+            markers: markers::Markers::new(),
             windows: Vec::new(),
             target_dir: TargetDir::Free,
             branch: LocalBranch::Missing,
@@ -45,7 +46,13 @@ impl World {
 
     fn obs(&self) -> StartObservation {
         StartObservation {
-            sessions: sessions(&join(&layout().repo_root, &self.worktrees, &self.markers, &self.windows)),
+            sessions: sessions(&join(
+                &layout().repo_root,
+                &self.worktrees,
+                &self.markers,
+                &markers::Harnesses::new(),
+                &self.windows,
+            )),
             worktrees: self.worktrees.clone(),
             markers: self.markers.clone(),
             target_dir: self.target_dir,
@@ -69,7 +76,7 @@ impl World {
                 self.branch = LocalBranch::Exists;
                 self.target_dir = TargetDir::Taken;
             }
-            Step::Mark { branch, key } => {
+            Step::Mark { branch, key, .. } => {
                 self.markers.insert(branch.clone(), *key);
             }
             Step::OpenWindow { dir, .. } => {
@@ -101,7 +108,7 @@ fn origin(remote_ref: &str) -> OriginRef {
 }
 
 fn mark(branch: &str) -> Step {
-    Step::Mark { branch: br(branch), key: issue_key(142) }
+    Step::Mark { branch: br(branch), key: issue_key(142), harness: Harness::Claude }
 }
 
 fn steps(plan: Result<StartPlan, StartConflict>) -> Vec<Step> {
@@ -230,10 +237,10 @@ fn plan_for_a_fork_pr_fetches_the_fork_branch_into_a_new_local_branch() {
 }
 
 #[test]
-fn plan_uses_config_claude_command_hooks_and_plan_mode() {
+fn plan_uses_the_command_hooks_and_plan_mode() {
     let mut l = layout();
-    l.claude =
-        ClaudeCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
+    l.command =
+        AgentCommand { program: "sh".to_string(), args: vec!["-c".to_string(), "echo".to_string(), "_".to_string()] };
     l.hooks = Some("{}");
     let mut r = req();
     r.mode = Mode::PlanFirst;
@@ -300,7 +307,7 @@ fn pr_step_add(from: Option<&str>) -> Step {
 }
 
 fn pr_mark() -> Step {
-    Step::Mark { branch: br("chore/dep"), key: pr_key(7) }
+    Step::Mark { branch: br("chore/dep"), key: pr_key(7), harness: Harness::Claude }
 }
 
 fn pr_open() -> Step {
@@ -324,7 +331,7 @@ fn plan_for_a_fork_pr_key_fetches_the_fork_branch_and_marks_it_for_the_pr() {
         branch: br("fork/pr-7"),
     };
     let add = Step::AddWorktree { dir: PathBuf::from(PR_TARGET), branch: br("fork/pr-7"), from: None };
-    let mark = Step::Mark { branch: br("fork/pr-7"), key: pr_key(7) };
+    let mark = Step::Mark { branch: br("fork/pr-7"), key: pr_key(7), harness: Harness::Claude };
     assert_eq!(got, [fetch_fork, add, mark, pr_open()]);
 }
 
@@ -355,4 +362,18 @@ fn plan_branch_marked_for_a_pr_conflicts_with_an_issue_start_on_it() {
         StartConflict::BranchBelongsTo { branch: br("fix/142-x"), key: pr_key(7) }.to_string(),
         "branch fix/142-x already belongs to PR #7"
     );
+}
+
+#[test]
+fn plan_marks_and_launches_the_chosen_harness() {
+    let mut l = layout();
+    l.harness = Harness::Codex;
+    l.command = AgentCommand::default_for(Harness::Codex);
+    l.hooks = None;
+    let mut r = req();
+    r.mode = Mode::PlanFirst;
+    let got = steps(plan_start(&World::empty().obs(), &r, &l));
+    assert!(got.contains(&Step::Mark { branch: br("fix/142-x"), key: issue_key(142), harness: Harness::Codex }));
+    let Some(Step::OpenWindow { argv, .. }) = got.last() else { panic!("no OpenWindow") };
+    assert_eq!(argv, &["codex", "--sandbox", "read-only", "p"]);
 }

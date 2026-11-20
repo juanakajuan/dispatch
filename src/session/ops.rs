@@ -8,8 +8,8 @@ use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, Target
 use super::request::{Launch, StartRequest};
 use super::worktree::{WORKTREES_EXCLUDE, worktree_dir_for};
 use super::{
-    AttachPlan, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome, Workspace,
-    git, start_argv,
+    AttachPlan, AttachTo, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome,
+    Workspace, git, start_argv,
 };
 use crate::domain::SessionKey;
 use std::num::NonZeroU32;
@@ -18,24 +18,21 @@ struct World<W> {
     root: std::path::PathBuf,
     worktrees: Vec<git::Worktree>,
     markers: markers::Markers,
+    harnesses: markers::Harnesses,
     windows: Vec<Observed<W>>,
 }
 
 impl<W: Clone> World<W> {
     fn join(&self) -> Joined<W> {
-        join(&self.root, &self.worktrees, &self.markers, &self.windows)
+        join(&self.root, &self.worktrees, &self.markers, &self.harnesses, &self.windows)
     }
 }
 
 fn read_world<M: Mux>(ws: &Workspace, mux: &M) -> Result<World<M::Window>, SessionError> {
     let windows = mux.list(ws.repo())?;
     let worktrees = git::list_worktrees(&ws.repo_root).map_err(SessionError::Git)?;
-    Ok(World {
-        root: ws.repo_root.clone(),
-        worktrees,
-        markers: markers::list_markers(&ws.repo_root).map_err(SessionError::Git)?,
-        windows,
-    })
+    let marked = markers::list_markers(&ws.repo_root).map_err(SessionError::Git)?;
+    Ok(World { root: ws.repo_root.clone(), worktrees, markers: marked.sessions, harnesses: marked.harnesses, windows })
 }
 
 /// A fresh observation of one key, so a stale row can not aim at a window
@@ -76,7 +73,8 @@ pub(super) fn start<M: Mux>(
         repo_root: ws.repo_root.clone(),
         base: ws.base.clone(),
         hooks: hooks(mux, launch),
-        claude: launch.claude.clone(),
+        harness: launch.harness,
+        command: launch.command.clone(),
     };
     match plan_start(&obs, req, &layout).map_err(SessionError::Conflict)? {
         StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
@@ -113,8 +111,9 @@ fn run_steps<M: Mux>(
                 }
                 mux.add_worktree(ws.repo(), &dir, &branch, from.as_ref(), key)?;
             }
-            Step::Mark { branch, key } => {
+            Step::Mark { branch, key, harness } => {
                 markers::set_marker(&ws.repo_root, &branch, key).map_err(SessionError::Git)?;
+                markers::set_harness(&ws.repo_root, &branch, harness).map_err(SessionError::Git)?;
             }
             Step::OpenWindow { dir, argv } => mux.open(ws.repo(), &dir, key, &argv)?,
         }
@@ -126,7 +125,7 @@ pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, launch: &
     let Some(row) = row(ws, mux, key)? else {
         return Err(SessionError::NoSession(key));
     };
-    let argv = launch.claude.argv(&start_argv::continue_args(hooks(mux, launch)));
+    let argv = start_argv::resume_argv(&launch.command, launch.harness, hooks(mux, launch));
     match &row.window {
         Some((_, liveness)) if liveness.is_live() => Ok(()),
         Some((window, _)) => Ok(mux.relaunch(ws.repo(), window, &row.worktree, key, &argv)?),
@@ -200,9 +199,22 @@ pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, text: &str)
     }
 }
 
-pub(super) fn attach_plan<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey) -> Result<AttachPlan, SessionError> {
-    match row(ws, mux, key)?.and_then(|row| row.window) {
-        Some((window, liveness)) if liveness.is_live() => Ok(mux.attach(&window)),
-        _ => Err(SessionError::NotRunning(key)),
+pub(super) fn attach_plan<M: Mux>(
+    ws: &Workspace,
+    mux: &M,
+    key: SessionKey,
+    to: AttachTo,
+) -> Result<AttachPlan, SessionError> {
+    match to {
+        AttachTo::Claude => match row(ws, mux, key)?.and_then(|row| row.window) {
+            Some((window, liveness)) if liveness.is_live() => Ok(mux.attach(&window)),
+            _ => Err(SessionError::NotRunning(key)),
+        },
+        AttachTo::Shell => {
+            let Some(row) = row(ws, mux, key)? else {
+                return Err(SessionError::NoSession(key));
+            };
+            Ok(mux.shell(ws.repo(), &row.worktree, key, row.window.as_ref().map(|(w, _)| w))?)
+        }
     }
 }

@@ -32,7 +32,7 @@ use app::msg::{Cmd, Msg};
 use app::{Context, OpenWith};
 use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, EnableMouseCapture, Event};
 use session::error::{AttachError, SetupError};
-use session::{AttachPlan, Workspace};
+use session::{AttachPlan, AttachTo, Workspace};
 use std::fmt;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver};
@@ -109,7 +109,9 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
         for cmd in std::mem::take(&mut cmds) {
             match cmd {
                 Cmd::Quit => return Ok(()),
-                Cmd::Attach(key) => pending.push(Msg::Attached(attach(terminal, ws, key))),
+                Cmd::Attach { key, to } => {
+                    pending.push(Msg::Attached { key, to, result: attach(terminal, ws, key, to) });
+                }
                 Cmd::Copy { target, text } => {
                     #[expect(
                         clippy::disallowed_methods,
@@ -142,8 +144,13 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
 
 /// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
 /// inherited stdio and wait, then restore the TUI.
-fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, key: domain::SessionKey) -> Result<(), AttachError> {
-    match ws.attach_plan(key).map_err(AttachError::Session)? {
+fn attach(
+    terminal: &mut ratatui::DefaultTerminal,
+    ws: &Workspace,
+    key: domain::SessionKey,
+    to: AttachTo,
+) -> Result<(), AttachError> {
+    match ws.attach_plan(key, to).map_err(AttachError::Session)? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(AttachError::Run)

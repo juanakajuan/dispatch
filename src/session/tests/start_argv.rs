@@ -1,25 +1,84 @@
-use crate::config::ClaudeCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{BranchName, Mode, RepoSlug, SessionKey};
 use crate::session::StartPreview;
 use crate::session::herdr::label as herdr_label;
 use crate::session::request::{Launch, StartFrom};
-use crate::session::start_argv::{claude_args, continue_args};
+use crate::session::start_argv::{agent_argv, resume_argv};
 use crate::testutil::{issue_key, pr_key};
 
+const PROMPT: &str = "say \"hi\" $HOME `x`\nline two;";
+const PLAN_LINE: &str = "Plan first. Do not change any files until I approve the plan.";
+
+fn start(harness: Harness, mode: Mode, hooks: Option<&str>) -> Vec<String> {
+    agent_argv(&AgentCommand::default_for(harness), harness, hooks, mode, PROMPT)
+}
+
+fn words(items: &[&str]) -> Vec<String> {
+    items.iter().map(ToString::to_string).collect()
+}
+
 #[test]
-fn claude_args_modes_hooks_and_prompt_passthrough() {
-    let prompt = "say \"hi\" $HOME `x`\nline two;";
-    let args = claude_args(Mode::PlanFirst, prompt, None);
-    assert_eq!(args, ["--permission-mode", "plan", prompt]);
-    let args = claude_args(Mode::Implement, prompt, Some("{}"));
-    assert_eq!(args, ["--settings", "{}", prompt]);
-    assert_eq!(continue_args(None), ["--continue"]);
-    assert_eq!(continue_args(Some("{}")), ["--continue", "--settings", "{}"]);
+fn claude_start_argv() {
+    assert_eq!(start(Harness::Claude, Mode::Implement, None), words(&["claude", PROMPT]));
+    assert_eq!(start(Harness::Claude, Mode::PlanFirst, None), words(&["claude", "--permission-mode", "plan", PROMPT]));
+    assert_eq!(start(Harness::Claude, Mode::Implement, Some("{}")), words(&["claude", "--settings", "{}", PROMPT]));
+    assert_eq!(
+        start(Harness::Claude, Mode::PlanFirst, Some("{}")),
+        words(&["claude", "--permission-mode", "plan", "--settings", "{}", PROMPT])
+    );
+}
+
+#[test]
+fn codex_start_argv_ignores_hooks() {
+    for hooks in [None, Some("{}")] {
+        assert_eq!(start(Harness::Codex, Mode::Implement, hooks), words(&["codex", PROMPT]));
+        assert_eq!(start(Harness::Codex, Mode::PlanFirst, hooks), words(&["codex", "--sandbox", "read-only", PROMPT]));
+    }
+}
+
+#[test]
+fn opencode_start_argv_ignores_hooks_and_plans_in_the_prompt() {
+    let planned = format!("{PLAN_LINE}\n\n{PROMPT}");
+    for hooks in [None, Some("{}")] {
+        assert_eq!(start(Harness::OpenCode, Mode::Implement, hooks), words(&["opencode", "--prompt", PROMPT]));
+        assert_eq!(start(Harness::OpenCode, Mode::PlanFirst, hooks), words(&["opencode", "--prompt", &planned]));
+    }
+}
+
+#[test]
+fn antigravity_start_argv_ignores_hooks() {
+    for hooks in [None, Some("{}")] {
+        assert_eq!(
+            start(Harness::Antigravity, Mode::Implement, hooks),
+            words(&["agy", "--prompt-interactive", PROMPT])
+        );
+        assert_eq!(
+            start(Harness::Antigravity, Mode::PlanFirst, hooks),
+            words(&["agy", "--mode", "plan", "--prompt-interactive", PROMPT])
+        );
+    }
+}
+
+#[test]
+fn a_command_override_leads_the_argv() {
+    let command = AgentCommand::from_words("my-codex --x").expect("valid");
+    assert_eq!(agent_argv(&command, Harness::Codex, None, Mode::Implement, "p"), words(&["my-codex", "--x", "p"]));
+    assert_eq!(resume_argv(&command, Harness::Codex, None), words(&["my-codex", "--x", "resume", "--last"]));
+}
+
+#[test]
+fn resume_argv_per_harness() {
+    let resume = |harness, hooks| resume_argv(&AgentCommand::default_for(harness), harness, hooks);
+    assert_eq!(resume(Harness::Claude, None), words(&["claude", "--continue"]));
+    assert_eq!(resume(Harness::Claude, Some("{}")), words(&["claude", "--continue", "--settings", "{}"]));
+    assert_eq!(resume(Harness::Codex, Some("{}")), words(&["codex", "resume", "--last"]));
+    assert_eq!(resume(Harness::OpenCode, Some("{}")), words(&["opencode", "--continue"]));
+    assert_eq!(resume(Harness::Antigravity, Some("{}")), words(&["agy", "--continue"]));
 }
 
 fn preview(mux: &StartPreview, key: SessionKey, branch: &str, from: &StartFrom) -> Vec<String> {
     let launch =
-        Launch { detect_waiting: false, claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() } };
+        Launch { detect_waiting: false, harness: Harness::Claude, command: AgentCommand::default_for(Harness::Claude) };
     let all = mux.commands(key, branch, from, Mode::Implement, "p", &launch);
     all[..all.len() - 1].iter().map(|argv| argv.join(" ")).collect()
 }

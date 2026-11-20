@@ -44,6 +44,17 @@ pub(super) trait Mux {
 
     fn attach(&self, window: &Self::Window) -> AttachPlan;
 
+    /// Opens a plain shell in `dir` that observe never lists as the session,
+    /// and returns how to show it. `window` is the session's own window, when
+    /// it has one.
+    fn shell(
+        &self,
+        repo: Repo<'_>,
+        dir: &WorktreePath,
+        key: SessionKey,
+        window: Option<&Self::Window>,
+    ) -> Result<AttachPlan, MuxError>;
+
     /// The Claude hooks that set the waiting flag, for a backend that cannot
     /// read the agent status itself.
     fn waiting_hooks(&self) -> Option<&'static str> {
@@ -108,7 +119,7 @@ impl Backend {
 }
 
 pub(super) fn hooks<M: Mux>(mux: &M, launch: &Launch) -> Option<&'static str> {
-    launch.detect_waiting.then(|| mux.waiting_hooks()).flatten()
+    (launch.detect_waiting && launch.harness.takes_waiting_hooks()).then(|| mux.waiting_hooks()).flatten()
 }
 
 /// Claude hooks passed with `--settings` when `detect_waiting` is on.

@@ -108,6 +108,21 @@ impl Mux for Place {
         plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
     }
 
+    /// The window carries no tag, so observe skips it. It turns
+    /// `remain-on-exit` off, which a global setting can turn on, so it closes
+    /// when the shell exits.
+    fn shell(
+        &self,
+        _repo: Repo<'_>,
+        dir: &WorktreePath,
+        key: SessionKey,
+        _window: Option<&WindowId>,
+    ) -> Result<AttachPlan, MuxError> {
+        let id = new_window(self, dir, &format!("{key} shell"), &[])?;
+        tmux(["set-option", "-w", "-t", id.as_str(), "remain-on-exit", "off"])?;
+        Ok(self.attach(&id))
+    }
+
     fn waiting_hooks(&self) -> Option<&'static str> {
         Some(WAITING_HOOKS)
     }
@@ -192,18 +207,9 @@ fn escape_argv(argv: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Two calls, because a chained `set-option -w` after `new-window -d` tags the
-/// current window, not the new one (measured on tmux 3.8):
-///
-/// Inside:   tmux new-window -d -P -F '#{`window_id`}' -t <`session_id>`: -c <dir> -n <name> -- <argv..>
-/// Detached: the same with `-t =<name>:`, or `new-session -d -s <name>` when
-///           `has-session -t =<name>` fails.
-/// Then:     tmux set-option -w -t <id> @dispatch-worktree <dir> ; set-option -w -t <id> remain-on-exit on
-///           and `; set_waiting` when the argv has the waiting hooks.
-///
-/// A crash between the calls leaves an untagged window. That is accepted.
-/// Returns the new window id from `-P -F`.
-fn open_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]) -> Result<WindowId, MuxError> {
+/// The window half of `open_window`: no tags. An empty `command` runs the
+/// default shell, so no `--` goes in.
+fn new_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]) -> Result<WindowId, MuxError> {
     let dir_text = dir.as_path().to_string_lossy().into_owned();
     let mut args: Vec<String> = Vec::new();
     let new_session = match place {
@@ -216,9 +222,28 @@ fn open_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]
         }
         _ => args.extend(["new-window", "-d", "-t"].map(String::from).into_iter().chain([place.window_parent()])),
     }
-    args.extend(["-P", "-F", "#{window_id}", "-c", &dir_text, "-n", name, "--"].map(String::from));
-    args.extend(escape_argv(command));
-    let id = WindowId::parse(&tmux(&args)?)?;
+    args.extend(["-P", "-F", "#{window_id}", "-c", &dir_text, "-n", name].map(String::from));
+    if !command.is_empty() {
+        args.push("--".to_string());
+        args.extend(escape_argv(command));
+    }
+    WindowId::parse(&tmux(&args)?)
+}
+
+/// Two calls for a tagged window, because a chained `set-option -w` after `new-window -d` tags the
+/// current window, not the new one (measured on tmux 3.8):
+///
+/// Inside:   tmux new-window -d -P -F '#{`window_id`}' -t <`session_id>`: -c <dir> -n <name> -- <argv..>
+/// Detached: the same with `-t =<name>:`, or `new-session -d -s <name>` when
+///           `has-session -t =<name>` fails.
+/// Then:     tmux set-option -w -t <id> @dispatch-worktree <dir> ; set-option -w -t <id> remain-on-exit on
+///           and `; set_waiting` when the argv has the waiting hooks.
+///
+/// A crash between the calls leaves an untagged window. That is accepted.
+/// Returns the new window id from `-P -F`.
+fn open_window(place: &Place, dir: &WorktreePath, name: &str, command: &[String]) -> Result<WindowId, MuxError> {
+    let dir_text = dir.as_path().to_string_lossy().into_owned();
+    let id = new_window(place, dir, name, command)?;
     let tag = |args: [&str; 5]| args.map(String::from);
     let mut tags: Vec<String> = tag(["set-option", "-w", "-t", id.as_str(), "@dispatch-worktree"]).to_vec();
     tags.extend([dir_text, ";".to_string()]);

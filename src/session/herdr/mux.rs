@@ -1,5 +1,6 @@
 use super::{
-    PaneRef, Place, close_workspace, create_worktree, launch, list_windows, open_window, script_file, send_line,
+    PaneRef, Place, close_workspace, create_worktree, herdr, launch, list_windows, open_window, open_worktree,
+    script_file, send_line, source,
 };
 use crate::domain::{BranchName, OriginRef, SessionKey, WorktreePath};
 use crate::session::AttachPlan;
@@ -48,6 +49,35 @@ impl Mux for Place {
 
     fn send_line(&self, window: &PaneRef, text: &str) -> Result<(), MuxError> {
         send_line(window, text)
+    }
+
+    /// With the session's workspace, a new tab there. Without one, the
+    /// worktree opens as a workspace whose root pane is a shell.
+    fn shell(
+        &self,
+        repo: Repo<'_>,
+        dir: &WorktreePath,
+        key: SessionKey,
+        window: Option<&PaneRef>,
+    ) -> Result<AttachPlan, MuxError> {
+        if let Some(window) = window {
+            let (cwd, label) = (dir.as_path().to_string_lossy(), format!("{key} shell"));
+            herdr([
+                "tab",
+                "create",
+                "--workspace",
+                window.workspace.as_str(),
+                "--cwd",
+                cwd.as_ref(),
+                "--label",
+                label.as_str(),
+                "--focus",
+            ])?;
+            Ok(self.attach(window))
+        } else {
+            let pane = open_worktree(&source(self, repo.root)?, dir, key)?;
+            Ok(self.attach(&pane))
+        }
     }
 
     fn attach(&self, window: &PaneRef) -> AttachPlan {

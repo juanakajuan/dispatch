@@ -14,7 +14,7 @@ pub(super) struct Worktree {
     pub branch: Option<BranchName>,
 }
 
-fn git<I, S>(root: &Path, args: I) -> Result<String, ProcError>
+pub(super) fn git<I, S>(root: &Path, args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,

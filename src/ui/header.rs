@@ -76,12 +76,16 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &
             x = x.saturating_add(5);
         }
         let on = tab == state.tab;
-        let label = vec![
+        let mut label = vec![
             span(format!(" {key} "), if on { palette::TAB_KEY_ON } else { palette::TAB_KEY_OFF }),
             Span::raw(" "),
             span(name, if on { palette::ACTIVE } else { palette::DIM }),
             span(format!(" {count}"), if on { palette::PLAIN } else { palette::DIM }),
         ];
+        // The shown tab's filter is in the prompt. Another tab's filter is a `/` after its count.
+        if !on && !state.tabs.filter(tab).is_empty() {
+            label.push(span(" /", palette::ACCENT));
+        }
         let w = u16::try_from(spans_width(&label)).unwrap_or(u16::MAX);
         spans_at.push((tab, x, w));
         x = x.saturating_add(w);

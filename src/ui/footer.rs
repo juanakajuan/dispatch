@@ -1,7 +1,7 @@
 use super::header::feed_failure;
 use super::palette;
 use super::text::{cells, one_line, row_line, span, spans_width};
-use crate::app::filter::{Assignee, Term, TokenKind, Viewer, tokens};
+use crate::app::filter::{Term, TokenKind, Viewer, Who, tokens};
 use crate::app::keys::{Hint, Key};
 use crate::app::list::Tab;
 use crate::app::mouse::{HitMap, HitTarget};
@@ -38,7 +38,7 @@ const CLEAR_FILTER: &str = "esc to clear";
 /// The prompt opens the filter on a click, and its `esc to clear` clears it.
 pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
     let mut spans = vec![span("❯ ", palette::ACCENT)];
-    match (&state.focus, state.filter.is_empty()) {
+    match (&state.focus, state.filter().is_empty()) {
         (Focus::Filter, _) => {
             spans.extend(filter_spans(state, Style::default()));
             spans.push(span("▏", palette::ACCENT));
@@ -67,7 +67,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
         hits.targets.push((area, HitTarget::Key(Key::Char('/'))));
     }
     let clear_w = cells(CLEAR_FILTER);
-    if !state.filter.is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
+    if !state.filter().is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
         let clear = cell_rect(area, usize::from(area.width) - clear_w, clear_w);
         frame.render_widget(Paragraph::new(span(CLEAR_FILTER, palette::DIM)), clear);
         hits.targets.push((clear, HitTarget::Key(Key::Code(KeyCode::Esc))));
@@ -75,10 +75,11 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
 }
 
 /// The filter as typed, with each term in the accent colour, so the user sees
-/// which words filter by a field. A term key with no value yet is dim, and
-/// `assignee:@me` is red when dispatch could not read the user's login.
+/// which words filter by a field, with its `-` if it has one. A term key with
+/// no value yet is dim, a value outside the term's set is red, and `@me` is
+/// red when dispatch could not read the user's login.
 fn filter_spans(state: &State, text: Style) -> Vec<Span<'static>> {
-    let raw = state.filter.as_str();
+    let raw = state.filter();
     let mut spans = Vec::new();
     let mut at = 0;
     for t in tokens(raw) {
@@ -88,8 +89,11 @@ fn filter_spans(state: &State, text: Style) -> Vec<Span<'static>> {
         let style = match &t.kind {
             TokenKind::Text => text,
             TokenKind::Incomplete => palette::DIM,
-            TokenKind::Term(Term::Assignee(Assignee::Me)) if state.viewer == Viewer::Failed => palette::ERROR,
-            TokenKind::Term(_) => palette::ACCENT,
+            TokenKind::Invalid => palette::ERROR,
+            TokenKind::Term(_, Term::Assignee(Who::Me) | Term::Author(Who::Me)) if state.viewer == Viewer::Failed => {
+                palette::ERROR
+            }
+            TokenKind::Term(..) => palette::ACCENT,
         };
         spans.push(span(raw[t.at.clone()].to_string(), style));
         at = t.at.end;

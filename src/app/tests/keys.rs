@@ -21,6 +21,8 @@ fn key_bar_follows_the_context() {
             "s start session",
             "enter go to issue",
             "a resume",
+            "d show diff",
+            "! open shell",
             "D remove",
             "m merge",
             "o open on GitHub",

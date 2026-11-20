@@ -14,10 +14,11 @@ mod tmux;
 mod work;
 mod worktree;
 
+use super::markers;
 use super::mux::{Backend, Liveness, Observed};
 use super::request::{Launch, StartFrom, StartRequest};
 use super::{Workspace, git, tmux as tmux_backend};
-use crate::config::ClaudeCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{BranchName, Mode, OriginRef, WorktreePath};
 use crate::proc::{ProcError, fake};
 use crate::testutil::issue_key;
@@ -35,7 +36,7 @@ fn wt(path: &str, branch: Option<&str>) -> git::Worktree {
     git::Worktree { path: wp(path), branch: branch.map(br) }
 }
 
-fn markers(rows: &[(&str, u32)]) -> super::markers::Markers {
+fn markers(rows: &[(&str, u32)]) -> markers::Markers {
     rows.iter().map(|(b, n)| (br(b), issue_key(*n))).collect()
 }
 
@@ -64,7 +65,7 @@ fn workspace(base: &Path) -> Workspace {
 }
 
 fn launch() -> Launch {
-    Launch { detect_waiting: false, claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() } }
+    Launch { detect_waiting: false, harness: Harness::Claude, command: AgentCommand::default_for(Harness::Claude) }
 }
 
 /// The git repository every sim shares: `orbit` with its main worktree, and

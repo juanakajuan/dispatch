@@ -5,7 +5,7 @@
 
 use crate::config::Config;
 use crate::domain::{Issue, IssueNumber, PullRequest, SessionKey};
-use crate::session::Sessions;
+use crate::session::{Diff, Sessions};
 use crossterm::event::KeyEventKind;
 use ratatui::layout::Position;
 use std::collections::BTreeSet;
@@ -13,6 +13,7 @@ use std::time::Instant;
 
 use batch::{BatchStart, batch_key};
 use dialog::{StartDialog, dialog_key};
+use diff::{diff_overlay_key, read_diff};
 use feed::{Due, Feed, Poll, observed, tick};
 use filter::{Viewer, filter_key};
 use keys::{act, action_for};
@@ -29,7 +30,9 @@ use summary::summary_overlay_key;
 use toast::Toast;
 
 pub mod batch;
+pub mod complete;
 pub mod dialog;
+pub mod diff;
 pub mod feed;
 pub mod filter;
 pub mod keys;
@@ -70,6 +73,18 @@ pub enum Focus {
         key: SessionKey,
         scroll: u16,
     },
+    /// The session's worktree diff, scrolled down by `scroll` lines.
+    Diff {
+        key: SessionKey,
+        scroll: u16,
+        body: DiffBody,
+    },
+}
+
+/// What the diff overlay holds: the read is in flight, or it landed.
+pub enum DiffBody {
+    Reading,
+    Read(Diff),
 }
 
 /// Facts about the repo that the view shows, resolved once at startup.
@@ -109,7 +124,8 @@ pub struct State {
     /// Issues marked with Space for a batch start.
     pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
-    pub filter: String,
+    /// Tab completion under way in the filter.
+    pub completion: Option<complete::Completion>,
     pub viewer: Viewer,
     pub focus: Focus,
     pub toast: Option<Toast>,
@@ -139,7 +155,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         starting: BTreeSet::new(),
         marked: BTreeSet::new(),
         tabs: Tabs::default(),
-        filter: String::new(),
+        completion: None,
         viewer: Viewer::Unknown,
         focus: Focus::List,
         toast: None,
@@ -166,6 +182,17 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
     (state, cmds.into_iter().flatten().collect())
 }
 
+impl State {
+    /// The `/` filter of the shown tab.
+    pub fn filter(&self) -> &str {
+        self.tabs.filter(self.tab)
+    }
+
+    fn filter_mut(&mut self) -> &mut String {
+        self.tabs.filter_mut(self.tab)
+    }
+}
+
 /// The reducer.
 pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
     match msg {
@@ -178,6 +205,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Focus::Settings(_) => settings_key(state, &ev),
             Focus::Keybinds { .. } => keybinds_key(state, &ev),
             Focus::Summary { .. } => summary_overlay_key(state, &ev),
+            Focus::Diff { .. } => diff_overlay_key(state, &ev),
             Focus::List => {
                 let armed = state.armed.take();
                 match action_for(&ev) {
@@ -214,7 +242,8 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Copied { target, result } => copied(state, target, result),
         Msg::Sent { key, kind, result } => sent(state, key, kind, result),
         Msg::Merged { ask, run } => merged(state, ask, run),
-        Msg::Attached(result) => attached(state, result),
+        Msg::Attached { key, to, result } => attached(state, key, to, result),
+        Msg::Diff { key, result } => read_diff(state, key, result),
         Msg::Saved(result) => {
             if let Err(e) = result {
                 toast::error(state, format!("Saving settings failed: {e}"));

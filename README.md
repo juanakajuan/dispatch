@@ -1,13 +1,13 @@
 # dispatch
 
-dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start a Claude Code session for it. Each session gets its own git worktree and its own tmux window.
+dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start an agent session for it. The agent is Claude Code by default. Codex CLI, OpenCode, and Antigravity CLI also work (see [Config](#config)). Each session gets its own git worktree and its own tmux window.
 
 ## Requirements
 
 - `git`
 - `tmux`
 - `gh`, logged in (`gh auth status`)
-- `claude`, the Claude Code CLI
+- `claude`, the Claude Code CLI, or the program of the harness you choose: `codex`, `opencode`, or `agy`
 - A Rust toolchain to build it
 
 Run dispatch inside a git checkout that has a GitHub remote called `origin`. The remote must have a default branch ref. If `git symbolic-ref refs/remotes/origin/HEAD` fails, run `git remote set-head origin --auto`.
@@ -45,7 +45,7 @@ dispatch then does this:
 
 1. It fetches the default branch.
 2. It runs `git worktree add .claude/worktrees/<issue> -b <branch> origin/<default>` in the main checkout. Before the first worktree, it adds `.claude/worktrees/` to `.git/info/exclude`, so `git status` in the main checkout does not show the worktrees. dispatch does not change your `.gitignore`.
-3. It opens a tmux window named `#<issue>` that runs `claude [--permission-mode plan] "<prompt>"` in the worktree. The prompt has no `/skill` prefix. A SessionStart hook, such as pstack's, picks the workflow.
+3. It opens a tmux window named `#<issue>` that runs the harness with the prompt in the worktree. For Claude this is `claude [--permission-mode plan] "<prompt>"`. The prompt has no `/skill` prefix. A SessionStart hook, such as pstack's, picks the workflow.
 
 Each worktree is a new directory inside the repo. Claude Code asks if you trust the directory the first time, unless you trusted a parent directory before. If you trusted the repo, the question does not show. Otherwise, attach to the session with `a` to answer. With tmux and `detect_waiting`, the session shows `needs you` until Claude starts, so it shows `needs you` during this question.
 
@@ -94,15 +94,17 @@ A burst of events makes one load, at most one each 5 seconds.
 | `1` `2` `3` | Switch tab |
 | `s`, Enter | Start a session for the selected issue (or go to its session). `s` also starts a session for the selected PR on the Pull requests tab |
 | Enter on a PR | Go to the issue the PR closes |
-| `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
+| `a` | Attach to the session. If the agent has exited, resume it with its resume command (`claude --continue`, `codex resume --last`, and so on). Only a Claude session with no conversation starts again instead |
 | `x` | Stop the session. The window closes. The worktree stays |
-| `i` | Show all of what the session's Claude said last. `j` / `k` scroll it. `i` or Esc closes it. See [What Claude said](#what-claude-said) |
+| `i` | Show all of what the session's Claude said last. Other harnesses show `<Name> does not report what it said.` `j` / `k` scroll it. `i` or Esc closes it. See [What Claude said](#what-claude-said) |
+| `d` | Show the diff of the session's worktree against the default branch: commits ahead, uncommitted changes, and untracked files. `j` / `k` scroll it. `d` or Esc closes it |
+| `!` | Open a plain shell in the session's worktree, in a new window of the multiplexer. Claude's window stays as it is. It works for an exited session too. With hc, the shell joins the worktree's space |
 | `D` | Remove the worktree and the branch of a session that has exited or whose PR is merged. Press `D` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `c` | Remove all clean merged sessions. Press `c` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
-| `/` | Filter. Enter keeps it, Esc clears it |
+| `/` | Filter the tab. Enter keeps it, Esc clears it. Up and Down put your saved filters in the prompt. See [Filter](#filter) |
 | `S` | Change the sort order of the tab. See [Order](#order) |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
@@ -113,6 +115,33 @@ In the dialog: Tab and Shift-Tab change the field, Left and Right change the mod
 Mouse: every action works with a click. A click selects a row or a tab, and a double-click acts like Enter on the row. A click on a key bar entry, the `S sort` footer, or the filter prompt presses that key. In the start dialog, click a field to focus it, a mode to pick it, a text input to place the cursor, and `Start` or `Cancel`. In the settings menu, click a row to select it and click it again to change it. `esc ✕` closes a menu. In the keys menu (`?`), click an entry to close it and run that binding, which reaches settings, refresh and the rest. The wheel moves the selection and scrolls the menus. Keyboard bindings are unchanged.
 
 A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+
+## Filter
+
+Press `/` and type to filter the tab that you see. Free text matches the number, the title, and the labels or the branch of a row, without case. A term matches one fact about a row. A row shows only when the text and every term match.
+
+| Term | Matches |
+|---|---|
+| `label:bug` | A row with this label |
+| `assignee:octo`, `assignee:@me` | A row assigned to this login. `@me` is the login of `gh` |
+| `author:octo`, `author:@me` | A row that this login opened |
+| `milestone:v1` | A row in this milestone |
+| `state:open` | A row in this state. The words are `open`, `draft`, `merged`, `closed`, `needs-you`, `working`, `exited`, and `in-review` |
+| `checks:pass` | A PR, or an issue with a PR, with these checks: `pass`, `fail`, `pending`, or `none` |
+| `has:pr`, `has:session` | A row with a PR, or with a session |
+| `is:fork`, `is:marked` | A row from a fork PR, or an issue that you marked with Space |
+
+Put `-` before a term to keep the rows that it does not match, for example `-label:wontfix` or `-has:pr`. A term matches its field exactly, without case. Put a value with spaces in double quotes: `label:"good first issue"`. A value outside the fixed words, such as `state:bogus`, shows red and matches no row.
+
+On the Sessions tab, terms read the issue of the session. On the Issues tab, `checks:` and `is:fork` read the lead PR of the issue.
+
+Press Tab to complete the word that you type. It completes a term key, or a value from the items that the tab already shows. Press Tab again for the next choice, and Shift-Tab for the previous one. When a key is the only choice, the next Tab completes its values. Any other key ends the completion. Completion makes no call to GitHub.
+
+Each tab keeps its own filter. A filter on the Issues tab does not hide pull requests or sessions, and when you go back to a tab, its filter is still there. Another tab with a filter shows `/` after its count, for example ` 2  Pull requests 10 /`.
+
+Enter on an issue goes to its session, and Enter on a PR goes to its issue. The filter of the tab you leave stays. If the filter of the tab you go to hides the row, dispatch clears that filter.
+
+To keep filters that you use often, add them to `saved_filters` in the config file (see [Config](#config)). In the filter prompt, Down puts the next saved filter in the prompt, and Up puts the one before. At the end of the list, it goes back to the start. Edit the filter or press Enter to keep it.
 
 ## Order
 
@@ -182,15 +211,27 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 ```json
 {
   "detect_waiting": true,
-  "claude_command": ["claude"],
+  "harness": "claude",
+  "command": ["claude"],
   "icons": "unicode",
   "multiplexer": "auto",
-  "remove_on_merge": false
+  "remove_on_merge": false,
+  "saved_filters": []
 }
 ```
 
 - `detect_waiting` is on by default. dispatch passes `--settings` with five hooks to `claude`. They set a flag on the tmux window when Claude waits for you. A new window has the flag until Claude starts. Set it to `false` if the hooks conflict with yours.
-- `claude_command` is the program and its leading arguments. dispatch appends its own arguments.
+- `harness` is the agent that new sessions run: `"claude"` (the default), `"codex"`, `"opencode"`, or `"antigravity"`. dispatch writes the harness of each session to `branch.<name>.dispatch-harness`, and a resume uses that value, so a change here never resumes a Claude session with Codex. A session with no value is a Claude session.
+- `command` is the program and its leading arguments for `harness`. dispatch appends its own arguments. The default is the program of the harness. The old key `claude_command` still loads, as `"harness": "claude"` with that command. A file with both `claude_command` and `command`, or with `claude_command` and another harness, is an error.
+
+  | `harness` | Program | Start | Plan first | Resume |
+  |---|---|---|---|---|
+  | `claude` | `claude` | `[--permission-mode plan] [--settings <hooks>] "<prompt>"` | `--permission-mode plan` | `--continue [--settings <hooks>]` |
+  | `codex` | `codex` | `[--sandbox read-only] "<prompt>"` | `--sandbox read-only` | `resume --last` |
+  | `opencode` | `opencode` | `--prompt "<prompt>"` | no flag, so the prompt starts with `Plan first. Do not change any files until I approve the plan.` | `--continue` |
+  | `antigravity` | `agy` | `[--mode plan] --prompt-interactive "<prompt>"` | `--mode plan` | `--continue` |
+
+  Only Claude has these features. `detect_waiting` hooks: the other harnesses show a running session as `running`, never `needs you`, on tmux. Summaries (`i` and the text on a row): they come from a Claude transcript. With herdr and the herdr app, the app reads the agent status itself, so every harness works. Session worktrees stay in `.claude/worktrees/<issue>` for every harness. It is only a folder name, and a move would orphan the sessions you already have.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
 - `multiplexer` selects where sessions run. `"auto"` is the default: herdr when dispatch runs inside herdr (`HERDR_ENV=1`), the herdr app when it runs inside the app (`HC_TERMINAL_SOCKET` is set), else tmux. `"tmux"` always uses tmux. `"herdr"` always uses herdr. `"herdr-app"` uses the herdr desktop app (herdr-core, the `hc` CLI). Outside herdr it keeps the sessions in a workspace named `dispatch-<repo>`, starts the herdr server when none runs, and attach opens herdr on that workspace. dispatch reads this setting at start, so a change applies the next time you start dispatch.
@@ -199,13 +240,15 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 
 - `remove_on_merge` is off by default (`false`). When enabled, a direct `m` merge stops the session on the PR's branch and removes its worktree and branch if the worktree is clean, sits on the session branch, and has no local commits beyond the merged PR head. If the worktree has uncommitted changes or extra local commits, the session window still closes, the worktree and branch stay intact, and one toast reports both. This setting applies at once to the next direct merge.
 
+- `saved_filters` is a list of filters, for example `["assignee:@me", "label:bug"]`. It is empty by default. Up and Down in the `/` prompt go through them in this order. A filter that is empty or only spaces is an error. The settings menu does not change this list. Edit the file, then start dispatch again.
+
 An invalid file stops dispatch at start with a message. Unknown fields are errors. The one exception is `split`, which an older dispatch used for the width of the list. dispatch ignores it.
 
 ### Settings menu
 
-Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and `remove_on_merge`, and cycles `icons` and `multiplexer`. For `claude_command`, Enter opens a text field. Enter saves it and Esc cancels. `claude_command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
+Press `,` to see each setting with its default and to change it. Use `j` and `k` to move, Enter to change the value, and Esc to close. Enter toggles `detect_waiting` and `remove_on_merge`, and cycles `icons`, `multiplexer`, and `harness`. Cycling `harness` clears the `command` override, so the command of one harness never runs with another. For `command`, Enter opens a text field with the command that runs now. Enter saves it and Esc cancels. A command equal to the harness default is not stored. `command` is one line of words. Use `'...'` or `"..."` around a word that has spaces.
 
-Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` and `remove_on_merge` apply at once. `detect_waiting` and `claude_command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
+Each change is written to the config file at once. The menu keeps the fields you did not change, in their order. A field that you set back to its default is removed from the file. If the file is invalid, the menu does not write to it, and a message tells you why. `icons` and `remove_on_merge` apply at once. `detect_waiting`, `harness`, and `command` apply to sessions you start or resume after the change. `multiplexer` applies at the next start of dispatch.
 
 ## What Claude said
 
@@ -220,7 +263,7 @@ dispatch reads only the last 512 KB of the transcript. It reads the file again o
 
 dispatch writes no state file. A session is derived from git and tmux each time:
 
-- A branch that dispatch made has `branch.<name>.dispatch-issue` in `.git/config`. A branch made for a PR session has `branch.<name>.dispatch-pr` instead. If a branch has both, the issue marker wins.
+- A branch that dispatch made has `branch.<name>.dispatch-issue` and `branch.<name>.dispatch-harness` in `.git/config`. A branch made for a PR session has `branch.<name>.dispatch-pr` in place of `dispatch-issue`. If a branch has both, the issue marker wins.
 - The worktree of that branch is the session's directory. A worktree at `.claude/worktrees/<issue>` is also that issue's session, if a branch is marked for the issue. A worktree at `.claude/worktrees/pr-<n>` is the same for PR `n`. So the session stays when the worktree has a different branch checked out.
 - A tmux window with the option `@dispatch-worktree` set to that directory is the session's window.
 

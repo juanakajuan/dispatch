@@ -4,6 +4,10 @@
 //! background shows through elsewhere.
 //! One accent (blue) marks what is active: the tab, the selected row, the
 //! focused field, the keys. The other colors carry state only.
+//! Markdown follows the same rule: foregrounds and modifiers only, never a
+//! fill. Bold, italic, strike and link are modifiers, so they patch onto any
+//! base style; inline code is orange; headings are bold; gutters, list
+//! markers, rules and table borders are dim.
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -15,6 +19,7 @@ pub const YELLOW: Color = Color::Rgb(0xfa, 0xbd, 0x2f);
 pub const BLUE: Color = Color::Rgb(0x83, 0xa5, 0x98);
 pub const PURPLE: Color = Color::Rgb(0xd3, 0x86, 0x9b);
 pub const AQUA: Color = Color::Rgb(0x8e, 0xc0, 0x7c);
+pub const ORANGE: Color = Color::Rgb(0xfe, 0x80, 0x19);
 pub const BG0: Color = Color::Rgb(0x28, 0x28, 0x28);
 pub const BG1: Color = Color::Rgb(0x3c, 0x38, 0x36);
 pub const BG2: Color = Color::Rgb(0x50, 0x49, 0x45);
@@ -42,3 +47,11 @@ pub const MERGED: Style = Style::new().fg(PURPLE);
 pub const LABEL: Style = Style::new().fg(AQUA);
 pub const ERROR: Style = Style::new().fg(RED);
 pub const WARN: Style = Style::new().fg(YELLOW);
+
+pub const BOLD: Style = Style::new().add_modifier(Modifier::BOLD);
+pub const ITALIC: Style = Style::new().add_modifier(Modifier::ITALIC);
+pub const STRIKE: Style = Style::new().add_modifier(Modifier::CROSSED_OUT);
+pub const LINK: Style = Style::new().add_modifier(Modifier::UNDERLINED);
+pub const CODE: Style = Style::new().fg(ORANGE);
+/// A first-level Markdown heading. The others use `HEADING`.
+pub const HEADING_1: Style = Style::new().fg(YELLOW).add_modifier(Modifier::BOLD);

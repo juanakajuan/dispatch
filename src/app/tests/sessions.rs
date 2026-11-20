@@ -1,6 +1,7 @@
 use super::*;
+use crate::config::Harness;
 use crate::domain::OriginRef;
-use crate::session::error::StartWarning;
+use crate::session::error::{AttachError, StartWarning};
 use crate::transcript::Transcript;
 
 #[test]
@@ -12,16 +13,45 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
 
     state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let cmds = press(&mut state, key('a'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == issue_key(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach { key, to: AttachTo::Claude }] if *key == issue_key(3)));
 
     state.sessions.insert(issue_key(3), session(3, SessionState::NeedsYou));
-    assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(_)]), "needs-you attaches too");
+    assert!(
+        matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach { to: AttachTo::Claude, .. }]),
+        "needs-you attaches too"
+    );
 
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     state.transcripts.insert(issue_key(3), Transcript { said: None });
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == issue_key(3)));
-    assert!(state.toast.as_ref().is_some_and(|t| t.text().contains("claude --continue")));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with claude --continue"));
+}
+
+#[test]
+fn a_resumes_a_codex_session_with_no_transcript_using_the_session_harness() {
+    let (mut state, _) = app();
+    let mut exited = session(3, SessionState::Exited);
+    exited.harness = Harness::Codex;
+    state.sessions.insert(issue_key(3), exited);
+    assert!(!state.transcripts.contains_key(&issue_key(3)));
+    let cmds = press(&mut state, key('a'));
+    let [Cmd::Job(Job::Write(WriteJob::Resume(n, launch)))] = cmds.as_slice() else { panic!("one resume") };
+    assert_eq!(*n, issue_key(3));
+    assert_eq!(launch.harness, Harness::Codex);
+    assert_eq!(launch.command.words(), "codex");
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with codex resume --last"));
+}
+
+#[test]
+fn a_resume_keeps_a_claude_session_on_claude_when_the_config_changes() {
+    let (mut state, _) = app();
+    state.config.harness = Harness::Codex;
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
+    state.transcripts.insert(issue_key(3), Transcript { said: None });
+    let cmds = press(&mut state, key('a'));
+    let [Cmd::Job(Job::Write(WriteJob::Resume(_, launch)))] = cmds.as_slice() else { panic!("one resume") };
+    assert_eq!((launch.harness, launch.command.words()), (Harness::Claude, "claude".to_string()));
 }
 
 #[test]
@@ -106,4 +136,27 @@ fn a_sent_result_shows_a_toast() {
     let result = Err(SessionError::NotRunning(issue_key(3)));
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::MergeFix, result });
     assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Merge request to #3 failed: #3 has no running session"));
+}
+
+#[test]
+fn bang_opens_a_shell_for_a_live_or_exited_session() {
+    let (mut state, _) = app();
+    assert!(press(&mut state, key('!')).is_empty());
+    assert_eq!(toast(&state), "No session for this issue. Press s to start one.");
+    for st in [SessionState::Running, SessionState::Exited] {
+        state.sessions.insert(issue_key(3), session(3, st));
+        let cmds = press(&mut state, key('!'));
+        assert!(matches!(cmds.as_slice(), [Cmd::Attach { key, to: AttachTo::Shell }] if *key == issue_key(3)));
+    }
+}
+
+#[test]
+fn an_attach_failure_keeps_its_text_and_a_shell_failure_says_so() {
+    let (mut state, _) = app();
+    let failed = || Err(AttachError::EmptyCommand);
+    update(&mut state, Msg::Attached { key: issue_key(3), to: AttachTo::Claude, result: failed() });
+    assert_eq!(toast(&state), "attach failed: empty attach command");
+    update(&mut state, Msg::Attached { key: issue_key(3), to: AttachTo::Shell, result: failed() });
+    assert_eq!(toast(&state), "Opening a shell in #3 failed: empty attach command");
+    assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Error));
 }

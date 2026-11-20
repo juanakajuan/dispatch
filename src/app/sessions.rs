@@ -1,15 +1,15 @@
 use super::batch::open_batch;
 use super::dialog::{open_dialog, open_pr_dialog};
 use super::feed::observe_now;
-use super::list::{RowKey, Tab, current_session, selected_row};
+use super::list::{RowKey, Tab, current_session, jump_to, selected_row};
 use super::merge::{NoTarget, head_start};
 use super::msg::{Cmd, Job, WriteJob};
 use super::toast;
 use super::{Focus, State};
 use crate::domain::{IssueNumber, PrNumber, PrState, SessionKey};
-use crate::session::StartOutcome;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
+use crate::session::{AttachTo, StartOutcome};
 
 /// `s` on an issue or a PR, Enter on an issue, or a double-click on an issue.
 pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
@@ -70,9 +70,7 @@ pub(super) fn begin_start(state: &mut State, req: StartRequest) -> Cmd {
 }
 
 pub(super) fn goto_session(state: &mut State, key: SessionKey) {
-    state.tab = Tab::Sessions;
-    state.tabs.sessions.selected = Some(key);
-    state.filter.clear();
+    jump_to(state, RowKey::Session(key));
 }
 
 pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
@@ -80,20 +78,22 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         toast::info(state, "No session for this issue. Press s to start one.".to_string());
         return Vec::new();
     };
-    let key = session.key;
+    let (key, harness) = (session.key, session.harness);
     if session.state.is_live() {
-        vec![Cmd::Attach(key)]
-    } else if !state.transcripts.contains_key(&key) {
+        vec![Cmd::Attach { key, to: AttachTo::Claude }]
+    } else if harness.has_transcript() && !state.transcripts.contains_key(&key) {
         start_again(state, key);
         Vec::new()
     } else {
-        toast::info(state, format!("Resuming {key} with claude --continue"));
-        vec![Cmd::Job(Job::Write(WriteJob::Resume(key, Launch::from_config(&state.config))))]
+        let launch = Launch::for_session(&state.config, harness);
+        toast::info(state, format!("Resuming {key} with {}", launch.resume_words()));
+        vec![Cmd::Job(Job::Write(WriteJob::Resume(key, launch)))]
     }
 }
 
 /// `claude --continue` exits at once in a worktree with no conversation,
-/// as after a start whose Claude never ran.
+/// as after a start whose Claude never ran. Only Claude has a transcript to
+/// tell, so another harness always resumes.
 fn start_again(state: &mut State, key: SessionKey) {
     let dialog = match key {
         SessionKey::Issue(n) => state.issues.items.iter().find(|i| i.number == n).map(open_dialog),
@@ -114,6 +114,16 @@ fn start_again(state: &mut State, key: SessionKey) {
         };
         toast::error(state, format!("{key} has no conversation to continue, and the {what} is not listed."));
     }
+}
+
+/// `!`: a plain shell in the session's worktree, for a live session or an
+/// exited one.
+pub(super) fn shell_key(state: &mut State) -> Vec<Cmd> {
+    let Some(key) = current_session(state).map(|s| s.key) else {
+        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        return Vec::new();
+    };
+    vec![Cmd::Attach { key, to: AttachTo::Shell }]
 }
 
 pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
@@ -160,9 +170,12 @@ pub(super) fn resumed(state: &mut State, key: SessionKey, result: Result<(), Ses
     observe_now(state)
 }
 
-pub(super) fn attached(state: &mut State, result: Result<(), AttachError>) -> Vec<Cmd> {
+pub(super) fn attached(state: &mut State, key: SessionKey, to: AttachTo, result: Result<(), AttachError>) -> Vec<Cmd> {
     if let Err(e) = result {
-        toast::error(state, format!("attach failed: {e}"));
+        match to {
+            AttachTo::Claude => toast::error(state, format!("attach failed: {e}")),
+            AttachTo::Shell => toast::error(state, format!("Opening a shell in {key} failed: {e}")),
+        }
     }
     observe_now(state)
 }

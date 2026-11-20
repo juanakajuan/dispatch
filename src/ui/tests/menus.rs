@@ -12,7 +12,8 @@ fn the_settings_menu_shows_each_key_value_and_default() {
         " Settings ",
         "detect_waiting   off   default: on",
         "icons            unicode   default: unicode",
-        "claude_command   claude   default: claude",
+        "harness          claude   default: claude",
+        "command          claude   default: claude",
         "remove_on_merge  off   default: off",
         "Applies to sessions you start or resume after this change.",
         "j/k move · enter change · esc close",
@@ -27,7 +28,7 @@ fn the_settings_menu_shows_each_key_value_and_default() {
 fn the_settings_menu_shows_the_editor_and_its_error() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char(','));
-    for _ in 0..3 {
+    for _ in 0..4 {
         send(&mut state, KeyCode::Char('j'));
     }
     send(&mut state, KeyCode::Enter);
@@ -36,7 +37,7 @@ fn the_settings_menu_shows_the_editor_and_its_error() {
     }
     send(&mut state, KeyCode::Enter);
     let screen = text(&render(&state, 100, 30));
-    for want in ["claude_command   claude 'oops▏", "has a quote that never closes", "enter save · esc cancel"] {
+    for want in ["command          claude 'oops▏", "has a quote that never closes", "enter save · esc cancel"] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
     assert!(!screen.contains("Applies to sessions"), "the error takes the note's line\n{screen}");
@@ -89,7 +90,8 @@ fn settings_rows_and_the_close_control_are_clickable() {
         ("detect_waiting", Setting::DetectWaiting),
         ("icons ", Setting::Icons),
         ("multiplexer", Setting::Multiplexer),
-        ("claude_command  ", Setting::ClaudeCommand),
+        ("harness  ", Setting::Harness),
+        ("command  ", Setting::Command),
         ("remove_on_merge  ", Setting::RemoveOnMerge),
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Setting(setting));
@@ -209,4 +211,43 @@ fn the_summary_shows_all_of_what_claude_said_wrapped_and_scrolled() {
     assert!(screen.contains("End of the recap."), "j scrolls to the end\n{screen}");
     send(&mut state, KeyCode::Esc);
     assert!(matches!(state.focus, Focus::List));
+}
+
+#[test]
+fn the_diff_overlay_reads_then_shows_colored_lines_and_untracked_files() {
+    use crate::app::DiffBody;
+    use crate::session::Diff;
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('3'));
+    send(&mut state, KeyCode::Char('d'));
+    let screen = draw_into(&mut state, 60, 20);
+    for want in [" #3 diff ", "Reading the diff…", "esc ✕"] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+
+    let patch = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n context\n";
+    let long = format!("+{}", "x".repeat(200));
+    let patch = format!("{patch}{long}\n");
+    let diff = Diff { untracked: vec!["notes.txt".to_string()], patch };
+    state.focus = Focus::Diff { key: issue_key(3), scroll: 0, body: DiffBody::Read(diff) };
+    let buf = frame(&mut state, 60, 20);
+    let screen = text(&buf);
+    assert!(!screen.contains("Reading the diff"), "{screen}");
+    let fg_of = |needle: &str| {
+        let (x, y) = find(&screen, needle);
+        buf[(x, y)].fg
+    };
+    assert_eq!(fg_of("untracked: notes.txt"), palette::FG);
+    assert_eq!(fg_of("+new"), palette::GREEN);
+    assert_eq!(fg_of("-old"), palette::RED);
+    assert_eq!(fg_of("@@ -1 +1 @@"), palette::BLUE);
+    assert_eq!(fg_of("+++ b/f"), palette::FG, "a file header is not an added line");
+    assert_eq!(fg_of("--- a/f"), palette::FG, "a file header is not a removed line");
+    assert_eq!(fg_of("context"), palette::FG);
+    assert!(screen.contains('…'), "a long line is cut, not wrapped\n{screen}");
+    assert!(!screen.contains("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"));
+    assert_eq!(state.hits.max_scroll, 0, "it fits");
+
+    let _ = draw_into(&mut state, 60, 8);
+    assert!(state.hits.max_scroll > 0, "a short box scrolls");
 }

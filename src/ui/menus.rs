@@ -1,8 +1,9 @@
+use super::markdown;
 use super::palette;
-use super::text::{cells, fit, span, wrap};
+use super::text::{cells, fit, span};
 use crate::app::keys::{Action, Key};
 use crate::app::mouse::{HitMap, HitTarget};
-use crate::app::{self, State};
+use crate::app::{self, DiffBody, State};
 use crate::config::Config;
 use crate::config::settings::SETTINGS;
 use crate::domain::SessionKey;
@@ -10,6 +11,7 @@ use crate::transcript::SummaryKind;
 use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
@@ -104,7 +106,7 @@ pub(super) fn draw_settings(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// All of what the session's Claude last said, word-wrapped and scrolled down
+/// All of what the session's Claude last said, as Markdown wrapped to the box and scrolled down
 /// by `scroll` lines. Returns how far it can scroll at this size.
 pub(super) fn draw_summary(
     frame: &mut Frame,
@@ -121,15 +123,7 @@ pub(super) fn draw_summary(
     };
     let width = screen.width.min(84);
     let text_width = usize::from(width.saturating_sub(6)).max(1);
-    let lines: Vec<Line<'static>> = said
-        .map_or("", |s| s.text.as_str())
-        .lines()
-        .flat_map(|line| {
-            let rows = wrap(line, text_width);
-            if rows.is_empty() { vec![String::new()] } else { rows }
-        })
-        .map(|row| Line::from(span(row, palette::PLAIN)))
-        .collect();
+    let lines = markdown::block(said.map_or("", |s| s.text.as_str()), text_width);
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
     // The margin keeps the footer and its `esc to close` in view.
     let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
@@ -137,6 +131,53 @@ pub(super) fn draw_summary(
     let max_scroll = wanted.saturating_sub(inner.height);
     frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
     max_scroll
+}
+
+/// The session's worktree diff, one line per row and cut to the box, never
+/// wrapped, scrolled down by `scroll` lines. Returns how far it can scroll at
+/// this size.
+pub(super) fn draw_diff(
+    frame: &mut Frame,
+    screen: Rect,
+    key: SessionKey,
+    scroll: u16,
+    body: &DiffBody,
+    hits: &mut HitMap,
+) -> u16 {
+    let width = screen.width.min(120);
+    let text_width = usize::from(width.saturating_sub(6)).max(1);
+    // A terminal cell has no tab stop, so a tab would shift the rest of the line.
+    let line = |text: &str, style: Style| Line::from(span(fit(&text.replace('\t', "    "), text_width), style));
+    let lines: Vec<Line<'static>> = match body {
+        DiffBody::Reading => vec![line("Reading the diff…", palette::DIM)],
+        DiffBody::Read(diff) => diff
+            .untracked
+            .iter()
+            .map(|path| line(&format!("untracked: {path}"), palette::PLAIN))
+            .chain(diff.patch.lines().map(|text| line(text, diff_style(text))))
+            .collect(),
+    };
+    let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
+    // The margin keeps the footer and its `esc to close` in view.
+    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let inner = draw_box(frame, centered(screen, width, height), format!(" {key} diff "), hits);
+    let max_scroll = wanted.saturating_sub(inner.height);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
+    max_scroll
+}
+
+fn diff_style(text: &str) -> Style {
+    if text.starts_with("diff --git") || text.starts_with("+++") || text.starts_with("---") {
+        palette::HEADING
+    } else if text.starts_with('+') {
+        palette::PASS
+    } else if text.starts_with('-') {
+        palette::FAIL
+    } else if text.starts_with("@@") {
+        palette::ACCENT
+    } else {
+        palette::PLAIN
+    }
 }
 
 /// A box of at most `width` by `height`, centered on the screen.

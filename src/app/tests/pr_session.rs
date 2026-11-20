@@ -236,7 +236,9 @@ fn a_x_t_and_d_act_on_a_pr_session() {
     press(&mut state, key('3'));
     state.tabs.sessions.selected = Some(pr_key(11));
 
-    assert!(matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach(k)] if *k == pr_key(11)));
+    assert!(
+        matches!(press(&mut state, key('a')).as_slice(), [Cmd::Attach { key: k, to: AttachTo::Claude }] if *k == pr_key(11))
+    );
     assert!(matches!(
         press(&mut state, key('x')).as_slice(),
         [Cmd::Job(Job::Write(WriteJob::Stop(k)))] if *k == pr_key(11)
@@ -288,8 +290,8 @@ fn a_session_row_for_a_pr_takes_its_title_and_filter_facets_from_the_pr() {
     state.sessions.insert(pr_key(11), pr_session(11, SessionState::Running));
     state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('3'));
-    state.filter = "label:dependencies".to_string();
+    *state.filter_mut() = "label:dependencies".to_string();
     assert_eq!(visible_rows(&state), [RowKey::Session(pr_key(11))]);
-    state.filter = "PR 11".to_string();
+    *state.filter_mut() = "PR 11".to_string();
     assert_eq!(visible_rows(&state), [RowKey::Session(pr_key(11))], "the PR title matches");
 }

@@ -1,10 +1,10 @@
 //! Session truth lives in git and the multiplexer, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
-//! - `git config branch.<b>.dispatch-issue`: which
-//!   branches dispatch made, for which issue
+//! - `git config branch.<b>.dispatch-issue` and `dispatch-harness`: which
+//!   branches dispatch made, for which issue, and which agent runs on them
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
-//!   window runs Claude in which worktree
+//!   window runs the agent in which worktree
 //!
 //! `observe()` reads all three and joins them on the worktree path. A
 //! worktree at `.claude/worktrees/<issue>` stays that issue's session when it
@@ -16,6 +16,7 @@
 //! tmux server restart, and a reboot. `git branch -D` deletes the `branch.<b>`
 //! section, so a deleted branch leaves no stale marker.
 
+mod diff;
 pub mod error;
 mod git;
 mod hc;
@@ -31,10 +32,11 @@ mod tmux;
 mod work;
 mod worktree;
 
+pub use diff::Diff;
 pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
-use crate::config::Multiplexer;
+use crate::config::{Harness, Multiplexer};
 use crate::domain::{BranchName, CommitOid, OriginRef, SessionKey, WorktreePath};
 use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
@@ -51,6 +53,8 @@ pub struct Session {
     pub branch: BranchName,
     pub checkout: Checkout,
     pub worktree: WorktreePath,
+    /// From `dispatch-harness`. Claude when the branch has none.
+    pub harness: Harness,
     pub state: SessionState,
 }
 
@@ -127,6 +131,14 @@ pub struct CleanReport {
     pub removed: Vec<SessionKey>,
     pub skipped: Vec<(SessionKey, RemoveRefusal)>,
     pub failed: Vec<(SessionKey, SessionError)>,
+}
+
+/// What an attach shows: the session's Claude window, or a plain shell in
+/// its worktree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachTo {
+    Claude,
+    Shell,
 }
 
 /// How the shell attaches. Pure data, so the choice is unit tested.
@@ -220,10 +232,22 @@ impl Workspace {
         each_backend!(&self.mux, mux => ops::send(self, mux, key, text))
     }
 
-    /// How to show the issue's live window. Fails when the window died since
-    /// the last poll; the next poll shows the session as exited.
-    pub fn attach_plan(&self, key: SessionKey) -> Result<AttachPlan, SessionError> {
-        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, key))
+    /// How to show the session's live Claude window, or, for `AttachTo::Shell`,
+    /// a new plain shell in its worktree (also for an exited session). Claude
+    /// fails when the window died since the last poll; the next poll shows
+    /// the session as exited.
+    pub fn attach_plan(&self, key: SessionKey, to: AttachTo) -> Result<AttachPlan, SessionError> {
+        each_backend!(&self.mux, mux => ops::attach_plan(self, mux, key, to))
+    }
+
+    /// The worktree's changes against the base: commits ahead, uncommitted
+    /// tracked changes, and untracked files. Read with git only.
+    pub fn diff(&self, key: SessionKey) -> Result<Diff, SessionError> {
+        let dir = worktree::worktree_dir_for(&self.repo_root, key);
+        if !dir.exists() {
+            return Err(SessionError::NoSession(key));
+        }
+        diff::read(&dir, &self.base)
     }
 }
 
