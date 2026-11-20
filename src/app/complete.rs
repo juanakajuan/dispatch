@@ -5,7 +5,7 @@
 use super::State;
 use super::filter::{Facets, Has, Is, KEYS, RowState, Word, tokens};
 use super::list::Tab;
-use crate::domain::{Checks, IssueNumber};
+use crate::domain::{Checks, SessionKey};
 use std::collections::BTreeSet;
 
 /// The choices for the word being completed, and the one that is in the
@@ -137,14 +137,16 @@ fn states(tab: Tab) -> &'static [RowState] {
 }
 
 /// The facts of every item that the shown tab holds. The sessions tab holds
-/// the issues of its sessions.
+/// the issues and PRs of its sessions.
 fn tab_facets(state: &State) -> Vec<Facets<'_>> {
     match state.tab {
         Tab::Issues => state.issues.items.iter().map(Facets::from).collect(),
         Tab::Prs => state.prs.items.iter().map(Facets::from).collect(),
         Tab::Sessions => {
-            let numbers: BTreeSet<IssueNumber> = state.sessions.keys().chain(state.starting.iter()).copied().collect();
-            state.issues.items.iter().filter(|i| numbers.contains(&i.number)).map(Facets::from).collect()
+            let keys: BTreeSet<SessionKey> = state.sessions.keys().chain(state.starting.iter()).copied().collect();
+            let issues = state.issues.items.iter().filter(|i| keys.contains(&i.number.into())).map(Facets::from);
+            let prs = state.prs.items.iter().filter(|p| keys.contains(&p.number.into())).map(Facets::from);
+            issues.chain(prs).collect()
         }
     }
 }

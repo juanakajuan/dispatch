@@ -104,12 +104,12 @@ fn the_pr_tab_filters_by_its_own_labels_assignees_and_milestone() {
 #[test]
 fn the_session_tab_filters_by_the_fields_of_the_sessions_issue() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
-    state.sessions.insert(IssueNumber(9), session(9, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Running));
+    state.sessions.insert(issue_key(9), session(9, SessionState::Running));
     press(&mut state, key('3'));
     *state.filter_mut() = "label:docs".to_string();
-    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "#9 has no issue, so it has no labels");
+    assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(2))], "#9 has no issue, so it has no labels");
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn state_checks_and_has_filter_the_pr_tab() {
     assert_eq!(rows(&mut state, "checks:none"), []);
     assert_eq!(rows(&mut state, "has:pr").len(), 2, "a PR row always has a PR");
     assert_eq!(rows(&mut state, "has:session"), []);
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     assert_eq!(rows(&mut state, "has:session"), [RowKey::Pr(PrNumber(10))], "#10 closes #3, which has a session");
 }
 
@@ -251,8 +251,8 @@ fn the_issue_tab_filters_by_state_checks_pr_session_and_marks() {
     assert_eq!(rows(&mut state, "has:pr"), [RowKey::Issue(IssueNumber(3))]);
     assert_eq!(rows(&mut state, "-has:pr").len(), 2);
     assert_eq!(rows(&mut state, "has:session"), []);
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::NeedsYou));
-    state.starting.insert(IssueNumber(1));
+    state.sessions.insert(issue_key(2), session(2, SessionState::NeedsYou));
+    state.starting.insert(issue_key(1));
     assert_eq!(rows(&mut state, "has:session"), [RowKey::Issue(IssueNumber(2)), RowKey::Issue(IssueNumber(1))]);
     assert_eq!(rows(&mut state, "state:needs-you"), [RowKey::Issue(IssueNumber(2))]);
     assert_eq!(rows(&mut state, "state:working"), [RowKey::Issue(IssueNumber(1))], "a start counts as working");
@@ -266,20 +266,20 @@ fn the_issue_tab_filters_by_state_checks_pr_session_and_marks() {
 fn the_session_tab_filters_by_state_pr_and_marks() {
     let (mut state, _) = app();
     state.prs.items[0].checks = Checks::Fail;
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Exited));
     state.marked.insert(IssueNumber(2));
     press(&mut state, key('3'));
     let rows = |state: &mut State, raw: &str| {
         *state.filter_mut() = raw.to_string();
         visible_rows(state)
     };
-    assert_eq!(rows(&mut state, "state:working"), [RowKey::Session(IssueNumber(3))]);
-    assert_eq!(rows(&mut state, "state:exited"), [RowKey::Session(IssueNumber(2))]);
-    assert_eq!(rows(&mut state, "has:pr checks:fail"), [RowKey::Session(IssueNumber(3))]);
-    assert_eq!(rows(&mut state, "is:marked"), [RowKey::Session(IssueNumber(2))]);
+    assert_eq!(rows(&mut state, "state:working"), [RowKey::Session(issue_key(3))]);
+    assert_eq!(rows(&mut state, "state:exited"), [RowKey::Session(issue_key(2))]);
+    assert_eq!(rows(&mut state, "has:pr checks:fail"), [RowKey::Session(issue_key(3))]);
+    assert_eq!(rows(&mut state, "is:marked"), [RowKey::Session(issue_key(2))]);
     assert_eq!(rows(&mut state, "has:session").len(), 2, "a session row always has a session");
-    assert_eq!(rows(&mut state, "-state:working"), [RowKey::Session(IssueNumber(2))]);
+    assert_eq!(rows(&mut state, "-state:working"), [RowKey::Session(issue_key(2))]);
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn each_tab_keeps_its_own_filter_across_tab_switches() {
 #[test]
 fn a_jump_keeps_the_origin_filter_and_clears_the_destination_filter_only_when_it_hides_the_target() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('3'));
     type_filter(&mut state, "docs");
     press(&mut state, code(KeyCode::Enter));
@@ -314,7 +314,7 @@ fn a_jump_keeps_the_origin_filter_and_clears_the_destination_filter_only_when_it
     press(&mut state, code(KeyCode::Enter));
     assert_eq!(state.tab, Tab::Sessions, "enter on an issue with a session goes to it");
     assert_eq!(state.filter(), "", "the sessions filter hid #3, so the jump cleared it");
-    assert_eq!(selected_row(&state), Some(RowKey::Session(IssueNumber(3))));
+    assert_eq!(selected_row(&state), Some(RowKey::Session(issue_key(3))));
     assert_eq!(state.tabs.filter(Tab::Issues), "retry", "the origin tab keeps its filter");
 
     type_filter(&mut state, "retry");

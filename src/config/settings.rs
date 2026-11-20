@@ -1,4 +1,4 @@
-use super::{ClaudeCommand, Config, ConfigError, env_path, parse, read};
+use super::{AgentCommand, Config, ConfigError, env_path, parse, read};
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
@@ -9,12 +9,19 @@ pub enum Setting {
     DetectWaiting,
     Icons,
     Multiplexer,
-    ClaudeCommand,
+    Harness,
+    Command,
     RemoveOnMerge,
 }
 
-pub const SETTINGS: [Setting; 5] =
-    [Setting::DetectWaiting, Setting::Icons, Setting::Multiplexer, Setting::ClaudeCommand, Setting::RemoveOnMerge];
+pub const SETTINGS: [Setting; 6] = [
+    Setting::DetectWaiting,
+    Setting::Icons,
+    Setting::Multiplexer,
+    Setting::Harness,
+    Setting::Command,
+    Setting::RemoveOnMerge,
+];
 
 /// What `enter` does to a setting.
 #[derive(Debug, PartialEq, Eq)]
@@ -32,14 +39,15 @@ impl Setting {
             Setting::DetectWaiting => "detect_waiting",
             Setting::Icons => "icons",
             Setting::Multiplexer => "multiplexer",
-            Setting::ClaudeCommand => "claude_command",
+            Setting::Harness => "harness",
+            Setting::Command => "command",
             Setting::RemoveOnMerge => "remove_on_merge",
         }
     }
 
     pub fn applies_note(self) -> Option<&'static str> {
         match self {
-            Setting::DetectWaiting | Setting::ClaudeCommand => {
+            Setting::DetectWaiting | Setting::Harness | Setting::Command => {
                 Some("Applies to sessions you start or resume after this change.")
             }
             Setting::Multiplexer => Some("Applies the next time you start dispatch."),
@@ -52,7 +60,8 @@ impl Setting {
             Setting::DetectWaiting => (if config.detect_waiting { "on" } else { "off" }).to_string(),
             Setting::Icons => config.icons.label().to_string(),
             Setting::Multiplexer => config.multiplexer.label().to_string(),
-            Setting::ClaudeCommand => config.claude_command.words(),
+            Setting::Harness => config.harness.label().to_string(),
+            Setting::Command => config.agent_command(config.harness).words(),
             Setting::RemoveOnMerge => config.remove_on_merge.label().to_string(),
         }
     }
@@ -63,7 +72,11 @@ impl Setting {
             Setting::DetectWaiting => config.detect_waiting = !config.detect_waiting,
             Setting::Icons => config.icons = config.icons.next(),
             Setting::Multiplexer => config.multiplexer = config.multiplexer.next(),
-            Setting::ClaudeCommand => return Change::Edit(config.claude_command.words()),
+            Setting::Harness => {
+                config.harness = config.harness.next();
+                config.command = None;
+            }
+            Setting::Command => return Change::Edit(Setting::Command.show(config)),
             Setting::RemoveOnMerge => config.remove_on_merge = config.remove_on_merge.toggle(),
         }
         Change::Applied
@@ -73,19 +86,33 @@ impl Setting {
     /// unchanged on an error. A setting that is not typed ignores the text.
     pub fn set_text(self, config: &mut Config, text: &str) -> Result<(), ConfigError> {
         match self {
-            Setting::ClaudeCommand => config.claude_command = ClaudeCommand::from_words(text)?,
-            Setting::DetectWaiting | Setting::Icons | Setting::Multiplexer | Setting::RemoveOnMerge => {}
+            Setting::Command => {
+                let command = AgentCommand::from_words(text)?;
+                config.command = (command != AgentCommand::default_for(config.harness)).then_some(command);
+            }
+            Setting::DetectWaiting
+            | Setting::Icons
+            | Setting::Multiplexer
+            | Setting::Harness
+            | Setting::RemoveOnMerge => {}
         }
         Ok(())
     }
 
-    fn json(self, config: &Config) -> Value {
+    /// The file fields this setting writes. Cycling the harness clears the
+    /// command override, so it writes both.
+    fn fields(self, config: &Config) -> Vec<(&'static str, Value)> {
+        let command = || {
+            let argv = config.command.as_ref().map(|c| c.argv(&[]));
+            ("command", argv.map_or(Value::Null, |argv| json!(argv)))
+        };
         match self {
-            Setting::DetectWaiting => json!(config.detect_waiting),
-            Setting::Icons => json!(config.icons.label()),
-            Setting::Multiplexer => json!(config.multiplexer.label()),
-            Setting::ClaudeCommand => json!(config.claude_command.argv(&[])),
-            Setting::RemoveOnMerge => json!(config.remove_on_merge.as_bool()),
+            Setting::DetectWaiting => vec![("detect_waiting", json!(config.detect_waiting))],
+            Setting::Icons => vec![("icons", json!(config.icons.label()))],
+            Setting::Multiplexer => vec![("multiplexer", json!(config.multiplexer.label()))],
+            Setting::Harness => vec![("harness", json!(config.harness.label())), command()],
+            Setting::Command => vec![command()],
+            Setting::RemoveOnMerge => vec![("remove_on_merge", json!(config.remove_on_merge.as_bool()))],
         }
     }
 }
@@ -109,14 +136,20 @@ fn edit_file(
         }
         None => Map::new(),
     };
-    let value = setting.json(config);
-    if value == setting.json(&Config::default()) {
-        if text.is_none() {
-            return Ok(None);
+    let fields = setting.fields(config);
+    let defaults = setting.fields(&Config::default());
+    if text.is_none() && fields == defaults {
+        return Ok(None);
+    }
+    for ((key, value), (_, default)) in fields.into_iter().zip(defaults) {
+        if value == default {
+            object.shift_remove(key);
+        } else {
+            object.insert(key.to_string(), value);
         }
-        object.shift_remove(setting.key());
-    } else {
-        object.insert(setting.key().to_string(), value);
+    }
+    if matches!(setting, Setting::Harness | Setting::Command) {
+        object.shift_remove("claude_command");
     }
     let mut out = serde_json::to_string_pretty(&object).map_err(|e| json_error(e.to_string()))?;
     out.push('\n');
@@ -143,7 +176,7 @@ pub fn save(setting: Setting, config: &Config) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Multiplexer, RemoveOnMerge};
+    use crate::config::{Harness, Multiplexer, RemoveOnMerge};
     use crate::glyphs::IconSet;
 
     fn parse_str(text: &str) -> Result<Config, ConfigError> {
@@ -158,15 +191,15 @@ mod tests {
     fn a_changed_field_keeps_the_others_and_their_order() {
         let before = "{\n  \"split\": 30,\n  \"icons\": \"nerdfont\",\n  \"detect_waiting\": false\n}\n";
         let config = Config { detect_waiting: true, ..parse_str(before).expect("valid") };
-        let config = Config { claude_command: ClaudeCommand::from_words("my-claude --x").expect("valid"), ..config };
-        let after = edit(Some(before), Setting::ClaudeCommand, &config).expect("ok").expect("written");
+        let config = Config { command: Some(AgentCommand::from_words("my-claude --x").expect("valid")), ..config };
+        let after = edit(Some(before), Setting::Command, &config).expect("ok").expect("written");
         let keys: Vec<_> = serde_json::from_str::<Map<String, Value>>(&after).expect("json").keys().cloned().collect();
-        assert_eq!(keys, ["split", "icons", "detect_waiting", "claude_command"]);
+        assert_eq!(keys, ["split", "icons", "detect_waiting", "command"]);
         assert!(after.ends_with("}\n"));
         let reread = parse_str(&after).expect("valid");
         assert_eq!(reread.icons, IconSet::NerdFont);
         assert!(!reread.detect_waiting, "only the changed field is written");
-        assert_eq!(reread.claude_command.words(), "my-claude --x");
+        assert_eq!(reread.agent_command(reread.harness).words(), "my-claude --x");
     }
 
     #[test]
@@ -199,7 +232,7 @@ mod tests {
     #[test]
     fn a_broken_file_is_an_error_and_never_overwritten() {
         let config = Config { detect_waiting: false, ..Config::default() };
-        for text in ["not json", r#"{"claude_command":[]}"#, r#"{"skills":[]}"#] {
+        for text in ["not json", r#"{"command":[]}"#, r#"{"skills":[]}"#] {
             assert!(edit(Some(text), Setting::DetectWaiting, &config).is_err(), "{text}");
         }
     }
@@ -210,7 +243,8 @@ mod tests {
             detect_waiting: false,
             icons: IconSet::NerdFont,
             multiplexer: Multiplexer::Herdr,
-            claude_command: ClaudeCommand::from_words("sh -c 'echo hi'").expect("valid"),
+            harness: Harness::Codex,
+            command: Some(AgentCommand::from_words("sh -c 'echo hi'").expect("valid")),
             remove_on_merge: RemoveOnMerge::On,
             ..Config::default()
         };
@@ -224,12 +258,54 @@ mod tests {
     #[test]
     fn typed_settings_check_text_like_the_file() {
         let mut config = Config::default();
-        assert!(matches!(
-            Setting::ClaudeCommand.set_text(&mut config, "claude 'oops"),
-            Err(ConfigError::BadCommand(_))
-        ));
+        assert!(matches!(Setting::Command.set_text(&mut config, "claude 'oops"), Err(ConfigError::BadCommand(_))));
         assert_eq!(config, Config::default(), "an error changes nothing");
-        Setting::ClaudeCommand.set_text(&mut config, "my-claude --x").expect("valid");
-        assert_eq!(Setting::ClaudeCommand.show(&config), "my-claude --x");
+        Setting::Command.set_text(&mut config, "my-claude --x").expect("valid");
+        assert_eq!(Setting::Command.show(&config), "my-claude --x");
+        Setting::Command.set_text(&mut config, "claude").expect("valid");
+        assert_eq!(config.command, None, "the default command is no override");
+    }
+
+    #[test]
+    fn cycling_the_harness_clears_the_command_override() {
+        let mut config = Config::default();
+        Setting::Command.set_text(&mut config, "my-claude --x").expect("valid");
+        assert_eq!(Setting::Harness.change(&mut config), Change::Applied);
+        assert_eq!(config.harness, Harness::Codex);
+        assert_eq!(config.command, None);
+        assert_eq!(Setting::Command.show(&config), "codex");
+    }
+
+    #[test]
+    fn saving_the_harness_also_drops_the_cleared_command_and_the_old_key() {
+        let before = r#"{"claude_command":["my-claude"],"icons":"nerdfont"}"#;
+        let mut config = parse_str(before).expect("valid");
+        Setting::Harness.change(&mut config);
+        let after = edit(Some(before), Setting::Harness, &config).expect("ok").expect("written");
+        let object: Map<String, Value> = serde_json::from_str(&after).expect("json");
+        assert_eq!(object.get("harness"), Some(&json!("codex")));
+        assert!(!object.contains_key("command") && !object.contains_key("claude_command"), "{after}");
+        assert_eq!(parse_str(&after).expect("valid"), config);
+    }
+
+    #[test]
+    fn saving_the_command_writes_command_and_drops_claude_command() {
+        let before = r#"{"claude_command":["my-claude"]}"#;
+        let mut config = parse_str(before).expect("valid");
+        Setting::Command.set_text(&mut config, "other-claude --y").expect("valid");
+        let after = edit(Some(before), Setting::Command, &config).expect("ok").expect("written");
+        let object: Map<String, Value> = serde_json::from_str(&after).expect("json");
+        assert_eq!(object.get("command"), Some(&json!(["other-claude", "--y"])));
+        assert!(!object.contains_key("claude_command"), "{after}");
+        assert_eq!(parse_str(&after).expect("valid"), config);
+    }
+
+    #[test]
+    fn a_command_set_back_to_the_harness_default_leaves_the_file_without_it() {
+        let before = r#"{"harness":"codex","command":["my-codex"]}"#;
+        let mut config = parse_str(before).expect("valid");
+        Setting::Command.set_text(&mut config, "codex").expect("valid");
+        let after = edit(Some(before), Setting::Command, &config).expect("ok").expect("written");
+        assert_eq!(after, "{\n  \"harness\": \"codex\"\n}\n");
     }
 }

@@ -1,9 +1,10 @@
-use crate::domain::{IssueNumber, OriginRef};
+use crate::domain::OriginRef;
 use crate::proc::fake;
 use crate::session::error::{
     AttachError, FsAction, FsError, GitError, MuxError, SessionError, SetupError, StartConflict, StartWarning,
 };
 use crate::session::tmux::WindowId;
+use crate::testutil::issue_key;
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,7 +16,7 @@ fn fs(action: FsAction) -> FsError {
 #[test]
 fn each_error_and_warning_keeps_its_sentence() {
     let git = || fake::fail("git", 128, "boom");
-    let n = IssueNumber(7);
+    let n = issue_key(7);
     let window = WindowId::parse("@3").expect("id");
     let cases: Vec<(String, &str)> = vec![
         (SessionError::NoSession(n).to_string(), "no session for #7"),
@@ -82,7 +83,7 @@ fn each_attach_error_keeps_its_sentence() {
             AttachError::Run(crate::proc::ProcError::spawn("herdr", &missing)).to_string(),
             "cannot run herdr: No such file or directory (os error 2)",
         ),
-        (AttachError::Session(SessionError::NotRunning(IssueNumber(7))).to_string(), "#7 has no running session"),
+        (AttachError::Session(SessionError::NotRunning(issue_key(7))).to_string(), "#7 has no running session"),
     ];
     for (got, want) in cases {
         assert_eq!(got, want);

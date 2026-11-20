@@ -4,7 +4,7 @@ use crate::session::{Push, Work};
 fn on_tab(tab: char, work: Option<Work>, w: u16) -> String {
     let mut state = full_state();
     if let Some(work) = work {
-        state.work.insert(IssueNumber(3), work);
+        state.work.insert(issue_key(3), work);
     }
     send(&mut state, KeyCode::Char(tab));
     text(&render(&state, w, 20))
@@ -72,7 +72,7 @@ fn a_long_summary_in_one_group_does_not_narrow_the_titles_of_another() {
     let mut state = full_state();
     let long = "Claude says a lot of things here ".repeat(6);
     let said = crate::transcript::Summary { kind: crate::transcript::SummaryKind::Message, text: long };
-    state.transcripts.insert(IssueNumber(3), crate::transcript::Transcript { said: Some(said) });
+    state.transcripts.insert(issue_key(3), crate::transcript::Transcript { said: Some(said) });
     let title = "Docs for every setting, key, and screen that dispatch has today";
     state.issues.items[1] = crate::testutil::issue(2, title, &["docs"]);
     let screen = text(&render(&state, 160, 20));

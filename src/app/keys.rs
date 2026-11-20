@@ -1,7 +1,7 @@
 use super::batch::mark_key;
 use super::diff::diff_key;
 use super::feed::{observe_now, refresh_github};
-use super::list::{Move, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
+use super::list::{Move, RowKey, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
 use super::menus::SettingsMenu;
 use super::merge::{Armed, merge_key, merge_target};
 use super::message::open_message;
@@ -12,6 +12,7 @@ use super::sessions::{attach_key, shell_key, start_key, stop_key};
 use super::summary::summary_key;
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
+use crate::domain::PrState;
 use crate::session::SessionState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -81,6 +82,8 @@ pub enum When {
     Always,
     OnIssues,
     OnPrs,
+    /// The Pull requests tab, on an open or draft PR.
+    OpenPr,
     OnSessions,
     SessionLive,
     SessionExited,
@@ -185,8 +188,8 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Key::Char('s')],
         action: Action::Start,
         group: KeyGroup::Sessions,
-        desc: "start a session for the issue",
-        bar: &[bar("s", "start session", When::OnIssues)],
+        desc: "start a session for the issue or PR",
+        bar: &[bar("s", "start session", When::OnIssues), bar("s", "start session", When::OpenPr)],
     },
     Binding {
         keys: &[Key::Char(' ')],
@@ -369,15 +372,22 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
     }
 }
 
+/// The selected row is an open or draft PR, which `s` can start a session for.
+fn selected_pr_open(state: &State) -> bool {
+    let Some(RowKey::Pr(n)) = selected_row(state) else { return false };
+    state.prs.items.iter().any(|p| p.number == n && matches!(p.state, PrState::Open | PrState::Draft))
+}
+
 /// The key bar for the list. A click on an entry presses its binding's first key.
 pub(super) fn key_bar(state: &State) -> Vec<Hint> {
     let current = current_session(state);
     let session = current.map(|s| s.state);
-    let said = current.and_then(|s| state.transcripts.get(&s.issue)).is_some_and(|t| t.said.is_some());
+    let said = current.and_then(|s| state.transcripts.get(&s.key)).is_some_and(|t| t.said.is_some());
     let shown = |when: When| match when {
         When::Always => true,
         When::OnIssues => state.tab == Tab::Issues,
         When::OnPrs => state.tab == Tab::Prs,
+        When::OpenPr => state.tab == Tab::Prs && selected_pr_open(state),
         When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
         When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),

@@ -1,6 +1,6 @@
 use crate::domain::Mode;
-use crate::session::request::{branch_for, prompt_for, start_defaults};
-use crate::testutil::issue;
+use crate::session::request::{branch_for, prompt_for, prompt_for_pr, start_defaults};
+use crate::testutil::{issue, pr};
 
 #[test]
 fn branch_prefix_follows_labels() {
@@ -35,4 +35,17 @@ fn defaults_combine_the_rules() {
     assert_eq!(d.mode, Mode::Implement);
     assert!(d.prompt.starts_with("Implement GitHub issue #3: Fix it\n\n"));
     assert!(d.prompt.contains("`gh issue view 3 --comments`"));
+}
+
+#[test]
+fn a_pr_prompt_names_the_pr_and_the_gh_commands_and_no_branch() {
+    let pr = pr(7, "dep-bump", &[]);
+    assert_eq!(
+        prompt_for_pr(&pr),
+        "Work on GitHub PR #7: PR 7\n\n\
+         Read the PR and its comments with `gh pr view 7 --comments`, and its diff with `gh pr diff 7`. \
+         This worktree is on the PR's branch. Review the change, then fix what needs fixing, add or update tests, \
+         and push to the PR's branch."
+    );
+    assert!(!prompt_for_pr(&pr).contains("dep-bump"));
 }

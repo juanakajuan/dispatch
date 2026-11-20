@@ -102,11 +102,11 @@ fn assert_triggers_one_refresh(state: &mut State, msg: Msg) {
 fn a_start_or_a_stop_refreshes_github() {
     let (mut state, _) = app();
     let outcome = StartOutcome { session: session(3, SessionState::Running), warnings: Vec::new() };
-    assert_triggers_one_refresh(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
-    assert_triggers_one_refresh(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+    assert_triggers_one_refresh(&mut state, Msg::Started { key: issue_key(3), result: Ok(outcome) });
+    assert_triggers_one_refresh(&mut state, Msg::Stopped { key: issue_key(3), result: Ok(()) });
 
     let (mut state, now) = app();
-    press(&mut state, Msg::Started { issue: IssueNumber(3), result: Err(git_error("boom")) });
+    press(&mut state, Msg::Started { key: issue_key(3), result: Err(git_error("boom")) });
     assert_eq!(
         github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN))),
         0,
@@ -117,7 +117,7 @@ fn a_start_or_a_stop_refreshes_github() {
 #[test]
 fn a_session_that_goes_idle_or_exits_refreshes_github() {
     let observe = |sessions: Vec<Session>| {
-        let sessions = sessions.into_iter().map(|s| (s.issue, s)).collect();
+        let sessions = sessions.into_iter().map(|s| (s.key, s)).collect();
         Msg::Observed(Ok(Observation { sessions, transcripts: BTreeMap::new(), work: crate::session::Works::new() }))
     };
     let running = || session(3, SessionState::Running);
@@ -127,14 +127,14 @@ fn a_session_that_goes_idle_or_exits_refreshes_github() {
         [(running(), Some(needs_you())), (running(), Some(exited())), (needs_you(), Some(exited())), (running(), None)]
     {
         let (mut state, _) = app();
-        state.sessions.insert(IssueNumber(3), before);
+        state.sessions.insert(issue_key(3), before);
         assert_triggers_one_refresh(&mut state, observe(after.into_iter().collect()));
     }
     for (before, after) in
         [(running(), running()), (needs_you(), running()), (needs_you(), needs_you()), (exited(), exited())]
     {
         let (mut state, now) = app();
-        state.sessions.insert(IssueNumber(3), before);
+        state.sessions.insert(issue_key(3), before);
         press(&mut state, observe(vec![after]));
         assert_eq!(github_fetches(&press(&mut state, Msg::Tick(now + GITHUB_COOLDOWN))), 0);
     }
@@ -151,7 +151,7 @@ fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more(
     let (mut state, now) = app();
     for _ in 0..3 {
         press(&mut state, Msg::FocusGained);
-        press(&mut state, Msg::Stopped { issue: IssueNumber(3), result: Ok(()) });
+        press(&mut state, Msg::Stopped { key: issue_key(3), result: Ok(()) });
     }
     let at = now + GITHUB_COOLDOWN;
     assert_eq!(github_fetches(&press(&mut state, Msg::Tick(at))), 2);

@@ -4,6 +4,10 @@
 
 use std::path::PathBuf;
 
+mod session_key;
+
+pub use session_key::SessionKey;
+
 /// GitHub issue or PR number. Issues and PRs share one number space on
 /// GitHub, but keeping two types stops "PR #151" being used as an issue key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

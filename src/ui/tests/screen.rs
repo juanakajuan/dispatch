@@ -330,7 +330,7 @@ fn a_session_whose_pr_merged_shows_the_merged_glyph_and_count() {
 #[test]
 fn a_session_on_another_branch_says_so_before_its_pr() {
     let mut state = full_state();
-    if let Some(s) = state.sessions.get_mut(&IssueNumber(3)) {
+    if let Some(s) = state.sessions.get_mut(&issue_key(3)) {
         s.checkout = crate::session::Checkout::Other(BranchName::parse("try-other").expect("branch"));
     }
     send(&mut state, KeyCode::Char('3'));
@@ -346,7 +346,7 @@ fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_t
     let row = |work: Option<Work>| {
         let mut state = full_state();
         if let Some(w) = work {
-            state.work.insert(IssueNumber(3), w);
+            state.work.insert(issue_key(3), w);
         }
         send(&mut state, KeyCode::Char('3'));
         let buf = render(&state, 100, 20);
@@ -385,7 +385,7 @@ fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_t
 
     let mut state = full_state();
     state.config.icons = IconSet::NerdFont;
-    state.work.insert(IssueNumber(3), Work { commits: 2, uncommitted: 1, push: Push::NotPushed });
+    state.work.insert(issue_key(3), Work { commits: 2, uncommitted: 1, push: Push::NotPushed });
     send(&mut state, KeyCode::Char('3'));
     let screen = text(&render(&state, 100, 20));
     let i = state.config.icons.icons();
@@ -401,4 +401,28 @@ fn the_message_field_shows_in_the_prompt_row_with_its_session() {
     let screen = text(&render(&state, 100, 30));
     assert!(screen.contains("❯ message to #3: ok▏"), "missing the field in\n{screen}");
     assert!(screen.contains("enter to send · esc to cancel"), "missing the hints in\n{screen}");
+}
+
+#[test]
+fn a_pr_session_row_shows_pr_number_and_the_pr_title_and_its_pr_state() {
+    let mut state = full_state();
+    state.prs.items.push(crate::testutil::pr(11, "chore/dep", &[]));
+    state.prs.items[1].title = "Bump serde".to_string();
+    state.sessions.insert(
+        pr_key(11),
+        Session {
+            key: pr_key(11),
+            branch: BranchName::parse("chore/dep").expect("branch"),
+            checkout: crate::session::Checkout::SessionBranch,
+            worktree: WorktreePath::planned(PathBuf::from("/w/orbit-pr-11")),
+            state: SessionState::Running,
+            harness: crate::config::Harness::Claude,
+        },
+    );
+    send(&mut state, KeyCode::Char('3'));
+    let screen = text(&render(&state, 120, 20));
+    let row = screen.lines().find(|l| l.contains("PR #11")).unwrap_or_else(|| panic!("no PR row in\n{screen}"));
+    assert!(row.contains("PR #11 Bump serde"), "{row}");
+    assert!(row.contains("PR #11 open"), "the summary shows the PR state: {row}");
+    assert!(screen.lines().any(|l| l.contains("#3 Retry queue")), "the issue session row keeps its plain #3\n{screen}");
 }

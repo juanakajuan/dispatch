@@ -10,7 +10,9 @@ use super::toast::*;
 use super::*;
 use crate::config::Config;
 use crate::config::settings::{SETTINGS, Setting};
-use crate::domain::{BranchName, GithubRef, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest};
+use crate::domain::{
+    BranchName, GithubRef, IssueNumber, MergeMethod, Mode, PrNumber, PrState, PullRequest, SessionKey,
+};
 use crate::domain::{Mergeability, WorktreePath};
 use crate::github::GhError;
 use crate::glyphs::IconSet;
@@ -20,7 +22,7 @@ use crate::session::error::SessionError;
 use crate::session::request::{Launch, StartFrom, StartRequest};
 use crate::session::{AttachTo, Diff, Session, SessionState, StartOutcome};
 use crate::sort::{Cycle, IssueSort};
-use crate::testutil::{issue, pr};
+use crate::testutil::{issue, issue_key, pr, pr_key};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::collections::BTreeMap;
@@ -40,6 +42,7 @@ mod menus;
 mod merge;
 mod message;
 mod open;
+mod pr_session;
 mod refresh;
 mod remove;
 mod sessions;
@@ -67,10 +70,11 @@ pub(super) fn click(col: u16, row: u16, at: Instant) -> Msg {
 
 pub(super) fn session(n: u32, state: SessionState) -> Session {
     Session {
-        issue: IssueNumber(n),
+        key: issue_key(n),
         branch: BranchName::parse(&format!("fix/{n}-x")).expect("branch"),
         checkout: crate::session::Checkout::SessionBranch,
         worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
+        harness: crate::config::Harness::Claude,
         state,
     }
 }
@@ -123,10 +127,10 @@ pub(super) fn batch(state: &State) -> &BatchStart {
     }
 }
 
-pub(super) fn sends(cmds: &[Cmd]) -> Vec<(IssueNumber, &str)> {
+pub(super) fn sends(cmds: &[Cmd]) -> Vec<(SessionKey, &str)> {
     cmds.iter()
         .filter_map(|c| match c {
-            Cmd::Job(Job::Write(WriteJob::Send { issue, text, .. })) => Some((*issue, text.as_str())),
+            Cmd::Job(Job::Write(WriteJob::Send { key, text, .. })) => Some((*key, text.as_str())),
             _ => None,
         })
         .collect()

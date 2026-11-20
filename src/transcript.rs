@@ -3,7 +3,7 @@
 //! entries wins: a recap (`system`/`away_summary`, written when the user
 //! steps away) or the text of an assistant message.
 
-use crate::domain::IssueNumber;
+use crate::domain::SessionKey;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -82,8 +82,8 @@ impl Reader {
     /// worktrees not in this pass are forgotten.
     pub fn read<'a>(
         &mut self,
-        worktrees: impl IntoIterator<Item = (IssueNumber, &'a Path)>,
-    ) -> BTreeMap<IssueNumber, Transcript> {
+        worktrees: impl IntoIterator<Item = (SessionKey, &'a Path)>,
+    ) -> BTreeMap<SessionKey, Transcript> {
         let Some(projects) = projects_dir() else { return BTreeMap::new() };
         self.read_in(&projects, worktrees)
     }
@@ -91,17 +91,17 @@ impl Reader {
     fn read_in<'a>(
         &mut self,
         projects: &Path,
-        worktrees: impl IntoIterator<Item = (IssueNumber, &'a Path)>,
-    ) -> BTreeMap<IssueNumber, Transcript> {
+        worktrees: impl IntoIterator<Item = (SessionKey, &'a Path)>,
+    ) -> BTreeMap<SessionKey, Transcript> {
         let mut seen = BTreeMap::new();
         let mut out = BTreeMap::new();
-        for (issue, worktree) in worktrees {
+        for (key, worktree) in worktrees {
             let Some((file, stamp)) = newest_transcript(&projects.join(encode(worktree))) else { continue };
             let said = match self.seen.remove(&file) {
                 Some((old, said)) if old == stamp => said,
                 _ => read_tail(&file).and_then(|text| parse_latest(&text)),
             };
-            out.insert(issue, Transcript { said: said.clone() });
+            out.insert(key, Transcript { said: said.clone() });
             seen.insert(file, (stamp, said));
         }
         self.seen = seen;
@@ -221,8 +221,8 @@ mod tests {
     }
 
     fn said(reader: &mut Reader, projects: &Path, worktree: &Path) -> Option<String> {
-        let mut read = reader.read_in(projects, [(IssueNumber(7), worktree)]);
-        read.remove(&IssueNumber(7)).and_then(|t| t.said).map(|s| s.text)
+        let mut read = reader.read_in(projects, [(crate::testutil::issue_key(7), worktree)]);
+        read.remove(&crate::testutil::issue_key(7)).and_then(|t| t.said).map(|s| s.text)
     }
 
     #[test]

@@ -31,13 +31,13 @@ fn space_does_nothing_on_the_other_tabs() {
 #[test]
 fn space_refuses_an_issue_that_has_a_session_or_is_starting() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key(' '));
     assert!(state.marked.is_empty());
     assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session"));
 
     let (mut state, _) = app();
-    state.starting.insert(IssueNumber(3));
+    state.starting.insert(issue_key(3));
     press(&mut state, key(' '));
     assert!(state.marked.is_empty());
     assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session"));
@@ -60,7 +60,7 @@ fn s_with_marks_opens_the_batch_dialog_listing_them() {
 fn s_when_no_marked_issue_can_start_clears_the_marks() {
     let (mut state, _) = app();
     press(&mut state, key(' '));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('s'));
     assert!(matches!(state.focus, Focus::List));
     assert!(state.marked.is_empty());
@@ -93,18 +93,18 @@ fn confirm_starts_each_marked_issue_with_its_defaults_and_the_chosen_mode() {
     let cmds = press(&mut state, ctrl('s'));
     let reqs = starts(&cmds);
     assert_eq!(reqs.len(), 2);
-    assert_eq!((reqs[0].issue, reqs[0].branch.as_str()), (IssueNumber(1), "feat/1-add-json-output"));
-    assert_eq!((reqs[1].issue, reqs[1].branch.as_str()), (IssueNumber(3), "fix/3-retry-queue-drops-jobs"));
+    assert_eq!((reqs[0].key, reqs[0].branch.as_str()), (issue_key(1), "feat/1-add-json-output"));
+    assert_eq!((reqs[1].key, reqs[1].branch.as_str()), (issue_key(3), "fix/3-retry-queue-drops-jobs"));
     for r in &reqs {
         assert_eq!(r.mode, Mode::PlanFirst);
-        assert!(r.prompt.starts_with(&format!("Implement GitHub issue {}:", r.issue)));
+        assert!(r.prompt.starts_with(&format!("Implement GitHub issue {}:", r.key)));
         assert_eq!(r.from, StartFrom::Base);
     }
     assert!(state.marked.is_empty());
-    assert_eq!(state.starting, [IssueNumber(1), IssueNumber(3)].into());
+    assert_eq!(state.starting, [issue_key(1), issue_key(3)].into());
     assert!(matches!(state.focus, Focus::List));
     assert_eq!(state.tab, Tab::Sessions);
-    assert_eq!(selected_row(&state), Some(RowKey::Session(IssueNumber(1))));
+    assert_eq!(selected_row(&state), Some(RowKey::Session(issue_key(1))));
     assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #1, #3"));
 }
 
@@ -133,10 +133,10 @@ fn an_issue_that_gained_a_session_while_the_dialog_was_open_is_skipped() {
     let (mut state, _) = app();
     mark_3_and_1(&mut state);
     press(&mut state, key('s'));
-    state.sessions.insert(IssueNumber(1), session(1, SessionState::Running));
+    state.sessions.insert(issue_key(1), session(1, SessionState::Running));
     let cmds = press(&mut state, ctrl('s'));
     let reqs = starts(&cmds);
-    assert_eq!(reqs.iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
+    assert_eq!(reqs.iter().map(|r| r.key).collect::<Vec<_>>(), [issue_key(3)]);
     assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #3"));
 }
 
@@ -145,7 +145,7 @@ fn a_batch_where_every_issue_gained_a_session_starts_nothing() {
     let (mut state, _) = app();
     press(&mut state, key(' '));
     press(&mut state, key('s'));
-    state.starting.insert(IssueNumber(3));
+    state.starting.insert(issue_key(3));
     let cmds = press(&mut state, ctrl('s'));
     assert!(cmds.is_empty());
     assert!(state.marked.is_empty());

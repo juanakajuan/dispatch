@@ -14,12 +14,14 @@ mod tmux;
 mod work;
 mod worktree;
 
+use super::markers;
 use super::mux::{Backend, Liveness, Observed};
 use super::request::{Launch, StartFrom, StartRequest};
 use super::{Workspace, git, tmux as tmux_backend};
-use crate::config::ClaudeCommand;
-use crate::domain::{BranchName, IssueNumber, Mode, OriginRef, WorktreePath};
+use crate::config::{AgentCommand, Harness};
+use crate::domain::{BranchName, Mode, OriginRef, WorktreePath};
 use crate::proc::{ProcError, fake};
+use crate::testutil::issue_key;
 use std::path::{Path, PathBuf};
 
 fn wp(s: &str) -> WorktreePath {
@@ -34,8 +36,8 @@ fn wt(path: &str, branch: Option<&str>) -> git::Worktree {
     git::Worktree { path: wp(path), branch: branch.map(br) }
 }
 
-fn markers(rows: &[(&str, u32)]) -> git::Markers {
-    rows.iter().map(|(b, n)| (br(b), IssueNumber(*n))).collect()
+fn markers(rows: &[(&str, u32)]) -> markers::Markers {
+    rows.iter().map(|(b, n)| (br(b), issue_key(*n))).collect()
 }
 
 fn win(id: &str, path: &str, liveness: Liveness) -> Observed<tmux_backend::WindowId> {
@@ -44,7 +46,7 @@ fn win(id: &str, path: &str, liveness: Liveness) -> Observed<tmux_backend::Windo
 
 fn req() -> StartRequest {
     StartRequest {
-        issue: IssueNumber(142),
+        key: issue_key(142),
         branch: br("fix/142-x"),
         mode: Mode::Implement,
         prompt: "p".to_string(),
@@ -63,7 +65,7 @@ fn workspace(base: &Path) -> Workspace {
 }
 
 fn launch() -> Launch {
-    Launch { detect_waiting: false, claude: ClaudeCommand { program: "claude".to_string(), args: Vec::new() } }
+    Launch { detect_waiting: false, harness: Harness::Claude, command: AgentCommand::default_for(Harness::Claude) }
 }
 
 /// The git repository every sim shares: `orbit` with its main worktree, and

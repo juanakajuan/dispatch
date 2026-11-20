@@ -1,6 +1,6 @@
 use super::tmux::WindowId;
 use super::worktree::WORKTREES_DIR;
-use crate::domain::{BranchName, IssueNumber, OriginRef};
+use crate::domain::{BranchName, GithubRef, OriginRef, SessionKey};
 use crate::proc::ProcError;
 use std::fmt;
 use std::path::PathBuf;
@@ -12,9 +12,9 @@ pub enum SessionError {
     Conflict(StartConflict),
     Mux(MuxError),
     Git(ProcError),
-    NoSession(IssueNumber),
-    NotRunning(IssueNumber),
-    NotVisibleAfterStart(IssueNumber),
+    NoSession(SessionKey),
+    NotRunning(SessionKey),
+    NotVisibleAfterStart(SessionKey),
     /// `git rev-list --count` printed this instead of a number.
     NotACount(String),
     /// origin's URL has no `owner/name` path to swap for a fork's.
@@ -27,9 +27,9 @@ impl fmt::Display for SessionError {
             SessionError::Conflict(c) => c.fmt(f),
             SessionError::Mux(e) => e.fmt(f),
             SessionError::Git(e) => e.fmt(f),
-            SessionError::NoSession(issue) => write!(f, "no session for {issue}"),
-            SessionError::NotRunning(issue) => write!(f, "{issue} has no running session"),
-            SessionError::NotVisibleAfterStart(issue) => write!(f, "session for {issue} is not visible after start"),
+            SessionError::NoSession(key) => write!(f, "no session for {key}"),
+            SessionError::NotRunning(key) => write!(f, "{key} has no running session"),
+            SessionError::NotVisibleAfterStart(key) => write!(f, "session for {key} is not visible after start"),
             SessionError::NotACount(raw) => write!(f, "git rev-list printed {raw:?} instead of a commit count"),
             SessionError::NoForkUrl(origin) => write!(f, "can not make a fork's URL from origin's URL {origin:?}"),
         }
@@ -44,10 +44,10 @@ impl From<MuxError> for SessionError {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StartConflict {
-    /// `branch` is already checked out in a worktree that is not this issue's.
+    /// `branch` is already checked out in a worktree that is not this session's.
     BranchCheckedOut { branch: BranchName, path: PathBuf },
-    /// `branch` carries a marker for a different issue.
-    BranchBelongsTo { branch: BranchName, issue: IssueNumber },
+    /// `branch` carries a marker for a different session.
+    BranchBelongsTo { branch: BranchName, key: SessionKey },
     /// The deterministic worktree dir exists and is not a git worktree.
     PathTaken(PathBuf),
 }
@@ -58,8 +58,8 @@ impl fmt::Display for StartConflict {
             StartConflict::BranchCheckedOut { branch, path } => {
                 write!(f, "branch {} is already checked out in {}", branch.as_str(), path.display())
             }
-            StartConflict::BranchBelongsTo { branch, issue } => {
-                write!(f, "branch {} already belongs to issue {issue}", branch.as_str())
+            StartConflict::BranchBelongsTo { branch, key } => {
+                write!(f, "branch {} already belongs to {}", branch.as_str(), GithubRef::from(*key))
             }
             StartConflict::PathTaken(path) => {
                 write!(f, "{} exists and is not a git worktree. Move it away and start again.", path.display())

@@ -2,7 +2,7 @@
 //! captured from git 2.56.
 
 use super::error::{FsAction, FsError, GitError, SessionError};
-use crate::domain::{BranchName, CommitOid, IssueNumber, OriginRef, RepoSlug, WorktreePath};
+use crate::domain::{BranchName, CommitOid, OriginRef, RepoSlug, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,10 +14,7 @@ pub(super) struct Worktree {
     pub branch: Option<BranchName>,
 }
 
-/// branch -> issue, from `dispatch-issue`. Only values that parsed.
-pub(super) type Markers = BTreeMap<BranchName, IssueNumber>;
-
-fn git<I, S>(root: &Path, args: I) -> Result<String, ProcError>
+pub(super) fn git<I, S>(root: &Path, args: I) -> Result<String, ProcError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
@@ -101,27 +98,6 @@ fn parse_worktrees(text: &str) -> Vec<Worktree> {
         .collect()
 }
 
-pub(super) fn list_markers(root: &Path) -> Result<Markers, ProcError> {
-    match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-issue$"]) {
-        Ok(t) => Ok(parse_markers(&t)),
-        Err(e) if e.exit_code() == Some(1) => Ok(Markers::new()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Lines like `branch.fix/142-retry-queue.dispatch-issue 142`.
-/// The branch is everything between `branch.` and the last `.`; the value is
-/// everything after the first space.
-fn parse_markers(text: &str) -> Markers {
-    text.lines()
-        .filter_map(|line| {
-            let (key, value) = line.split_once(' ')?;
-            let b = key.strip_prefix("branch.")?.strip_suffix(".dispatch-issue")?;
-            Some((BranchName::parse(b).ok()?, IssueNumber(value.trim().parse().ok()?)))
-        })
-        .collect()
-}
-
 pub(super) fn branch_exists(root: &Path, branch: &BranchName) -> Result<bool, ProcError> {
     let r = format!("refs/heads/{}", branch.as_str());
     match git(root, ["show-ref", "--verify", "--quiet", r.as_str()]) {
@@ -167,7 +143,7 @@ pub(super) fn fetch_fork(
     for (key, value) in config {
         git(root, ["config".to_string(), "--replace-all".to_string(), key, value]).map_err(SessionError::Git)?;
     }
-    git(root, ["fetch".to_string(), remote, format!("refs/heads/{h}:refs/heads/{b}")]).map_err(SessionError::Git)?;
+    git(root, super::start_argv::fork_fetch_args(&remote, head, branch)).map_err(SessionError::Git)?;
     Ok(())
 }
 
@@ -199,11 +175,6 @@ pub(super) fn add_worktree(
     create_from: Option<&OriginRef>,
 ) -> Result<(), ProcError> {
     git(root, super::start_argv::worktree_add_args(&dir.to_string_lossy(), branch.as_str(), create_from)).map(|_| ())
-}
-
-pub(super) fn set_marker(root: &Path, branch: &BranchName, issue: IssueNumber) -> Result<(), ProcError> {
-    let key = format!("branch.{}.dispatch-issue", branch.as_str());
-    git(root, ["config".to_string(), key, issue.0.to_string()]).map(|_| ())
 }
 
 /// Whether `git status --porcelain` in the worktree lists any change,
@@ -399,18 +370,6 @@ mod tests {
     }
 
     #[test]
-    fn markers_from_real_regexp_output() {
-        let text = "branch.fix/1-a.b-c.dispatch-issue 1\n\
-                    branch.feat/2-x.dispatch-issue abc\n\
-                    branch.feat/3.dispatch-issue 3\n";
-        let m = parse_markers(text);
-        assert_eq!(m.len(), 2);
-        assert_eq!(m[&branch("fix/1-a.b-c")], IssueNumber(1));
-        assert_eq!(m[&branch("feat/3")], IssueNumber(3));
-        assert!(!m.contains_key(&branch("feat/2-x")), "non-numeric issue is dropped");
-    }
-
-    #[test]
     fn fetch_splits_remote_and_branch() {
         fake::install(|_| Ok(String::new()));
         fetch(Path::new("/"), &OriginRef::parse("origin/release/1.0").expect("ref")).expect("ok");
@@ -469,11 +428,5 @@ mod tests {
         assert_eq!(copy("fork/pr-7"), Some(("refs/remotes/dispatch-fork-pr-7/fix-scope", "f")));
         assert_eq!(copy("fix/3-x"), Some(("refs/remotes/origin/fix/3-x", "o")));
         assert_eq!(copy("fork/pr-8"), None);
-    }
-
-    #[test]
-    fn marker_list_exit_one_is_empty() {
-        fake::install(|_| Err(fake::fail("git", 1, "")));
-        assert!(list_markers(Path::new("/")).expect("ok").is_empty());
     }
 }

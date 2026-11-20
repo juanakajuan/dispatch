@@ -159,9 +159,25 @@ while IFS= read -r line; do
   hook Stop; echo "FAKE-CLAUDE waiting for input"
 done
 EOF
+  # Stand-in for the codex, opencode, and agy CLIs (the other harnesses). One script, three names
+  # on PATH: the harness's default program resolves to it. Logs argv to the same log as fake-claude,
+  # takes no hooks, and echoes input. Type `exit` to make it exit.
+  cat >"$RUN/bin/fake-agent" <<EOF
+#!/usr/bin/env bash
+# Verification scaffolding from verify.sh up. Stands in for the codex, opencode, and agy CLIs.
+name="\$(basename "\$0")"
+echo "\$(date -Is) cwd=\$PWD pane=\${TMUX_PANE:-} agent=\$name argv:\$(printf ' %q' "\$@")" >>"$RUN/evidence/claude-calls.log"
+echo "FAKE-AGENT \$name started in \$PWD"
+while IFS= read -r line; do
+  [[ \$line == exit ]] && { echo "FAKE-AGENT exiting"; exit 0; }
+  echo "FAKE-AGENT got: \$line"
+done
+EOF
+  chmod +x "$RUN/bin/fake-agent"
+  for agent in codex opencode agy; do ln -s fake-agent "$RUN/bin/$agent"; done
   chmod +x "$RUN/bin/"{gh,browser,fake-claude}
 
-  jq -n --arg c "$RUN/bin/fake-claude" '{claude_command: [$c], detect_waiting: true, multiplexer: "tmux"}' >"$RUN/xdg/dispatch/config.json"
+  jq -n --arg c "$RUN/bin/fake-claude" '{command: [$c], detect_waiting: true, multiplexer: "tmux"}' >"$RUN/xdg/dispatch/config.json"
 
   gh repo clone "$repo" "$CLONE" -- --depth 1 --quiet >&2
   # A clone of a fork gets an `upstream` remote that gh resolves by default, and
@@ -284,7 +300,7 @@ cmd_state() {
   out="$RUN/evidence/$n-$label.state.txt"
   {
     echo "## git worktree list"; git -C "$CLONE" worktree list
-    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-issue$' || echo "(none)"
+    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-(issue|pr|harness)$' || echo "(none)"
     echo "## tmux windows (id name dead tag waiting)"
     t list-windows -a -F '#{window_id} #{window_name} dead=#{pane_dead} tag=#{@dispatch-worktree} waiting=#{@dispatch-waiting}'
   } >"$out"
@@ -356,7 +372,7 @@ case "$sub" in
   state) cmd_state "$@" ;;
   client) load "$1"; cmd_client ;;
   tmux) load "$1"; shift; t "$@" ;;
-  window) load "$1"; t capture-pane -p -t "$(t list-windows -a -F '#{window_id} #{window_name}' | awk -v n="$2" '$2==n {print $1; exit}')" ;;
+  window) load "$1"; t capture-pane -p -t "$(t list-windows -a -F '#{window_id} #{window_name}' | awk -v n="$2" '{id=$1; sub(/^[^ ]+ /, "")} $0==n {print id; exit}')" ;;
   restart) cmd_restart "$@" ;;
   down) cmd_down "$@" ;;
   list) cmd_list ;;

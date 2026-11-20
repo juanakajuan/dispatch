@@ -1,7 +1,7 @@
 use crate::clipboard::CopyError;
 use crate::config::settings::Setting;
 use crate::config::{Config, ConfigError};
-use crate::domain::{GithubRef, Issue, IssueNumber, MergeMethod, PrNumber, PullRequest};
+use crate::domain::{GithubRef, Issue, MergeMethod, PrNumber, PullRequest, SessionKey};
 use crate::github::GhError;
 use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
@@ -32,36 +32,36 @@ pub enum Msg {
     Viewer(Result<String, GhError>),
     Observed(Result<Observation, SessionError>),
     Started {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<StartOutcome, SessionError>,
     },
     Stopped {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<(), SessionError>,
     },
     Resumed {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<(), SessionError>,
     },
     Removed {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<RemoveOutcome, SessionError>,
     },
     RemovedAfterMerge {
         pr: PrNumber,
         method: MergeMethod,
-        issue: IssueNumber,
+        key: SessionKey,
         session: SessionState,
         result: Result<RemoveOutcome, SessionError>,
     },
     Cleaned(CleanReport),
     Attached {
-        issue: IssueNumber,
+        key: SessionKey,
         to: AttachTo,
         result: Result<(), AttachError>,
     },
     Diff {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<Diff, SessionError>,
     },
     Opened {
@@ -77,7 +77,7 @@ pub enum Msg {
         result: Result<String, CopyError>,
     },
     Sent {
-        issue: IssueNumber,
+        key: SessionKey,
         kind: SendKind,
         result: Result<(), SessionError>,
     },
@@ -97,7 +97,7 @@ pub enum Msg {
 pub struct Observation {
     pub sessions: Sessions,
     /// Only sessions that have a conversation.
-    pub transcripts: BTreeMap<IssueNumber, Transcript>,
+    pub transcripts: BTreeMap<SessionKey, Transcript>,
     /// Only sessions whose git reads worked.
     pub work: Works,
 }
@@ -107,7 +107,7 @@ pub enum Cmd {
     Job(Job),
     /// Runs on the main thread: `AttachPlan::Suspend` must own the terminal.
     Attach {
-        issue: IssueNumber,
+        key: SessionKey,
         to: AttachTo,
     },
     /// Runs on the main thread: the copy writes to the terminal.
@@ -140,7 +140,7 @@ pub enum ReadJob {
     /// Look up the page URL, for `OpenWith::Clipboard`.
     FetchPageUrl(GithubRef),
     /// The session's worktree changes, for the `d` overlay.
-    Diff(IssueNumber),
+    Diff(SessionKey),
 }
 
 /// Writes share one thread, because two concurrent `git config` writes can
@@ -152,8 +152,8 @@ pub enum ReadJob {
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteJob {
     Start(StartRequest, Launch),
-    Stop(IssueNumber),
-    Resume(IssueNumber, Launch),
+    Stop(SessionKey),
+    Resume(SessionKey, Launch),
     /// Close the window, then remove the worktree and branch, unless they hold
     /// work that is not saved.
     Remove(RemoveTarget),
@@ -171,7 +171,7 @@ pub enum WriteJob {
     },
     /// Type a line into the session's Claude prompt and submit it.
     Send {
-        issue: IssueNumber,
+        key: SessionKey,
         kind: SendKind,
         text: String,
     },

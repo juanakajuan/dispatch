@@ -47,7 +47,7 @@ fn after_merge(cmds: &[Cmd]) -> Vec<&WriteJob> {
 fn agent_on_conflict(remove: RemoveOnMerge) -> State {
     let (mut state, _) = app();
     state.config.remove_on_merge = remove;
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, conflict(ASK));
     state
 }
@@ -63,8 +63,8 @@ fn a_pr_the_agent_merged_removes_its_session_once() {
             pr: PrNumber(10),
             method: MergeMethod::Rebase,
             session: SessionState::Running,
-            target: RemoveTarget { issue: IssueNumber(3), merged_head: Some(oid) },
-        }] if oid.as_str() == "agent-sha"
+            target: RemoveTarget { key, merged_head: Some(oid) },
+        }] if *key == issue_key(3) && oid.as_str() == "agent-sha"
     ));
     assert_eq!(toast(&state), "Merged PR #10 (rebase), removing #3");
     let msg = merged_list(&state, "agent-sha");
@@ -76,7 +76,7 @@ fn a_pr_the_agent_merged_stops_its_session_when_remove_on_merge_is_off() {
     let mut state = agent_on_conflict(RemoveOnMerge::Off);
     let msg = merged_list(&state, "agent-sha");
     let cmds = press(&mut state, msg);
-    assert!(matches!(after_merge(&cmds)[..], [WriteJob::Stop(IssueNumber(3))]));
+    assert!(matches!(after_merge(&cmds)[..], [WriteJob::Stop(k)] if *k == issue_key(3)));
     assert_eq!(toast(&state), "Merged PR #10 (rebase) and stopped #3's session");
 }
 
@@ -86,8 +86,8 @@ fn a_fix_session_that_merged_its_pr_is_removed() {
     state.config.remove_on_merge = RemoveOnMerge::On;
     press(&mut state, conflict(ASK));
     press(&mut state, key('m'));
-    state.starting.remove(&IssueNumber(3));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.starting.remove(&issue_key(3));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let msg = merged_list(&state, "fix-sha");
     let cmds = press(&mut state, msg);
     assert!(matches!(after_merge(&cmds)[..], [WriteJob::RemoveAfterMerge { .. }]));
@@ -97,7 +97,7 @@ fn a_fix_session_that_merged_its_pr_is_removed() {
 fn a_pr_merged_without_a_handoff_leaves_its_session() {
     let (mut state, _) = app();
     state.config.remove_on_merge = RemoveOnMerge::On;
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let msg = merged_list(&state, "web-sha");
     assert!(after_merge(&press(&mut state, msg)).is_empty());
 }

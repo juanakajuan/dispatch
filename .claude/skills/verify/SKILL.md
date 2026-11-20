@@ -22,7 +22,7 @@ Each run is a directory `RUN=/tmp/dispatch-verify/<id>` (set `DISPATCH_VERIFY_HO
 | tmux server | socket `$RUN/tmux/sock`, no user tmux.conf | The user's tmux sessions are never touched. dispatch runs inside this server, so its windows go there too |
 | checkout | `$RUN/work/<repo>`, a fresh shallow `gh repo clone` | Session worktrees go to `$RUN/work/<repo>/.claude/worktrees/<issue>`, never into the user's checkout. `up` sets `gh repo set-default <repo>`, so a fork does not read its parent. It also tracks every `origin` branch, as a normal clone does |
 | Claude config | `$RUN/claude` (`CLAUDE_CONFIG_DIR`) | dispatch reads session transcripts from `projects/` here, never from your `~/.claude`. The fake claude writes one on each fresh start |
-| config | `$RUN/xdg/dispatch/config.json` | `claude_command` is `$RUN/bin/fake-claude` and `multiplexer` is `tmux`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
+| config | `$RUN/xdg/dispatch/config.json` | `command` is `$RUN/bin/fake-claude` and `multiplexer` is `tmux`. Other entries of `~/.config` are symlinked, so `gh` and `git` keep their login and settings |
 | `claude` | `$RUN/bin/fake-claude` | Logs its argv, runs dispatch's real `--settings` hooks (`SessionStart` on a fresh start, `Stop` sets `needs you`), echoes typed lines. Type `exit` to make it exit. `touch $RUN/ask-trust` makes a fresh start ask the trust question first, before any hook; type a line to answer |
 | `gh` | `$RUN/bin/gh` (first on PATH) | Passes `issue list/view`, `pr list/view`, `repo view`, `auth status`, and `api graphql` queries (not mutations) to the real gh. Blocks every other call, `pr merge` too, and logs it |
 | browser | `$RUN/bin/browser` (`GH_BROWSER`, `BROWSER`) | `o` goes through the real `gh … --web`. The URL goes to a log. No browser opens |
@@ -72,7 +72,7 @@ $V keys "$RUN" 1 j s           # tmux key names: j k s a x m o r S / q Enter Esc
 $V type "$RUN" 'text'          # literal text, for the filter or a dialog field
 $V wait "$RUN" 'needs you' 20  # wait until the screen matches a grep -E regex; on timeout prints the screen, exits 1
 $V screen "$RUN"               # print the screen now
-$V window "$RUN" '#26'         # print the pane of a session window (the fake claude output)
+$V window "$RUN" '#26'         # print the pane of a session window by name ('#26', 'PR #12')
 $V client "$RUN"               # attach a headless tmux client; needed before testing `a`
 $V tmux "$RUN" ARGS...         # any tmux command against this run's server only
 $V restart "$RUN"              # start dispatch again in the drive pane, as a user who quits and reruns it
@@ -111,8 +111,8 @@ Proof standards:
 
 - Drive the real user path: keys in the dispatch pane. Do not call `git worktree add` or `tmux new-window` yourself to make a state.
 - Capture the action and the result: a `shot` before the key and after it.
-- Check side effects with `state` and the logs, not only the screen. A start is proven by the worktree, the `branch.<b>.dispatch-issue` marker, the tagged window, and the argv in `claude-calls.log`.
-- The fake claude is the one mock. It stands at the `claude_command` boundary that the config already exposes. The hooks it runs are dispatch's real hooks.
+- Check side effects with `state` and the logs, not only the screen. A start is proven by the worktree, the `branch.<b>.dispatch-issue` (or `dispatch-pr`) and `dispatch-harness` markers, the tagged window, and the argv in `claude-calls.log`.
+- The fake claude is the one mock. It stands at the `command` boundary that the config already exposes. `codex`, `opencode`, and `agy` stand-ins (`fake-agent`) sit on `PATH` for the other harnesses. The hooks it runs are dispatch's real hooks.
 - The gh guard does not fake answers. It passes reads to GitHub and refuses writes. A blocked merge proves the exact argv dispatch would run (in `gh-blocked.log`). It does not prove that GitHub accepts the merge.
 
 ## Cleanup

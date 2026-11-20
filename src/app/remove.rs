@@ -4,7 +4,7 @@ use super::list::{current_session, pr_for_session};
 use super::merge::Armed;
 use super::msg::{Cmd, Job, WriteJob};
 use super::toast;
-use crate::domain::{CommitOid, IssueNumber, PrState};
+use crate::domain::{CommitOid, PrState, SessionKey};
 use crate::session::error::SessionError;
 use crate::session::{CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Session, SessionState};
 
@@ -28,14 +28,14 @@ fn merged_head(state: &State, session: &Session) -> Option<CommitOid> {
 }
 
 fn remove_target(state: &State, session: &Session) -> RemoveTarget {
-    RemoveTarget { issue: session.issue, merged_head: merged_head(state, session) }
+    RemoveTarget { key: session.key, merged_head: merged_head(state, session) }
 }
 
 fn merged_targets(state: &State) -> Vec<RemoveTarget> {
     state
         .sessions
         .values()
-        .filter_map(|s| merged_head(state, s).map(|head| RemoveTarget { issue: s.issue, merged_head: Some(head) }))
+        .filter_map(|s| merged_head(state, s).map(|head| RemoveTarget { key: s.key, merged_head: Some(head) }))
         .collect()
 }
 
@@ -47,25 +47,25 @@ fn merged_sessions_count(n: usize) -> String {
     if n == 1 { "1 merged session".to_string() } else { format!("{n} merged sessions") }
 }
 
-/// `D`: the first press arms, the next press on the same issue removes. The
+/// `D`: the first press arms, the next press on the same session removes. The
 /// job checks the worktree again before it removes anything.
 pub(super) fn remove_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let Some(session) = current_session(state) else {
         toast::info(state, "No session here.".to_string());
         return Vec::new();
     };
-    let issue = session.issue;
+    let key = session.key;
     if !is_removable(state, session) {
-        toast::info(state, format!("{issue} is still running. Press x to stop it first."));
+        toast::info(state, format!("{key} is still running. Press x to stop it first."));
         return Vec::new();
     }
-    if armed != Some(&Armed::Remove(issue)) {
-        state.armed = Some(Armed::Remove(issue));
-        toast::info(state, format!("Press D again to remove {issue}'s worktree and branch"));
+    if armed != Some(&Armed::Remove(key)) {
+        state.armed = Some(Armed::Remove(key));
+        toast::info(state, format!("Press D again to remove {key}'s worktree and branch"));
         return Vec::new();
     }
     let target = remove_target(state, session);
-    toast::info(state, format!("Removing {issue}"));
+    toast::info(state, format!("Removing {key}"));
     vec![Cmd::Job(Job::Write(WriteJob::Remove(target)))]
 }
 
@@ -75,7 +75,7 @@ pub(super) fn clean_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         toast::info(state, "No merged sessions to clean.".to_string());
         return Vec::new();
     }
-    let issues: Vec<IssueNumber> = targets.iter().map(|t| t.issue).collect();
+    let issues: Vec<SessionKey> = targets.iter().map(|t| t.key).collect();
     let label = merged_sessions_count(issues.len());
     if !matches!(armed, Some(Armed::Clean(a)) if *a == issues) {
         state.armed = Some(Armed::Clean(issues));
@@ -86,25 +86,25 @@ pub(super) fn clean_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     vec![Cmd::Job(Job::Write(WriteJob::Clean(targets)))]
 }
 
-fn refusal_sentence(issue: IssueNumber, why: RemoveRefusal) -> String {
+fn refusal_sentence(key: SessionKey, why: RemoveRefusal) -> String {
     match why {
         RemoveRefusal::Uncommitted => {
-            format!("{issue} has changes that are not committed. Commit or drop them, then press D again.")
+            format!("{key} has changes that are not committed. Commit or drop them, then press D again.")
         }
         RemoveRefusal::Unpushed(n) if n.get() == 1 => {
-            format!("{issue} has 1 commit that is not pushed. Push it, then press D again.")
+            format!("{key} has 1 commit that is not pushed. Push it, then press D again.")
         }
         RemoveRefusal::Unpushed(n) => {
-            format!("{issue} has {n} commits that are not pushed. Push them, then press D again.")
+            format!("{key} has {n} commits that are not pushed. Push them, then press D again.")
         }
     }
 }
 
-pub(super) fn removed(state: &mut State, issue: IssueNumber, result: Result<RemoveOutcome, SessionError>) -> Vec<Cmd> {
+pub(super) fn removed(state: &mut State, key: SessionKey, result: Result<RemoveOutcome, SessionError>) -> Vec<Cmd> {
     match result {
-        Ok(RemoveOutcome::Removed) => toast::info(state, format!("Removed {issue}'s worktree and branch")),
-        Ok(RemoveOutcome::Refused(why)) => toast::info(state, refusal_sentence(issue, why)),
-        Err(e) => toast::error(state, format!("Remove {issue} failed: {e}")),
+        Ok(RemoveOutcome::Removed) => toast::info(state, format!("Removed {key}'s worktree and branch")),
+        Ok(RemoveOutcome::Refused(why)) => toast::info(state, refusal_sentence(key, why)),
+        Err(e) => toast::error(state, format!("Remove {key} failed: {e}")),
     }
     observe_now(state)
 }

@@ -27,6 +27,18 @@ fn dialog_shows_fields_and_the_exact_commands() {
 }
 
 #[test]
+fn dialog_previews_the_chosen_harness_with_no_hooks() {
+    let mut state = full_state();
+    state.config.harness = crate::config::Harness::Codex;
+    open_dialog(&mut state);
+    let screen = text(&render(&state, 120, 30));
+    let commands = previewed_commands(&screen);
+    let run = commands.last().expect("a run line");
+    assert!(run.starts_with("codex \"Implement GitHub issue #2"), "{run}\n{screen}");
+    assert!(!screen.contains("waiting hooks"), "{screen}");
+}
+
+#[test]
 fn dialog_previews_the_herdr_command_on_herdr() {
     let mut state = full_state();
     state.context.start_preview = StartPreview::herdr_inside("w-orbit");
@@ -141,4 +153,22 @@ fn a_click_in_a_scrolled_branch_lands_on_the_character_under_the_pointer() {
     click_at(&mut state, rect.x + 4, rect.y);
     let Focus::Dialog(d) = &state.focus else { panic!("dialog open") };
     assert_eq!(d.branch.cursor(), (0, first + 4));
+}
+
+#[test]
+fn the_pr_dialog_names_the_pr_marks_the_branch_as_fixed_and_previews_that_origin() {
+    let mut state = full_state();
+    state.prs.items.push(crate::testutil::pr(11, "chore/dep", &[]));
+    send(&mut state, KeyCode::Char('2'));
+    state.tabs.prs.selected = Some(crate::domain::PrNumber(11));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = text(&render(&state, 120, 30));
+    for want in ["Start session for PR #11 PR 11", "chore/dep (PR branch)", "Work on GitHub PR #11: PR 11"] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+    assert_eq!(
+        previewed_commands(&screen).first().map(String::as_str),
+        Some("git worktree add .claude/worktrees/pr-11 -b chore/dep origin/chore/dep"),
+        "{screen}"
+    );
 }

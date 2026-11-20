@@ -1,7 +1,7 @@
 use super::*;
 
 fn read(state: &mut State, n: u32, diff: Diff) {
-    update(state, Msg::Diff { issue: IssueNumber(n), result: Ok(diff) });
+    update(state, Msg::Diff { key: issue_key(n), result: Ok(diff) });
 }
 
 fn patch(text: &str) -> Diff {
@@ -9,7 +9,7 @@ fn patch(text: &str) -> Diff {
 }
 
 fn reading(state: &State) -> bool {
-    matches!(state.focus, Focus::Diff { issue: IssueNumber(3), body: DiffBody::Reading, .. })
+    matches!(state.focus, Focus::Diff { key, body: DiffBody::Reading, .. } if key == issue_key(3))
 }
 
 #[test]
@@ -19,16 +19,16 @@ fn d_without_a_session_toasts_and_with_one_starts_a_read() {
     assert_eq!(toast(&state), "No session for this issue. Press s to start one.");
     assert!(matches!(state.focus, Focus::List));
 
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, key('d'));
-    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::Diff(IssueNumber(3))))]));
+    assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::Diff(k)))] if *k == issue_key(3)));
     assert!(reading(&state), "an exited session has a diff too");
 }
 
 #[test]
 fn the_read_diff_fills_the_overlay() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('d'));
     read(&mut state, 3, patch("+a\n"));
     assert!(matches!(&state.focus, Focus::Diff { body: DiffBody::Read(d), .. } if d.patch == "+a\n"));
@@ -37,7 +37,7 @@ fn the_read_diff_fills_the_overlay() {
 #[test]
 fn an_empty_diff_closes_the_overlay_with_a_toast() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('d'));
     read(&mut state, 3, patch("\n"));
     assert!(matches!(state.focus, Focus::List));
@@ -47,9 +47,9 @@ fn an_empty_diff_closes_the_overlay_with_a_toast() {
 #[test]
 fn a_failed_read_closes_the_overlay_with_a_red_toast() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('d'));
-    update(&mut state, Msg::Diff { issue: IssueNumber(3), result: Err(git_error("fatal: bad")) });
+    update(&mut state, Msg::Diff { key: issue_key(3), result: Err(git_error("fatal: bad")) });
     assert!(matches!(state.focus, Focus::List));
     assert_eq!(toast(&state), "Reading the diff of #3 failed: git failed with code 128: fatal: bad");
     assert!(state.toast.as_ref().map(Toast::level) == Some(Level::Error));
@@ -58,7 +58,7 @@ fn a_failed_read_closes_the_overlay_with_a_red_toast() {
 #[test]
 fn a_stale_result_is_ignored() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     read(&mut state, 3, patch("+a\n"));
     assert!(matches!(state.focus, Focus::List), "no overlay is open");
     press(&mut state, key('d'));
@@ -68,14 +68,14 @@ fn a_stale_result_is_ignored() {
     read(&mut state, 3, patch("+c\n"));
     assert!(matches!(&state.focus, Focus::Diff { body: DiffBody::Read(d), .. } if d.patch == "+a\n"));
     press(&mut state, code(KeyCode::Esc));
-    update(&mut state, Msg::Diff { issue: IssueNumber(3), result: Err(git_error("x")) });
+    update(&mut state, Msg::Diff { key: issue_key(3), result: Err(git_error("x")) });
     assert!(state.toast.is_none(), "a result for a closed overlay says nothing");
 }
 
 #[test]
 fn j_k_scroll_and_esc_or_d_close() {
     let (mut state, now) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('d'));
     read(&mut state, 3, patch("+a\n"));
     assert!(press(&mut state, key('q')).is_empty(), "list keys do not act while it is open");
@@ -102,6 +102,6 @@ fn j_k_scroll_and_esc_or_d_close() {
 fn the_key_bar_shows_diff_and_shell_only_with_a_session() {
     let (mut state, _) = app();
     assert!(!shows(&state, "d", "show diff") && !shows(&state, "!", "open shell"));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     assert!(shows(&state, "d", "show diff") && shows(&state, "!", "open shell"));
 }

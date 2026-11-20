@@ -50,12 +50,13 @@ fn read(ws: &Workspace, tx: &Sender<Msg>, transcripts: &Mutex<transcript::Reader
         ReadJob::FetchViewer => Msg::Viewer(github::viewer_login(ws.repo_root())),
         ReadJob::ObserveSessions => Msg::Observed(ws.observe().map(|sessions| {
             let mut reader = transcripts.lock().unwrap_or_else(PoisonError::into_inner);
-            let transcripts = reader.read(sessions.values().map(|s| (s.issue, s.worktree.as_path())));
+            let transcripts = reader
+                .read(sessions.values().filter(|s| s.harness.has_transcript()).map(|s| (s.key, s.worktree.as_path())));
             let work = ws.work(&sessions);
             Observation { sessions, transcripts, work }
         })),
         ReadJob::Open(target) => Msg::Opened { target, result: github::open_in_browser(ws.repo_root(), target) },
-        ReadJob::Diff(issue) => Msg::Diff { issue, result: ws.diff(issue) },
+        ReadJob::Diff(key) => Msg::Diff { key, result: ws.diff(key) },
         ReadJob::FetchPageUrl(target) => Msg::PageUrl { target, result: github::page_url(ws.repo_root(), target) },
     };
     let _ = tx.send(msg);
@@ -66,20 +67,16 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
     std::thread::spawn(move || {
         for job in jobs {
             let msg = match job {
-                WriteJob::Start(req, launch) => Msg::Started { issue: req.issue, result: ws.start(&req, &launch) },
-                WriteJob::Stop(issue) => Msg::Stopped { issue, result: ws.stop(issue) },
-                WriteJob::Remove(target) => Msg::Removed { issue: target.issue, result: ws.remove(&target) },
-                WriteJob::RemoveAfterMerge { pr, method, session, target } => Msg::RemovedAfterMerge {
-                    pr,
-                    method,
-                    issue: target.issue,
-                    session,
-                    result: ws.stop_and_remove(&target),
-                },
+                WriteJob::Start(req, launch) => Msg::Started { key: req.key, result: ws.start(&req, &launch) },
+                WriteJob::Stop(key) => Msg::Stopped { key, result: ws.stop(key) },
+                WriteJob::Remove(target) => Msg::Removed { key: target.key, result: ws.remove(&target) },
+                WriteJob::RemoveAfterMerge { pr, method, session, target } => {
+                    Msg::RemovedAfterMerge { pr, method, key: target.key, session, result: ws.stop_and_remove(&target) }
+                }
                 WriteJob::Clean(targets) => Msg::Cleaned(ws.clean(&targets)),
-                WriteJob::Resume(issue, launch) => Msg::Resumed { issue, result: ws.resume(issue, &launch) },
+                WriteJob::Resume(key, launch) => Msg::Resumed { key, result: ws.resume(key, &launch) },
                 WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),
-                WriteJob::Send { issue, kind, text } => Msg::Sent { issue, kind, result: ws.send(issue, &text) },
+                WriteJob::Send { key, kind, text } => Msg::Sent { key, kind, result: ws.send(key, &text) },
                 WriteJob::Merge(ask) => Msg::Merged { ask, run: merge::job::merge(ws.repo_root(), ask) },
             };
             if tx.send(msg).is_err() {

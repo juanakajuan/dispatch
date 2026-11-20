@@ -1,6 +1,8 @@
 //! Shared fixtures for unit tests.
 
-use crate::domain::{Checks, CommitOid, Issue, IssueNumber, Mergeability, PrBranch, PrNumber, PrState, PullRequest};
+use crate::domain::{
+    Checks, CommitOid, Issue, IssueNumber, Mergeability, PrBranch, PrNumber, PrState, PullRequest, SessionKey,
+};
 use std::path::PathBuf;
 
 pub fn issue(number: u32, title: &str, labels: &[&str]) -> Issue {
@@ -45,4 +47,12 @@ pub fn temp_dir(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     std::fs::canonicalize(&dir).expect("canonicalize temp dir")
+}
+
+pub fn issue_key(n: u32) -> SessionKey {
+    SessionKey::Issue(IssueNumber(n))
+}
+
+pub fn pr_key(n: u32) -> SessionKey {
+    SessionKey::Pr(PrNumber(n))
 }
