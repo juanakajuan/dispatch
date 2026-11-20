@@ -91,7 +91,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
-| `/` | Filter. Enter keeps it, Esc clears it |
+| `/` | Filter. Enter keeps it, Esc clears it. See [Filter](#filter) |
 | `S` | Change the sort order of the tab. See [Order](#order) |
 | `q`, Ctrl-C | Quit |
 | `,` | Open the settings menu. See [Config](#config) |
@@ -102,6 +102,27 @@ In the dialog: Tab and Shift-Tab change the field, Left and Right change the mod
 Mouse: every action works with a click. A click selects a row or a tab, and a double-click acts like Enter on the row. A click on a key bar entry, the `S sort` footer, or the filter prompt presses that key. In the start dialog, click a field to focus it, a mode to pick it, a text input to place the cursor, and `Start` or `Cancel`. In the settings menu, click a row to select it and click it again to change it. `esc ✕` closes a menu. In the keys menu (`?`), click an entry to close it and run that binding, which reaches settings, refresh and the rest. The wheel moves the selection and scrolls the menus. Keyboard bindings are unchanged.
 
 A session that waits for you shows `needs you`. This needs the hooks that dispatch adds (see `detect_waiting`).
+
+## Filter
+
+Press `/` and type. Free text matches the number, the title, and the labels or the branch of a row, without case. A term matches one fact about a row. A row shows only when the text and every term match.
+
+| Term | Matches |
+|---|---|
+| `label:bug` | A row with this label |
+| `assignee:octo`, `assignee:@me` | A row assigned to this login. `@me` is the login of `gh` |
+| `author:octo`, `author:@me` | A row that this login opened |
+| `milestone:v1` | A row in this milestone |
+| `state:open` | A row in this state. The words are `open`, `draft`, `merged`, `closed`, `needs-you`, `working`, `exited`, and `in-review` |
+| `checks:pass` | A PR, or an issue with a PR, with these checks: `pass`, `fail`, `pending`, or `none` |
+| `has:pr`, `has:session` | A row with a PR, or with a session |
+| `is:fork`, `is:marked` | A row from a fork PR, or an issue that you marked with Space |
+
+Put `-` before a term to keep the rows that it does not match, for example `-label:wontfix` or `-has:pr`. A term matches its field exactly, without case. Put a value with spaces in double quotes: `label:"good first issue"`. A value outside the fixed words, such as `state:bogus`, shows red and matches no row.
+
+On the Sessions tab, terms read the issue of the session. On the Issues tab, `checks:` and `is:fork` read the lead PR of the issue.
+
+Press Tab to complete the word that you type. It completes a term key, or a value from the items that the tab already shows. Press Tab again for the next choice, and Shift-Tab for the previous one. Any other key ends the completion. Completion makes no call to GitHub.
 
 ## Order
 
