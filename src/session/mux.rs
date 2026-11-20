@@ -2,7 +2,7 @@ use super::error::{MuxError, SetupError};
 use super::request::Launch;
 use super::{AttachPlan, git, hc, herdr, tmux};
 use crate::config::Multiplexer;
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, OriginRef, SessionKey, WorktreePath};
 use std::path::Path;
 
 /// What a multiplexer does for dispatch. One impl per backend, on its
@@ -19,13 +19,13 @@ pub(super) trait Mux {
         dir: &Path,
         branch: &BranchName,
         from: Option<&OriginRef>,
-        _issue: IssueNumber,
+        _key: SessionKey,
     ) -> Result<(), MuxError> {
         git::add_worktree(repo.root, dir, branch, from).map_err(MuxError::Run)
     }
 
     /// Opens a window on `dir` and runs `argv` in it.
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError>;
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError>;
 
     /// Runs `argv` for a session whose window is dead.
     fn relaunch(
@@ -33,7 +33,7 @@ pub(super) trait Mux {
         repo: Repo<'_>,
         window: &Self::Window,
         dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError>;
 

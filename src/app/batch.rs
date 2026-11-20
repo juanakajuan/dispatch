@@ -8,7 +8,7 @@ use super::msg::Cmd;
 use super::sessions::{begin_start, goto_session};
 use super::toast;
 use super::{Focus, State};
-use crate::domain::{Issue, IssueNumber, Mode};
+use crate::domain::{Issue, IssueNumber, Mode, SessionKey};
 use crate::session::request::{StartFrom, StartRequest, start_defaults};
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -21,7 +21,8 @@ pub struct BatchStart {
 const NONE_STARTABLE: &str = "No marked issue can start.";
 
 fn has_session(state: &State, n: IssueNumber) -> bool {
-    state.sessions.contains_key(&n) || state.starting.contains(&n)
+    let key = SessionKey::Issue(n);
+    state.sessions.contains_key(&key) || state.starting.contains(&key)
 }
 
 /// Space on an issue row.
@@ -83,8 +84,13 @@ fn confirm_batch(state: &mut State) -> Vec<Cmd> {
         let issue = state.issues.items.iter().find(|i| i.number == n);
         let Some(issue) = issue.filter(|_| !has_session(state, n)) else { continue };
         let defaults = start_defaults(issue);
-        let req =
-            StartRequest { issue: n, branch: defaults.branch, mode, prompt: defaults.prompt, from: StartFrom::Base };
+        let req = StartRequest {
+            key: n.into(),
+            branch: defaults.branch,
+            mode,
+            prompt: defaults.prompt,
+            from: StartFrom::Base,
+        };
         cmds.push(begin_start(state, req));
         started.push(n);
     }
@@ -94,7 +100,7 @@ fn confirm_batch(state: &mut State) -> Vec<Cmd> {
         toast::info(state, NONE_STARTABLE.to_string());
         return cmds;
     };
-    goto_session(state, *first);
+    goto_session(state, (*first).into());
     let list = started.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
     toast::info(state, format!("Starting {list}"));
     cmds

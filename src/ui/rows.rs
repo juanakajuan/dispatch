@@ -4,7 +4,7 @@ use crate::app::feed::LastFetch;
 use crate::app::list::{Group, IssueGroup, PrGroup, RowKey, SessionGroup, Tab};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
-use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest};
+use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest, SessionKey};
 use crate::glyphs::Icons;
 use crate::session::{Checkout, Push, Session, SessionState, Work};
 use ratatui::Frame;
@@ -72,7 +72,7 @@ pub(super) fn empty_text(state: &State) -> String {
 }
 
 /// What the session's Claude last said: its recap, or its last message.
-pub(super) fn said(state: &State, n: IssueNumber) -> Option<Vec<Span<'static>>> {
+pub(super) fn said(state: &State, n: SessionKey) -> Option<Vec<Span<'static>>> {
     let s = state.transcripts.get(&n)?.said.as_ref()?;
     let mut v = Vec::new();
     if s.kind == crate::transcript::SummaryKind::Recap {
@@ -136,7 +136,7 @@ impl RowParts {
 
 /// Glyph, name, summary, work, age. One line per row.
 pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons: &Icons) -> RowParts {
-    let session_glyph = |n: IssueNumber| match (state.sessions.get(&n).map(|s| s.state), state.starting.contains(&n)) {
+    let session_glyph = |n: SessionKey| match (state.sessions.get(&n).map(|s| s.state), state.starting.contains(&n)) {
         _ if app::list::session_merged(state, n) => Some(span(icons.pr_merged, palette::MERGED)),
         (Some(SessionState::Running), _) => Some(span(icons.running, palette::RUNNING)),
         (Some(SessionState::NeedsYou), _) => Some(span(icons.needs_you, palette::NEEDS_YOU)),
@@ -160,7 +160,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
             let Some(i) = issue_of(state, n) else {
                 return RowParts::new(Span::raw(" "), String::new(), Vec::new(), String::new());
             };
-            let glyph = session_glyph(n).unwrap_or_else(|| {
+            let glyph = session_glyph(n.into()).unwrap_or_else(|| {
                 if state.marked.contains(&n) {
                     return span(icons.marked, palette::ACCENT);
                 }
@@ -171,7 +171,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                     span(m.content.trim().to_string(), m.style)
                 }
             });
-            let summary = match (said(state, n), app::list::lead_pr(state, n)) {
+            let summary = match (said(state, n.into()), app::list::lead_pr(state, n)) {
                 (Some(said), _) => said,
                 (None, Some(p)) => pr_summary(p),
                 (None, None) if !i.labels.is_empty() => {
@@ -206,19 +206,22 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
         }
         RowKey::Session(n) => {
             let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
-            let issue = issue_of(state, n);
             let session = state.sessions.get(&n);
-            let name = issue
-                .map(|i| one_line(&i.title))
-                .or_else(|| session.map(|s| s.branch.as_str().to_string()))
-                .unwrap_or_default();
+            let (title, updated_at) = match n {
+                SessionKey::Issue(i) => issue_of(state, i).map(|i| (i.title.as_str(), i.updated_at)).unzip(),
+                SessionKey::Pr(p) => {
+                    state.prs.items.iter().find(|r| r.number == p).map(|r| (r.title.as_str(), r.updated_at)).unzip()
+                }
+            };
+            let name =
+                title.map(one_line).or_else(|| session.map(|s| s.branch.as_str().to_string())).unwrap_or_default();
             let summary = session
                 .and_then(off_branch)
                 .or_else(|| said(state, n))
                 .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
-            let age = issue.map(|i| age(i.updated_at, now)).unwrap_or_default();
+            let age = updated_at.map(|t| age(t, now)).unwrap_or_default();
             let work = state.work.get(&n).map(|w| work_spans(*w, icons)).unwrap_or_default();
             RowParts { work, ..RowParts::new(glyph, format!("{n} {name}"), summary, age) }
         }

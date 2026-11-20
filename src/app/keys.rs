@@ -180,8 +180,8 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Key::Char('s')],
         action: Action::Start,
         group: KeyGroup::Sessions,
-        desc: "start a session for the issue",
-        bar: &[bar("s", "start session", When::OnIssues)],
+        desc: "start a session for the issue or PR",
+        bar: &[bar("s", "start session", When::OnIssues), bar("s", "start session", When::OnPrs)],
     },
     Binding {
         keys: &[Key::Char(' ')],
@@ -344,7 +344,7 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
 pub(super) fn key_bar(state: &State) -> Vec<Hint> {
     let current = current_session(state);
     let session = current.map(|s| s.state);
-    let said = current.and_then(|s| state.transcripts.get(&s.issue)).is_some_and(|t| t.said.is_some());
+    let said = current.and_then(|s| state.transcripts.get(&s.key)).is_some_and(|t| t.said.is_some());
     let shown = |when: When| match when {
         When::Always => true,
         When::OnIssues => state.tab == Tab::Issues,

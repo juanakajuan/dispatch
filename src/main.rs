@@ -109,7 +109,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
         for cmd in std::mem::take(&mut cmds) {
             match cmd {
                 Cmd::Quit => return Ok(()),
-                Cmd::Attach(issue) => pending.push(Msg::Attached(attach(terminal, ws, issue))),
+                Cmd::Attach(key) => pending.push(Msg::Attached(attach(terminal, ws, key))),
                 Cmd::Copy { target, text } => {
                     #[expect(
                         clippy::disallowed_methods,
@@ -142,12 +142,8 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
 
 /// Switch: run the argv, return. Suspend: leave the TUI, run the argv with
 /// inherited stdio and wait, then restore the TUI.
-fn attach(
-    terminal: &mut ratatui::DefaultTerminal,
-    ws: &Workspace,
-    issue: domain::IssueNumber,
-) -> Result<(), AttachError> {
-    match ws.attach_plan(issue).map_err(AttachError::Session)? {
+fn attach(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, key: domain::SessionKey) -> Result<(), AttachError> {
+    match ws.attach_plan(key).map_err(AttachError::Session)? {
         AttachPlan::Switch(command) => {
             let (program, args) = command.split_first().ok_or(AttachError::EmptyCommand)?;
             proc::run(program, args, ws.repo_root()).map(|_| ()).map_err(AttachError::Run)

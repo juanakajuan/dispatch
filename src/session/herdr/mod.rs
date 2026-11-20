@@ -7,7 +7,7 @@ mod wire;
 use super::error::{FsAction, FsError, MuxError};
 use super::mux::Observed;
 use super::start_argv::herdr_worktree_create_args;
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, OriginRef, SessionKey, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -106,8 +106,8 @@ fn list_windows() -> Result<Vec<Observed<PaneRef>>, MuxError> {
     Ok(window_obs(&workspaces, &panes))
 }
 
-pub(super) fn label(issue: IssueNumber) -> String {
-    issue.to_string()
+pub(super) fn label(key: SessionKey) -> String {
+    key.to_string()
 }
 
 const SERVER_WAIT: Duration = Duration::from_secs(5);
@@ -160,10 +160,10 @@ fn create_worktree(
     dir: &Path,
     branch: &BranchName,
     from: Option<&OriginRef>,
-    issue: IssueNumber,
+    key: SessionKey,
 ) -> Result<(), MuxError> {
     let source = source(place, repo_root)?;
-    let args = herdr_worktree_create_args(source.as_str(), &dir.to_string_lossy(), branch.as_str(), from, issue);
+    let args = herdr_worktree_create_args(source.as_str(), &dir.to_string_lossy(), branch.as_str(), from, key);
     herdr(args).map(drop).map_err(MuxError::Run)
 }
 
@@ -172,19 +172,19 @@ fn open_window(
     place: &Place,
     repo_root: &Path,
     dir: &WorktreePath,
-    issue: IssueNumber,
+    key: SessionKey,
     argv: &[String],
     script: &Path,
 ) -> Result<(), MuxError> {
     let pane = match list_windows()?.into_iter().find(|o| o.worktree == *dir) {
         Some(open) => open.window,
-        None => open_worktree(&source(place, repo_root)?, dir, issue)?,
+        None => open_worktree(&source(place, repo_root)?, dir, key)?,
     };
     launch(&pane, argv, script)
 }
 
-fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, issue: IssueNumber) -> Result<PaneRef, MuxError> {
-    let (dir, label) = (dir.as_path().to_string_lossy(), label(issue));
+fn open_worktree(source: &WorkspaceId, dir: &WorktreePath, key: SessionKey) -> Result<PaneRef, MuxError> {
+    let (dir, label) = (dir.as_path().to_string_lossy(), label(key));
     let args = [
         "worktree",
         "open",
@@ -221,8 +221,8 @@ fn wait_for_agent(pane: &PaneRef, budget: Duration) {
     }
 }
 
-fn script_file(git_common_dir: &Path, issue: IssueNumber) -> PathBuf {
-    git_common_dir.join("dispatch").join("launch").join(format!("{}.sh", issue.0))
+fn script_file(git_common_dir: &Path, key: SessionKey) -> PathBuf {
+    git_common_dir.join("dispatch").join("launch").join(format!("{}.sh", key.dir_name()))
 }
 
 fn quote(arg: &str) -> String {
@@ -277,7 +277,7 @@ fn send_line(pane: &PaneRef, text: &str) -> Result<(), MuxError> {
 mod tests {
     use super::*;
     use crate::proc::fake;
-    use crate::testutil::temp_dir;
+    use crate::testutil::{issue_key, temp_dir};
 
     #[test]
     fn a_herdr_that_is_not_running_has_no_windows() {
@@ -406,7 +406,7 @@ mod tests {
             Path::new("/w/orbit/.claude/worktrees/7"),
             &branch,
             None,
-            IssueNumber(7),
+            issue_key(7),
         )
         .expect("ok");
         assert_eq!(
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn a_script_is_written_executable_and_replaced_on_the_next_launch() {
         use std::os::unix::fs::PermissionsExt;
-        let file = script_file(&temp_dir("herdr-script"), IssueNumber(7));
+        let file = script_file(&temp_dir("herdr-script"), issue_key(7));
         write_script(&strings(["claude", "one\ntwo"]), &file).expect("written");
         write_script(&strings(["claude", "new"]), &file).expect("overwritten");
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "#!/bin/sh\nexec 'claude' 'new'\n");
@@ -448,7 +448,7 @@ mod tests {
 
     #[test]
     fn launch_types_the_script_path_then_waits_for_the_agent() {
-        let file = script_file(&temp_dir("herdr-launch"), IssueNumber(7));
+        let file = script_file(&temp_dir("herdr-launch"), issue_key(7));
         let polls = std::cell::Cell::new(0);
         fake::install(move |call| {
             Ok(if call.starts_with("herdr pane get") {

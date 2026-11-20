@@ -7,7 +7,7 @@
 use super::AttachPlan;
 use super::error::MuxError;
 use super::mux::{Liveness, Mux, Observed, Repo, WAITING_HOOKS};
-use crate::domain::{IssueNumber, WorktreePath};
+use crate::domain::{SessionKey, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::path::Path;
 
@@ -75,8 +75,8 @@ impl Mux for Place {
         list_windows()
     }
 
-    fn open(&self, _repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(self, dir, &issue.to_string(), argv).map(|_| ())
+    fn open(&self, _repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError> {
+        open_window(self, dir, &key.to_string(), argv).map(|_| ())
     }
 
     fn relaunch(
@@ -84,7 +84,7 @@ impl Mux for Place {
         _repo: Repo<'_>,
         window: &WindowId,
         dir: &WorktreePath,
-        _issue: IssueNumber,
+        _key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError> {
         respawn(window, dir, argv)

@@ -5,7 +5,7 @@
 //! `rev-list` only for a branch whose `origin` copy is at another commit.
 
 use super::{Sessions, Workspace, git};
-use crate::domain::{BranchName, IssueNumber};
+use crate::domain::{BranchName, SessionKey};
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,14 +30,14 @@ pub enum Push {
 
 /// Only sessions whose git reads all worked. A worktree removed during the
 /// poll has no entry, and the next poll reads it again.
-pub type Works = BTreeMap<IssueNumber, Work>;
+pub type Works = BTreeMap<SessionKey, Work>;
 
 pub(super) fn read(ws: &Workspace, sessions: &Sessions) -> Works {
     let branches: Vec<&BranchName> = sessions.values().map(|s| &s.branch).collect();
     let Ok(tips) = git::tips(&ws.repo_root, &ws.base, &branches) else {
         return Works::new();
     };
-    sessions.values().filter_map(|s| Some((s.issue, one(ws, &tips, &s.branch, s.worktree.as_path())?))).collect()
+    sessions.values().filter_map(|s| Some((s.key, one(ws, &tips, &s.branch, s.worktree.as_path())?))).collect()
 }
 
 fn one(ws: &Workspace, tips: &git::Tips, branch: &BranchName, worktree: &std::path::Path) -> Option<Work> {

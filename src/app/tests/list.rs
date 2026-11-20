@@ -25,7 +25,7 @@ fn double_click_inside_the_window_opens_the_dialog_and_outside_only_selects() {
     let (mut state, now) = hit_state();
     press(&mut state, click(5, 3, now));
     press(&mut state, click(5, 3, now + DOUBLE_CLICK.saturating_sub(Duration::from_millis(1))));
-    assert_eq!(dialog(&state).issue, IssueNumber(2));
+    assert_eq!(dialog(&state).key, issue_key(2));
 
     let (mut state, now) = hit_state();
     press(&mut state, click(5, 3, now));
@@ -92,8 +92,8 @@ fn filter_esc_clears_and_backspace_edits() {
 fn pr_enter_goes_to_the_closed_issue_and_pr_rows_show_the_session() {
     let (mut state, _) = app();
     press(&mut state, key('2'));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
-    assert_eq!(current_session(&state).map(|s| s.issue), Some(IssueNumber(3)), "via closes");
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    assert_eq!(current_session(&state).map(|s| s.key), Some(issue_key(3)), "via closes");
     press(&mut state, code(KeyCode::Enter));
     assert_eq!(state.tab, Tab::Issues);
     assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
@@ -132,19 +132,19 @@ fn session_pr_is_found_by_head_branch() {
 #[test]
 fn sessions_tab_lists_running_and_starting_before_exited_by_number() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
-    state.starting.insert(IssueNumber(2));
+    state.sessions.insert(issue_key(1), session(1, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    state.starting.insert(issue_key(2));
     press(&mut state, key('3'));
     assert_eq!(
         visible_rows(&state),
-        [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(3)), RowKey::Session(IssueNumber(1))]
+        [RowKey::Session(issue_key(2)), RowKey::Session(issue_key(3)), RowKey::Session(issue_key(1))]
     );
     press(&mut state, key('/'));
     for c in "docs".chars() {
         press(&mut state, key(c));
     }
-    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "filters by the issue title");
+    assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(2))], "filters by the issue title");
 }
 
 #[test]
@@ -186,32 +186,32 @@ fn double_click_on_a_pr_row_goes_to_its_issue() {
 
 #[test]
 fn double_click_on_a_session_row_attaches_to_it() {
-    let (mut state, now) = with_target(HitTarget::Row(RowKey::Session(IssueNumber(3))));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    let (mut state, now) = with_target(HitTarget::Row(RowKey::Session(issue_key(3))));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     state.tab = Tab::Sessions;
     assert!(press(&mut state, click(0, 0, now)).is_empty(), "one click only selects");
     let cmds = press(&mut state, click(0, 0, now + Duration::from_millis(100)));
-    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == IssueNumber(3)));
+    assert!(matches!(cmds.as_slice(), [Cmd::Attach(n)] if *n == issue_key(3)));
 }
 
 #[test]
 fn a_session_whose_branch_pr_merged_sits_in_a_merged_group_after_exited() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(1), session(1, SessionState::Exited));
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
+    state.sessions.insert(issue_key(1), session(1, SessionState::Exited));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::NeedsYou));
     state.prs.items[0].state = PrState::Merged;
     press(&mut state, key('3'));
     assert_eq!(
         visible_rows(&state),
-        [RowKey::Session(IssueNumber(2)), RowKey::Session(IssueNumber(1)), RowKey::Session(IssueNumber(3))],
+        [RowKey::Session(issue_key(2)), RowKey::Session(issue_key(1)), RowKey::Session(issue_key(3))],
         "a merged PR outranks the window's state"
     );
-    let group = group_of(&state, RowKey::Session(IssueNumber(3)));
+    let group = group_of(&state, RowKey::Session(issue_key(3)));
     assert_eq!((group, group.name()), (Group::Session(SessionGroup::Merged), "Merged"));
     assert_eq!(group_of(&state, RowKey::Issue(IssueNumber(3))), Group::Issue(IssueGroup::Merged));
     press(&mut state, key('S'));
-    assert_eq!(visible_rows(&state).last(), Some(&RowKey::Session(IssueNumber(3))), "and in number order");
+    assert_eq!(visible_rows(&state).last(), Some(&RowKey::Session(issue_key(3))), "and in number order");
 }
 
 #[test]
@@ -219,11 +219,11 @@ fn the_session_filter_matches_the_branch_its_worktree_has_checked_out() {
     let (mut state, _) = app();
     let mut s = session(3, SessionState::Running);
     s.checkout = crate::session::Checkout::Other(BranchName::parse("try-other").expect("branch"));
-    state.sessions.insert(IssueNumber(3), s);
+    state.sessions.insert(issue_key(3), s);
     press(&mut state, key('3'));
     press(&mut state, key('/'));
     for c in "try-other".chars() {
         press(&mut state, key(c));
     }
-    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(3))]);
+    assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(3))]);
 }

@@ -1,17 +1,18 @@
 use super::error::StartConflict;
+use super::markers;
 use super::request::{StartFrom, StartRequest};
 use super::start_argv::claude_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
 use crate::config::ClaudeCommand;
-use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
+use crate::domain::{BranchName, OriginRef, RepoSlug, SessionKey, WorktreePath};
 use std::path::PathBuf;
 
 /// Everything `plan_start` needs. Gathered by `observe_for_start`.
 pub(super) struct StartObservation {
     pub(super) sessions: Sessions,
     pub(super) worktrees: Vec<git::Worktree>,
-    pub(super) markers: git::Markers,
+    pub(super) markers: markers::Markers,
     pub(super) target_dir: TargetDir,
     pub(super) branch: LocalBranch,
 }
@@ -56,9 +57,9 @@ pub(super) enum Step {
     /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
     /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
     AddWorktree { dir: PathBuf, branch: BranchName, from: Option<OriginRef> },
-    /// `git config branch.<b>.dispatch-issue N`.
+    /// `git config branch.<b>.dispatch-key N`.
     /// Overwrites, so running it twice is harmless.
-    Mark { branch: BranchName, issue: IssueNumber },
+    Mark { branch: BranchName, key: SessionKey },
     /// `Mux::open` with argv `claude ...`.
     OpenWindow { dir: WorktreePath, argv: Vec<String> },
 }
@@ -67,12 +68,12 @@ pub(super) enum Step {
 ///
 /// | observed                                              | plan                              |
 /// |-------------------------------------------------------|-----------------------------------|
-/// | session for issue, window alive                       | `AlreadyRunning`                    |
-/// | session for issue, no window or dead window           | [`OpenWindow`]                      |
-/// | a branch marked for issue, no worktree (crash)        | [`AddWorktree` create=false, Mark, `OpenWindow`] using that branch |
+/// | session for key, window alive                       | `AlreadyRunning`                    |
+/// | session for key, no window or dead window           | [`OpenWindow`]                      |
+/// | a branch marked for key, no worktree (crash)        | [`AddWorktree` create=false, Mark, `OpenWindow`] using that branch |
 /// | worktree at target dir, branch unmarked (crash)       | [Mark, `OpenWindow`]                |
 /// | target dir exists, not a worktree                     | Conflict `PathTaken`                |
-/// | req.branch marked for another issue                   | Conflict `BranchBelongsTo`          |
+/// | req.branch marked for another key                   | Conflict `BranchBelongsTo`          |
 /// | req.branch checked out elsewhere                      | Conflict `BranchCheckedOut`         |
 /// | req.branch exists, unmarked, free                     | [`AddWorktree` create=false, Mark, `OpenWindow`] |
 /// | nothing exists                                        | [Fetch, `AddWorktree` create=true, Mark, `OpenWindow`] |
@@ -81,23 +82,23 @@ pub(super) enum Step {
 /// A created branch starts from the default branch, or from `origin/<branch>`
 /// when `req.from` is `StartFrom::Origin`.
 ///
-/// A marked branch for this issue wins over `req.branch`, so a retry with an
-/// edited branch name can not make a second branch for one issue.
+/// A marked branch for this key wins over `req.branch`, so a retry with an
+/// edited branch name can not make a second branch for one key.
 pub(super) fn plan_start(
     obs: &StartObservation,
     req: &StartRequest,
     layout: &Layout,
 ) -> Result<StartPlan, StartConflict> {
-    let target = worktree_dir_for(&layout.repo_root, req.issue);
+    let target = worktree_dir_for(&layout.repo_root, req.key);
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
         argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
     };
-    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
+    let mark = |branch: BranchName| Step::Mark { branch, key: req.key };
     let add = |branch: BranchName, from: Option<OriginRef>| Step::AddWorktree { dir: target.clone(), branch, from };
     let planned = WorktreePath::planned(target.clone());
 
-    if let Some(s) = obs.sessions.get(&req.issue) {
+    if let Some(s) = obs.sessions.get(&req.key) {
         return Ok(if s.state.is_live() {
             StartPlan::AlreadyRunning(s.clone())
         } else {
@@ -106,19 +107,19 @@ pub(super) fn plan_start(
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.path.as_path() == target) {
         let Some(branch) = &w.branch else { return Err(StartConflict::PathTaken(target)) };
-        if let Some(&issue) = obs.markers.get(branch) {
-            return Err(StartConflict::BranchBelongsTo { branch: branch.clone(), issue });
+        if let Some(&key) = obs.markers.get(branch) {
+            return Err(StartConflict::BranchBelongsTo { branch: branch.clone(), key });
         }
         return Ok(StartPlan::Steps(vec![mark(branch.clone()), open(w.path.clone())]));
     }
     if obs.target_dir == TargetDir::Taken {
         return Err(StartConflict::PathTaken(target));
     }
-    if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.issue) {
+    if let Some((branch, _)) = obs.markers.iter().find(|(_, n)| **n == req.key) {
         return Ok(StartPlan::Steps(vec![add(branch.clone(), None), mark(branch.clone()), open(planned)]));
     }
-    if let Some(&issue) = obs.markers.get(&req.branch) {
-        return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), issue });
+    if let Some(&key) = obs.markers.get(&req.branch) {
+        return Err(StartConflict::BranchBelongsTo { branch: req.branch.clone(), key });
     }
     if let Some(w) = obs.worktrees.iter().find(|w| w.branch.as_ref() == Some(&req.branch)) {
         return Err(StartConflict::BranchCheckedOut {

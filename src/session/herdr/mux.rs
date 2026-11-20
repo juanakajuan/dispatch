@@ -1,7 +1,7 @@
 use super::{
     PaneRef, Place, close_workspace, create_worktree, launch, list_windows, open_window, script_file, send_line,
 };
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, OriginRef, SessionKey, WorktreePath};
 use crate::session::AttachPlan;
 use crate::session::error::MuxError;
 use crate::session::mux::{Mux, Observed, Repo};
@@ -22,13 +22,13 @@ impl Mux for Place {
         dir: &Path,
         branch: &BranchName,
         from: Option<&OriginRef>,
-        issue: IssueNumber,
+        key: SessionKey,
     ) -> Result<(), MuxError> {
-        create_worktree(self, repo.root, dir, branch, from, issue)
+        create_worktree(self, repo.root, dir, branch, from, key)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(self, repo.root, dir, issue, argv, &script_file(repo.git_common_dir, issue))
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError> {
+        open_window(self, repo.root, dir, key, argv, &script_file(repo.git_common_dir, key))
     }
 
     fn relaunch(
@@ -36,10 +36,10 @@ impl Mux for Place {
         repo: Repo<'_>,
         window: &PaneRef,
         _dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError> {
-        launch(window, argv, &script_file(repo.git_common_dir, issue))
+        launch(window, argv, &script_file(repo.git_common_dir, key))
     }
 
     fn stop(&self, window: &PaneRef) -> Result<(), MuxError> {

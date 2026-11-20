@@ -93,8 +93,8 @@ fn draw_overlay(frame: &mut Frame, state: &State, hits: &mut HitMap) {
         Focus::Batch(batch) => draw_batch(frame, frame.area(), state, batch, hits),
         Focus::Settings(menu) => draw_settings(frame, frame.area(), state, menu, hits),
         Focus::Keybinds { scroll } => hits.max_scroll = draw_keybinds(frame, frame.area(), *scroll, hits),
-        Focus::Summary { issue, scroll } => {
-            hits.max_scroll = draw_summary(frame, frame.area(), state, *issue, *scroll, hits);
+        Focus::Summary { key, scroll } => {
+            hits.max_scroll = draw_summary(frame, frame.area(), state, *key, *scroll, hits);
         }
         Focus::List | Focus::Filter | Focus::Message { .. } => {}
     }

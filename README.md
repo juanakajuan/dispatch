@@ -51,6 +51,17 @@ Each worktree is a new directory inside the repo. Claude Code asks if you trust 
 
 Worktrees that an older dispatch made next to the repo, at `../<repo>-<issue>`, still show as sessions and still resume. Only new worktrees go to `.claude/worktrees/`.
 
+### Start a session for a PR
+
+A session does not need an issue. On the Pull requests tab, select an open or draft PR and press `s`. The dialog opens on the PR's own branch. The branch line reads `<branch> (PR branch)` and you cannot edit it. You can change the mode and the prompt. The prompt tells Claude to read the PR with `gh pr view <n> --comments` and `gh pr diff <n>`, to fix what needs fixing, and to push to the PR's branch.
+
+- A PR from this repo starts from `origin/<branch>`.
+- A PR from a fork starts on the local branch `fork/pr-<n>`, only when the PR lets maintainers push to it. dispatch never puts the fork's branch name in the prompt.
+- If a session already runs on the PR's branch, `s` goes to that session.
+- A merged or closed PR shows `PR #<n> is not open.`
+
+A PR session has the key `PR #<n>`. It uses the tmux window `PR #<n>` and the worktree `.claude/worktrees/pr-<n>`, so PR 7 and issue 7 never share a session. It shows in the Sessions list with the PR's title, and `a`, `x`, `t`, `i`, `D`, `m`, and `o` work on it. `o` opens the PR.
+
 If dispatch runs inside tmux, the window goes into your current tmux session. If not, dispatch creates a detached session named `dispatch-<repo>`. In that case `a` suspends dispatch and runs `tmux attach`. Detach with `Ctrl-b d` to come back.
 
 An issue row without a session shows the state of the pull request that closes it, before the number:
@@ -81,7 +92,7 @@ A burst of events makes one load, at most one each 5 seconds.
 |---|---|
 | `j` / `k`, arrows | Move the selection |
 | `1` `2` `3` | Switch tab |
-| `s`, Enter | Start a session for the selected issue (or go to its session) |
+| `s`, Enter | Start a session for the selected issue (or go to its session). `s` also starts a session for the selected PR on the Pull requests tab |
 | Enter on a PR | Go to the issue the PR closes |
 | `a` | Attach to the session. If Claude has exited, resume it with `claude --continue` |
 | `x` | Stop the session. The window closes. The worktree stays |
@@ -144,9 +155,9 @@ If no running session is on the PR's branch, dispatch starts a new session to fi
 - If the list already shows the problem, the first `m` says so, for example: "PR #12 has a merge conflict with main. Press m again to start a session for #5 that fixes it." The second `m` checks GitHub. If the problem is still there, the session starts. If the PR is now clean, dispatch merges it.
 - If the list showed a clean PR but GitHub finds a problem, the toast names the problem and asks you to press `m` once more. Any other key cancels.
 
-The new session is for an issue that the PR closes, on the PR's branch. If the branch is not in your checkout, dispatch fetches it from `origin`. The prompt tells the agent to run `gh pr checkout <n>` first, so it has the latest commits. If a session for that issue exited on the PR's branch, the new Claude runs in that session's worktree.
+The new session is for an issue that the PR closes, or for the PR itself when it closes no issue or when every issue it closes already has a session. It runs on the PR's branch. If the branch is not in your checkout, dispatch fetches it from `origin`. The prompt tells the agent to run `gh pr checkout <n>` first, so it has the latest commits. If a session for that issue exited on the PR's branch, the new Claude runs in that session's worktree.
 
-dispatch can not start a session for a PR that closes no issue, because each session belongs to an issue. A PR from a fork also fails, because its branch is not on `origin`.
+For a PR that closes no issue, the first `m` says, for example: "PR #12 has a merge conflict with main. Press m again to start a session for PR #12 that fixes it." A PR from a fork gets a session only when it lets maintainers push to it. If a session already runs on the PR's branch, or one is starting for the PR, dispatch says so and starts nothing.
 
 dispatch never passes `--delete-branch`, because the session's worktree still has the branch checked out.
 
@@ -209,8 +220,8 @@ dispatch reads only the last 512 KB of the transcript. It reads the file again o
 
 dispatch writes no state file. A session is derived from git and tmux each time:
 
-- A branch that dispatch made has `branch.<name>.dispatch-issue` in `.git/config`.
-- The worktree of that branch is the session's directory. A worktree at `.claude/worktrees/<issue>` is also that issue's session, if a branch is marked for the issue. So the session stays when the worktree has a different branch checked out.
+- A branch that dispatch made has `branch.<name>.dispatch-issue` in `.git/config`. A branch made for a PR session has `branch.<name>.dispatch-pr` instead. If a branch has both, the issue marker wins.
+- The worktree of that branch is the session's directory. A worktree at `.claude/worktrees/<issue>` is also that issue's session, if a branch is marked for the issue. A worktree at `.claude/worktrees/pr-<n>` is the same for PR `n`. So the session stays when the worktree has a different branch checked out.
 - A tmux window with the option `@dispatch-worktree` set to that directory is the session's window.
 
 So you can quit dispatch, kill it, or restart the machine, and the sessions are still listed. A start is safe to repeat. dispatch looks at what exists and runs only the missing steps. A second start for the same issue does not make a second worktree.

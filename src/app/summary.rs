@@ -8,15 +8,15 @@ use crossterm::event::{KeyCode, KeyEvent};
 /// `i`: show all of what the selected session's Claude last said. The row
 /// shows only its first line.
 pub(super) fn summary_key(state: &mut State) -> Vec<Cmd> {
-    let Some(issue) = current_session(state).map(|s| s.issue) else {
+    let Some(key) = current_session(state).map(|s| s.key) else {
         toast::info(state, "No session for this issue. Press s to start one.".to_string());
         return Vec::new();
     };
-    if state.transcripts.get(&issue).and_then(|t| t.said.as_ref()).is_none() {
-        toast::info(state, format!("Claude has not said anything in {issue} yet."));
+    if state.transcripts.get(&key).and_then(|t| t.said.as_ref()).is_none() {
+        toast::info(state, format!("Claude has not said anything in {key} yet."));
         return Vec::new();
     }
-    state.focus = Focus::Summary { issue, scroll: 0 };
+    state.focus = Focus::Summary { key, scroll: 0 };
     Vec::new()
 }
 

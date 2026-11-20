@@ -99,12 +99,12 @@ fn the_pr_tab_filters_by_its_own_labels_assignees_and_milestone() {
 #[test]
 fn the_session_tab_filters_by_the_fields_of_the_sessions_issue() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
-    state.sessions.insert(IssueNumber(9), session(9, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Running));
+    state.sessions.insert(issue_key(9), session(9, SessionState::Running));
     press(&mut state, key('3'));
     state.filter = "label:docs".to_string();
-    assert_eq!(visible_rows(&state), [RowKey::Session(IssueNumber(2))], "#9 has no issue, so it has no labels");
+    assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(2))], "#9 has no issue, so it has no labels");
 }
 
 #[test]

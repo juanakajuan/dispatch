@@ -15,7 +15,7 @@ use crate::domain::{Checks, IssueNumber, PrState, PullRequest};
 use crate::glyphs::IconSet;
 use crate::session::Session;
 use crate::session::{SessionState, StartPreview};
-use crate::testutil::{issue, pr};
+use crate::testutil::{issue, issue_key, pr, pr_key};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -51,9 +51,9 @@ pub(super) fn full_state() -> State {
     state.issues.poll.done();
     state.prs.poll.done();
     state.sessions.insert(
-        IssueNumber(3),
+        issue_key(3),
         Session {
-            issue: IssueNumber(3),
+            key: issue_key(3),
             branch: BranchName::parse("fix/3-x").expect("branch"),
             checkout: crate::session::Checkout::SessionBranch,
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),

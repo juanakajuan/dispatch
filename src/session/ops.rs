@@ -2,6 +2,7 @@
 
 use super::error::{SessionError, StartWarning};
 use super::join::{Joined, Row, join, sessions};
+use super::markers;
 use super::mux::{Mux, Observed, hooks};
 use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use super::request::{Launch, StartRequest};
@@ -10,13 +11,13 @@ use super::{
     AttachPlan, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome, Workspace,
     git, start_argv,
 };
-use crate::domain::IssueNumber;
+use crate::domain::SessionKey;
 use std::num::NonZeroU32;
 
 struct World<W> {
     root: std::path::PathBuf,
     worktrees: Vec<git::Worktree>,
-    markers: git::Markers,
+    markers: markers::Markers,
     windows: Vec<Observed<W>>,
 }
 
@@ -32,15 +33,15 @@ fn read_world<M: Mux>(ws: &Workspace, mux: &M) -> Result<World<M::Window>, Sessi
     Ok(World {
         root: ws.repo_root.clone(),
         worktrees,
-        markers: git::list_markers(&ws.repo_root).map_err(SessionError::Git)?,
+        markers: markers::list_markers(&ws.repo_root).map_err(SessionError::Git)?,
         windows,
     })
 }
 
-/// A fresh observation of one issue, so a stale row can not aim at a window
+/// A fresh observation of one key, so a stale row can not aim at a window
 /// id that the multiplexer reused.
-fn row<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<Option<Row<M::Window>>, SessionError> {
-    Ok(read_world(ws, mux)?.join().remove(&issue))
+fn row<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey) -> Result<Option<Row<M::Window>>, SessionError> {
+    Ok(read_world(ws, mux)?.join().remove(&key))
 }
 
 /// Three reads (the backend's windows, worktree list, config regexp), then
@@ -55,11 +56,7 @@ fn observe_for_start<M: Mux>(ws: &Workspace, mux: &M, req: &StartRequest) -> Res
         sessions: sessions(&world.join()),
         worktrees: world.worktrees,
         markers: world.markers,
-        target_dir: if worktree_dir_for(&ws.repo_root, req.issue).exists() {
-            TargetDir::Taken
-        } else {
-            TargetDir::Free
-        },
+        target_dir: if worktree_dir_for(&ws.repo_root, req.key).exists() { TargetDir::Taken } else { TargetDir::Free },
         branch: if git::branch_exists(&ws.repo_root, &req.branch).map_err(SessionError::Git)? {
             LocalBranch::Exists
         } else {
@@ -84,8 +81,8 @@ pub(super) fn start<M: Mux>(
     match plan_start(&obs, req, &layout).map_err(SessionError::Conflict)? {
         StartPlan::AlreadyRunning(session) => Ok(StartOutcome { session, warnings: Vec::new() }),
         StartPlan::Steps(steps) => {
-            let warnings = run_steps(ws, mux, steps, req.issue)?;
-            let session = observe(ws, mux)?.remove(&req.issue).ok_or(SessionError::NotVisibleAfterStart(req.issue))?;
+            let warnings = run_steps(ws, mux, steps, req.key)?;
+            let session = observe(ws, mux)?.remove(&req.key).ok_or(SessionError::NotVisibleAfterStart(req.key))?;
             Ok(StartOutcome { session, warnings })
         }
     }
@@ -99,7 +96,7 @@ fn run_steps<M: Mux>(
     ws: &Workspace,
     mux: &M,
     steps: Vec<Step>,
-    issue: IssueNumber,
+    key: SessionKey,
 ) -> Result<Vec<StartWarning>, SessionError> {
     let mut warnings = Vec::new();
     for step in steps {
@@ -114,39 +111,39 @@ fn run_steps<M: Mux>(
                 if let Err(e) = git::ensure_excluded(&ws.git_common_dir, WORKTREES_EXCLUDE) {
                     warnings.push(StartWarning::NotExcluded(e));
                 }
-                mux.add_worktree(ws.repo(), &dir, &branch, from.as_ref(), issue)?;
+                mux.add_worktree(ws.repo(), &dir, &branch, from.as_ref(), key)?;
             }
-            Step::Mark { branch, issue } => {
-                git::set_marker(&ws.repo_root, &branch, issue).map_err(SessionError::Git)?;
+            Step::Mark { branch, key } => {
+                markers::set_marker(&ws.repo_root, &branch, key).map_err(SessionError::Git)?;
             }
-            Step::OpenWindow { dir, argv } => mux.open(ws.repo(), &dir, issue, &argv)?,
+            Step::OpenWindow { dir, argv } => mux.open(ws.repo(), &dir, key, &argv)?,
         }
     }
     Ok(warnings)
 }
 
-pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, launch: &Launch) -> Result<(), SessionError> {
-    let Some(row) = row(ws, mux, issue)? else {
-        return Err(SessionError::NoSession(issue));
+pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, launch: &Launch) -> Result<(), SessionError> {
+    let Some(row) = row(ws, mux, key)? else {
+        return Err(SessionError::NoSession(key));
     };
     let argv = launch.claude.argv(&start_argv::continue_args(hooks(mux, launch)));
     match &row.window {
         Some((_, liveness)) if liveness.is_live() => Ok(()),
-        Some((window, _)) => Ok(mux.relaunch(ws.repo(), window, &row.worktree, issue, &argv)?),
-        None => Ok(mux.open(ws.repo(), &row.worktree, issue, &argv)?),
+        Some((window, _)) => Ok(mux.relaunch(ws.repo(), window, &row.worktree, key, &argv)?),
+        None => Ok(mux.open(ws.repo(), &row.worktree, key, &argv)?),
     }
 }
 
-pub(super) fn stop<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<(), SessionError> {
-    match row(ws, mux, issue)?.and_then(|row| row.window) {
+pub(super) fn stop<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey) -> Result<(), SessionError> {
+    match row(ws, mux, key)?.and_then(|row| row.window) {
         Some((window, _)) => Ok(mux.stop(&window)?),
         None => Ok(()),
     }
 }
 
 fn remove_one<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
-    let Some(row) = row(ws, mux, target.issue)? else {
-        return Err(SessionError::NoSession(target.issue));
+    let Some(row) = row(ws, mux, target.key)? else {
+        return Err(SessionError::NoSession(target.key));
     };
     let git_err = SessionError::Git;
     if git::has_uncommitted(row.worktree.as_path()).map_err(git_err)? {
@@ -179,7 +176,7 @@ pub(super) fn stop_and_remove<M: Mux>(
     mux: &M,
     target: &RemoveTarget,
 ) -> Result<RemoveOutcome, SessionError> {
-    stop(ws, mux, target.issue)?;
+    stop(ws, mux, target.key)?;
     remove(ws, mux, target)
 }
 
@@ -187,25 +184,25 @@ pub(super) fn clean<M: Mux>(ws: &Workspace, mux: &M, targets: &[RemoveTarget]) -
     let mut report = CleanReport::default();
     for target in targets {
         match remove_one(ws, mux, target) {
-            Ok(RemoveOutcome::Removed) => report.removed.push(target.issue),
-            Ok(RemoveOutcome::Refused(why)) => report.skipped.push((target.issue, why)),
-            Err(err) => report.failed.push((target.issue, err)),
+            Ok(RemoveOutcome::Removed) => report.removed.push(target.key),
+            Ok(RemoveOutcome::Refused(why)) => report.skipped.push((target.key, why)),
+            Err(err) => report.failed.push((target.key, err)),
         }
     }
     let _ = git::prune_worktrees(&ws.repo_root);
     report
 }
 
-pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, text: &str) -> Result<(), SessionError> {
-    match row(ws, mux, issue)?.and_then(|row| row.window) {
+pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, text: &str) -> Result<(), SessionError> {
+    match row(ws, mux, key)?.and_then(|row| row.window) {
         Some((window, liveness)) if liveness.is_live() => Ok(mux.send_line(&window, text)?),
-        _ => Err(SessionError::NotRunning(issue)),
+        _ => Err(SessionError::NotRunning(key)),
     }
 }
 
-pub(super) fn attach_plan<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<AttachPlan, SessionError> {
-    match row(ws, mux, issue)?.and_then(|row| row.window) {
+pub(super) fn attach_plan<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey) -> Result<AttachPlan, SessionError> {
+    match row(ws, mux, key)?.and_then(|row| row.window) {
         Some((window, liveness)) if liveness.is_live() => Ok(mux.attach(&window)),
-        _ => Err(SessionError::NotRunning(issue)),
+        _ => Err(SessionError::NotRunning(key)),
     }
 }

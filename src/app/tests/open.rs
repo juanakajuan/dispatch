@@ -20,7 +20,7 @@ fn o_opens_the_selected_issue_pr_or_session_issue() {
     press(&mut state, key('j'));
     assert_eq!(opens(&press(&mut state, key('o'))), [GithubRef::Pr(PrNumber(11))]);
 
-    state.sessions.insert(IssueNumber(7), session(7, SessionState::Running));
+    state.sessions.insert(issue_key(7), session(7, SessionState::Running));
     press(&mut state, key('3'));
     assert_eq!(
         opens(&press(&mut state, key('o'))),

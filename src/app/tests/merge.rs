@@ -5,7 +5,7 @@ use crate::merge::job::DraftStep;
 use crate::merge::plan::MergeRefusal;
 use crate::merge::{Consent, MergeAsk, MergeError};
 
-fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
+pub(super) fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
     cmds.iter()
         .filter_map(|c| match c {
             Cmd::Job(Job::Write(WriteJob::Merge(ask))) => Some(*ask),
@@ -14,14 +14,14 @@ fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
         .collect()
 }
 
-const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
+pub(super) const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
 const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::StartFixSession };
 
-fn gh_failed(stderr: &str) -> MergeError {
+pub(super) fn gh_failed(stderr: &str) -> MergeError {
     MergeError::Gh(gh_error(stderr))
 }
 
-fn ran(result: Result<MergeOutcome, MergeError>) -> MergeRun {
+pub(super) fn ran(result: Result<MergeOutcome, MergeError>) -> MergeRun {
     MergeRun { draft: DraftStep::WasReady, result }
 }
 
@@ -29,7 +29,7 @@ fn ran_after_ready(result: Result<MergeOutcome, MergeError>) -> MergeRun {
     MergeRun { draft: DraftStep::MarkedReady, result }
 }
 
-fn handoff(problem: MergeProblem) -> Msg {
+pub(super) fn handoff(problem: MergeProblem) -> Msg {
     let mut fresh = pr(10, "fix/3-x", &[3]);
     fresh.mergeability = Mergeability::Conflict;
     Msg::Merged {
@@ -38,7 +38,7 @@ fn handoff(problem: MergeProblem) -> Msg {
     }
 }
 
-fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
+pub(super) fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
     match msg {
         Msg::Merged { run, .. } => Msg::Merged { ask, run },
         other => other,
@@ -48,7 +48,7 @@ fn with_ask(msg: Msg, ask: MergeAsk) -> Msg {
 #[test]
 fn m_twice_starts_a_merge_job_for_the_session_pr() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::NeedsYou));
+    state.sessions.insert(issue_key(3), session(3, SessionState::NeedsYou));
     press(&mut state, key('3'));
     assert!(shows(&state, "m", "merge"));
     assert!(press(&mut state, key('m')).is_empty(), "the first press only arms");
@@ -77,7 +77,7 @@ fn m_merges_without_a_session_from_the_pr_or_the_issue() {
 #[test]
 fn the_first_m_names_the_problem_and_the_agent_of_a_running_session() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     state.prs.items[0].mergeability = Mergeability::Conflict;
     press(&mut state, key('3'));
     press(&mut state, key('m'));
@@ -108,12 +108,12 @@ fn a_problem_found_after_the_user_agreed_starts_a_session_on_the_pr_branch() {
     assert_eq!(started.len(), 1);
     let req = started[0];
     assert_eq!(
-        (req.issue, req.branch.as_str(), req.mode, &req.from),
-        (IssueNumber(3), "fix/3-x", Mode::Implement, &StartFrom::Origin)
+        (req.key, req.branch.as_str(), req.mode, &req.from),
+        (issue_key(3), "fix/3-x", Mode::Implement, &StartFrom::Origin)
     );
     assert_eq!(req.prompt, plan::fix_session_prompt(PrNumber(10), "main", MergeProblem::Conflict, MergeMethod::Rebase));
-    assert!(state.starting.contains(&IssueNumber(3)));
-    assert_eq!((state.tab, state.tabs.sessions.selected), (Tab::Sessions, Some(IssueNumber(3))));
+    assert!(state.starting.contains(&issue_key(3)));
+    assert_eq!((state.tab, state.tabs.sessions.selected), (Tab::Sessions, Some(issue_key(3))));
     assert_eq!(toast(&state), "PR #10 has a merge conflict with main. Starting a session for #3 to fix it.");
 }
 
@@ -129,7 +129,7 @@ fn a_problem_the_list_did_not_show_needs_one_more_m_for_a_new_session() {
         "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it."
     );
     let started = press(&mut state, key('m'));
-    assert_eq!(starts(&started).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
+    assert_eq!(starts(&started).iter().map(|r| r.key).collect::<Vec<_>>(), [issue_key(3)]);
     assert!(merges(&started).is_empty());
 }
 
@@ -147,24 +147,10 @@ fn another_key_cancels_the_new_session() {
 #[test]
 fn an_exited_session_on_the_pr_branch_gets_a_new_session() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, with_ask(handoff(MergeProblem::ChecksFailing), ASK_FIX));
     assert!(sends(&cmds).is_empty());
-    assert_eq!(starts(&cmds).iter().map(|r| r.issue).collect::<Vec<_>>(), [IssueNumber(3)]);
-}
-
-#[test]
-fn a_problem_pr_with_no_issue_to_start_on_only_explains() {
-    let (mut state, _) = app();
-    state.prs.items[1].mergeability = Mergeability::Conflict;
-    press(&mut state, key('2'));
-    state.tabs.prs.selected = Some(PrNumber(11));
-    assert!(press(&mut state, key('m')).is_empty());
-    assert_eq!(
-        toast(&state),
-        "PR #11 has a merge conflict with main. PR #11 closes no issue, so dispatch can not start a session for it."
-    );
-    assert!(state.armed.is_none());
+    assert_eq!(starts(&cmds).iter().map(|r| r.key).collect::<Vec<_>>(), [issue_key(3)]);
 }
 
 #[test]
@@ -182,7 +168,7 @@ fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
     );
 }
 
-fn conflict_handoff(head: PrBranch) -> Msg {
+pub(super) fn conflict_handoff(head: PrBranch) -> Msg {
     let fresh = PullRequest { head, mergeability: Mergeability::Conflict, ..pr(10, "fix/3-x", &[3]) };
     let outcome =
         MergeOutcome::Handoff { problem: MergeProblem::Conflict, method: MergeMethod::Rebase, pr: Box::new(fresh) };
@@ -229,7 +215,7 @@ fn a_fork_pr_that_allows_maintainer_edits_gets_a_fix_session_on_a_local_branch()
     let (mut state, _) = app();
     let mut running = session(3, SessionState::Running);
     running.branch = BranchName::parse("fork/pr-10").expect("branch");
-    state.sessions.insert(IssueNumber(3), running);
+    state.sessions.insert(issue_key(3), running);
     state.prs.items[0].head = fork;
     state.prs.items[0].mergeability = Mergeability::Conflict;
     press(&mut state, key('m'));
@@ -259,7 +245,7 @@ fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
     assert!(stops(&cmds).is_empty(), "no session on the branch");
 }
 
-fn stops(cmds: &[Cmd]) -> Vec<IssueNumber> {
+fn stops(cmds: &[Cmd]) -> Vec<SessionKey> {
     cmds.iter()
         .filter_map(|c| match c {
             Cmd::Job(Job::Write(WriteJob::Stop(n))) => Some(*n),
@@ -282,9 +268,9 @@ fn merged_squash() -> Msg {
 fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
     for live in [SessionState::Running, SessionState::NeedsYou] {
         let (mut state, _) = app();
-        state.sessions.insert(IssueNumber(3), session(3, live));
+        state.sessions.insert(issue_key(3), session(3, live));
         let cmds = press(&mut state, merged_squash());
-        assert_eq!(stops(&cmds), [IssueNumber(3)]);
+        assert_eq!(stops(&cmds), [issue_key(3)]);
         assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     }
@@ -293,16 +279,16 @@ fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
 #[test]
 fn a_direct_merge_closes_the_window_of_an_exited_session_on_the_pr_branch() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, merged_squash());
-    assert_eq!(stops(&cmds), [IssueNumber(3)]);
+    assert_eq!(stops(&cmds), [issue_key(3)]);
     assert_eq!(toast(&state), "Merged PR #10 (squash) and closed #3's window");
 }
 
 #[test]
 fn a_direct_merge_leaves_a_session_on_another_branch_alone() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(2), session(2, SessionState::Running));
+    state.sessions.insert(issue_key(2), session(2, SessionState::Running));
     let cmds = press(&mut state, merged_squash());
     assert!(stops(&cmds).is_empty(), "#2 is on another branch");
     assert_eq!(toast(&state), "Merged PR #10 (squash)");
@@ -311,7 +297,7 @@ fn a_direct_merge_leaves_a_session_on_another_branch_alone() {
 #[test]
 fn a_queued_merge_keeps_the_session() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
     assert!(stops(&cmds).is_empty(), "the PR can still drop out of the queue");
 }
@@ -319,10 +305,10 @@ fn a_queued_merge_keeps_the_session() {
 #[test]
 fn a_problem_pr_sends_the_running_agent_a_prompt_with_the_problem_and_method() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     let cmds = press(&mut state, handoff(MergeProblem::ChecksFailing));
     let prompt = plan::handoff_prompt(PrNumber(10), "main", MergeProblem::ChecksFailing, MergeMethod::Rebase);
-    assert_eq!(sends(&cmds), [(IssueNumber(3), prompt.as_str())]);
+    assert_eq!(sends(&cmds), [(issue_key(3), prompt.as_str())]);
     assert!(prompt.contains("failing checks") && prompt.contains("--rebase"));
     assert_eq!(toast(&state), "PR #10 has failing checks. Asking #3's agent to fix it.");
 }
@@ -404,7 +390,7 @@ fn a_merge_after_marking_ready_has_no_ready_note() {
 #[test]
 fn m_from_the_pr_row_reaches_the_same_pr() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('2'));
     press(&mut state, key('m'));
     assert_eq!(merges(&press(&mut state, key('m'))), [ASK]);
@@ -413,7 +399,7 @@ fn m_from_the_pr_row_reaches_the_same_pr() {
 #[test]
 fn another_key_between_the_two_m_presses_disarms() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Running));
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('3'));
     press(&mut state, key('m'));
     press(&mut state, key('r'));
@@ -449,10 +435,7 @@ fn each_reason_m_can_not_act_keeps_its_sentence() {
         (NoTarget::NotListed(pr).to_string(), "PR #10 is not in the list."),
         (NoTarget::NoPr(issue).to_string(), "#3 has no PR yet."),
         (NoTarget::NotOpen(pr).to_string(), "PR #10 is not open."),
-        (
-            CannotFix::ClosesNoIssue(pr).to_string(),
-            "PR #10 closes no issue, so dispatch can not start a session for it.",
-        ),
+        (CannotFix::PrBusy(pr).to_string(), "PR #10 already has a session on another branch, or one is starting."),
         (
             CannotFix::EachIssueBusy(pr).to_string(),
             "Each issue that PR #10 closes already has a session on another branch.",

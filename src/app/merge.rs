@@ -8,7 +8,7 @@ use super::toast;
 use crate::config::RemoveOnMerge;
 use crate::domain::{
     BranchName, BranchNameError, ForkHead, ForkPush, IssueNumber, MergeMethod, Mode, PrBranch, PrNumber, PrState,
-    PullRequest,
+    PullRequest, SessionKey,
 };
 use crate::merge::job::{DraftStep, MergeOutcome, MergeRun};
 use crate::merge::plan::{self, MergePlan, MergeProblem};
@@ -29,17 +29,17 @@ pub enum Armed {
         req: StartRequest,
     },
     /// The next `D` removes the worktree and branch of this issue's session.
-    Remove(IssueNumber),
-    Clean(Vec<IssueNumber>),
+    Remove(SessionKey),
+    Clean(Vec<SessionKey>),
 }
 
 /// Who fixes a PR that can not merge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Fixer {
     /// A running session on the PR's branch. It gets a prompt.
-    Agent(IssueNumber),
-    /// A new session for this issue, on the PR's branch.
-    NewSession(IssueNumber),
+    Agent(SessionKey),
+    /// A new session for this issue or PR, on the PR's branch.
+    NewSession(SessionKey),
 }
 
 /// Why `m` has no PR to act on.
@@ -65,18 +65,21 @@ impl fmt::Display for NoTarget {
 /// Why no session can fix a PR.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum CannotFix {
-    ClosesNoIssue(PrNumber),
+    /// The PR closes no issue, and its own session key is taken.
+    PrBusy(PrNumber),
     EachIssueBusy(PrNumber),
-    UnusableHead { pr: PrNumber, raw: String, why: BranchNameError },
+    UnusableHead {
+        pr: PrNumber,
+        raw: String,
+        why: BranchNameError,
+    },
     ForkDeniesEdits(PrNumber),
 }
 
 impl fmt::Display for CannotFix {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CannotFix::ClosesNoIssue(n) => {
-                write!(f, "PR {n} closes no issue, so dispatch can not start a session for it.")
-            }
+            CannotFix::PrBusy(n) => write!(f, "PR {n} already has a session on another branch, or one is starting."),
             CannotFix::EachIssueBusy(n) => {
                 write!(f, "Each issue that PR {n} closes already has a session on another branch.")
             }
@@ -95,10 +98,13 @@ pub(super) fn merge_target(state: &State) -> Result<&PullRequest, NoTarget> {
     let (pr, missing) = match selected_row(state).ok_or(NoTarget::NothingSelected)? {
         RowKey::Pr(n) => (state.prs.items.iter().find(|p| p.number == n), NoTarget::NotListed(n)),
         RowKey::Issue(n) => (
-            state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).or_else(|| lead_pr(state, n)),
+            state.sessions.get(&n.into()).and_then(|s| pr_for_session(state, s)).or_else(|| lead_pr(state, n)),
             NoTarget::NoPr(n),
         ),
-        RowKey::Session(n) => (state.sessions.get(&n).and_then(|s| pr_for_session(state, s)), NoTarget::NoPr(n)),
+        RowKey::Session(SessionKey::Issue(n)) => {
+            (state.sessions.get(&n.into()).and_then(|s| pr_for_session(state, s)), NoTarget::NoPr(n))
+        }
+        RowKey::Session(SessionKey::Pr(n)) => (state.prs.items.iter().find(|p| p.number == n), NoTarget::NotListed(n)),
     };
     let pr = pr.ok_or(missing)?;
     match pr.state {
@@ -108,22 +114,21 @@ pub(super) fn merge_target(state: &State) -> Result<&PullRequest, NoTarget> {
 }
 
 /// A running session on the PR's branch fixes it. Else a new session does:
-/// for the issue of an exited session on that branch, or else for the first
-/// issue the PR closes that has no session yet.
+/// for the key of an exited session on that branch, or else for the first
+/// issue the PR closes that has no session yet, or else for the PR itself
+/// when it closes no issue.
 pub(super) fn fixer(state: &State, pr: &PullRequest) -> Result<Fixer, CannotFix> {
     if let Some(s) = state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)) {
-        return Ok(if s.state.is_live() { Fixer::Agent(s.issue) } else { Fixer::NewSession(s.issue) });
+        return Ok(if s.state.is_live() { Fixer::Agent(s.key) } else { Fixer::NewSession(s.key) });
     }
     head_start(pr)?;
     let n = pr.number;
+    let free = |key: &SessionKey| !state.sessions.contains_key(key) && !state.starting.contains(key);
     if pr.closes.is_empty() {
-        return Err(CannotFix::ClosesNoIssue(n));
+        let key = SessionKey::Pr(n);
+        return if free(&key) { Ok(Fixer::NewSession(key)) } else { Err(CannotFix::PrBusy(n)) };
     }
-    pr.closes
-        .iter()
-        .find(|i| !state.sessions.contains_key(i) && !state.starting.contains(i))
-        .map(|&i| Fixer::NewSession(i))
-        .ok_or(CannotFix::EachIssueBusy(n))
+    pr.closes.iter().map(|&i| SessionKey::Issue(i)).find(free).map(Fixer::NewSession).ok_or(CannotFix::EachIssueBusy(n))
 }
 
 /// `m`: the first press arms, the next press on the same PR acts. Merging
@@ -179,14 +184,14 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
 }
 
 pub(super) fn start_fix(state: &mut State, req: StartRequest) -> Vec<Cmd> {
-    let n = req.issue;
+    let n = req.key;
     state.starting.insert(n);
     goto_session(state, n);
     vec![Cmd::Job(Job::Write(WriteJob::Start(req, Launch::from_config(&state.config))))]
 }
 
 pub(super) fn fix_request(
-    issue: IssueNumber,
+    key: SessionKey,
     pr: &PullRequest,
     problem: MergeProblem,
     method: MergeMethod,
@@ -197,11 +202,11 @@ pub(super) fn fix_request(
         StartFrom::Fork { repo, .. } => plan::fork_fix_session_prompt(n, repo, base, problem, method),
         StartFrom::Base | StartFrom::Origin => plan::fix_session_prompt(n, base, problem, method),
     };
-    Ok(StartRequest { issue, branch, mode: Mode::Implement, prompt, from })
+    Ok(StartRequest { key, branch, mode: Mode::Implement, prompt, from })
 }
 
 /// The branch a session on the PR's head uses, and where that branch starts.
-fn head_start(pr: &PullRequest) -> Result<(BranchName, StartFrom), CannotFix> {
+pub(super) fn head_start(pr: &PullRequest) -> Result<(BranchName, StartFrom), CannotFix> {
     match &pr.head {
         PrBranch::Valid(name) => Ok((name.clone(), StartFrom::Origin)),
         PrBranch::Fork(ForkHead { branch, local, push: ForkPush::Allowed(repo) }) => {
@@ -231,10 +236,10 @@ pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd
     cmds
 }
 
-fn closed_phrase(issue: IssueNumber, session: SessionState) -> String {
+fn closed_phrase(key: SessionKey, session: SessionState) -> String {
     match session {
-        SessionState::Running | SessionState::NeedsYou => format!("stopped {issue}'s session"),
-        SessionState::Exited => format!("closed {issue}'s window"),
+        SessionState::Running | SessionState::NeedsYou => format!("stopped {key}'s session"),
+        SessionState::Exited => format!("closed {key}'s window"),
     }
 }
 
@@ -243,17 +248,14 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
         Ok(MergeOutcome::Merged { method, head_oid }) => {
             let mut cmds = Vec::new();
             match session_on_pr(state, ask.pr) {
-                Some((issue, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
-                    toast::info(state, format!("Merged PR {} ({method}), removing {issue}", ask.pr));
-                    let target = RemoveTarget { issue, merged_head: Some(head_oid) };
+                Some((key, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
+                    toast::info(state, format!("Merged PR {} ({method}), removing {key}", ask.pr));
+                    let target = RemoveTarget { key, merged_head: Some(head_oid) };
                     cmds.push(Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge { pr: ask.pr, method, session, target })));
                 }
-                Some((issue, session)) => {
-                    toast::info(
-                        state,
-                        format!("Merged PR {} ({method}) and {}", ask.pr, closed_phrase(issue, session)),
-                    );
-                    cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(issue))));
+                Some((key, session)) => {
+                    toast::info(state, format!("Merged PR {} ({method}) and {}", ask.pr, closed_phrase(key, session)));
+                    cmds.push(Cmd::Job(Job::Write(WriteJob::Stop(key))));
                 }
                 None => toast::info(state, format!("Merged PR {} ({method})", ask.pr)),
             }
@@ -282,26 +284,26 @@ pub(super) fn removed_after_merge(
     state: &mut State,
     pr: PrNumber,
     method: MergeMethod,
-    issue: IssueNumber,
+    key: SessionKey,
     session: SessionState,
     result: Result<RemoveOutcome, SessionError>,
 ) -> Vec<Cmd> {
     match result {
         Ok(RemoveOutcome::Removed) => {
-            toast::info(state, format!("Merged PR {pr} ({method}) and removed {issue}'s worktree and branch"));
+            toast::info(state, format!("Merged PR {pr} ({method}) and removed {key}'s worktree and branch"));
         }
         Ok(RemoveOutcome::Refused(why)) => {
             toast::info(
                 state,
                 format!(
                     "Merged PR {pr} ({method}) and {}. Kept worktree ({}).",
-                    closed_phrase(issue, session),
+                    closed_phrase(key, session),
                     short_refusal(why)
                 ),
             );
         }
         Err(e) => {
-            toast::error(state, format!("Merged PR {pr} ({method}), but removing {issue} failed: {e}"));
+            toast::error(state, format!("Merged PR {pr} ({method}), but removing {key} failed: {e}"));
         }
     }
     observe_now(state)
@@ -310,9 +312,9 @@ pub(super) fn removed_after_merge(
 /// The session on the PR's head branch, live or exited. A merged PR needs no
 /// agent, so the merge stops it like `x` does. An exited session still gets
 /// the stop, because its terminal or space can outlive Claude.
-fn session_on_pr(state: &State, pr: PrNumber) -> Option<(IssueNumber, SessionState)> {
+fn session_on_pr(state: &State, pr: PrNumber) -> Option<(SessionKey, SessionState)> {
     let head = state.prs.items.iter().find(|p| p.number == pr)?.head.branch()?;
-    state.sessions.values().find(|s| &s.branch == head).map(|s| (s.issue, s.state))
+    state.sessions.values().find(|s| &s.branch == head).map(|s| (s.key, s.state))
 }
 
 /// The check found `problem` on `pr`, the PR as GitHub showed it now.
@@ -324,11 +326,11 @@ pub(super) fn handoff(
     method: MergeMethod,
 ) -> Vec<Cmd> {
     let sentence = plan::problem_sentence(pr.number, pr.base.display(), problem);
-    let issue = match fixer(state, pr) {
+    let key = match fixer(state, pr) {
         Ok(Fixer::Agent(i)) => {
             toast::info(state, format!("{sentence} Asking {i}'s agent to fix it."));
             return vec![Cmd::Job(Job::Write(WriteJob::Send {
-                issue: i,
+                key: i,
                 kind: SendKind::MergeFix,
                 text: plan::handoff_prompt(pr.number, pr.base.display(), problem, method),
             }))];
@@ -339,7 +341,7 @@ pub(super) fn handoff(
             return Vec::new();
         }
     };
-    let req = match fix_request(issue, pr, problem, method) {
+    let req = match fix_request(key, pr, problem, method) {
         Ok(req) => req,
         Err(why) => {
             toast::info(state, format!("{sentence} {why}"));
@@ -347,10 +349,10 @@ pub(super) fn handoff(
         }
     };
     if ask.consent == Consent::StartFixSession {
-        toast::info(state, format!("{sentence} Starting a session for {issue} to fix it."));
+        toast::info(state, format!("{sentence} Starting a session for {key} to fix it."));
         return start_fix(state, req);
     }
     state.armed = Some(Armed::Fix { pr: pr.number, req });
-    toast::info(state, format!("{sentence} Press m again to start a session for {issue} that fixes it."));
+    toast::info(state, format!("{sentence} Press m again to start a session for {key} that fixes it."));
     Vec::new()
 }

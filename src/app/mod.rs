@@ -4,7 +4,7 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{Issue, IssueNumber, PullRequest};
+use crate::domain::{Issue, IssueNumber, PullRequest, SessionKey};
 use crate::session::Sessions;
 use crossterm::event::KeyEventKind;
 use ratatui::layout::Position;
@@ -58,7 +58,7 @@ pub enum Focus {
     Settings(Box<SettingsMenu>),
     /// The one-line message field for a running session, from `t`.
     Message {
-        issue: IssueNumber,
+        key: SessionKey,
         text: String,
     },
     /// The keybinds overlay, scrolled down by `scroll` lines.
@@ -67,7 +67,7 @@ pub enum Focus {
     },
     /// All of what the session's Claude last said, scrolled down by `scroll` lines.
     Summary {
-        issue: IssueNumber,
+        key: SessionKey,
         scroll: u16,
     },
 }
@@ -103,9 +103,9 @@ pub struct State {
     /// does not blink out until the next observation.
     pub sessions: Sessions,
     pub observe: Poll,
-    /// Issues with a `WriteJob::Start` in flight. The only session-ish state the
+    /// Sessions with a `WriteJob::Start` in flight. The only session-ish state the
     /// app owns; it covers the gap before the next observation shows the window.
-    pub starting: BTreeSet<IssueNumber>,
+    pub starting: BTreeSet<SessionKey>,
     /// Issues marked with Space for a batch start.
     pub marked: BTreeSet<IssueNumber>,
     pub tabs: Tabs,
@@ -123,7 +123,7 @@ pub struct State {
     /// Set by an `m` or `D` that waits for one more press of the same key on
     /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
-    pub transcripts: std::collections::BTreeMap<IssueNumber, crate::transcript::Transcript>,
+    pub transcripts: std::collections::BTreeMap<SessionKey, crate::transcript::Transcript>,
     /// What each session committed, left uncommitted, and pushed.
     pub work: crate::session::Works,
 }
@@ -201,18 +201,18 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::Observed(result) => observed(state, result),
-        Msg::Started { issue, result } => started(state, issue, result),
-        Msg::Stopped { issue, result } => stopped(state, issue, result),
-        Msg::Resumed { issue, result } => resumed(state, issue, result),
-        Msg::Removed { issue, result } => removed(state, issue, result),
-        Msg::RemovedAfterMerge { pr, method, issue, session, result } => {
-            removed_after_merge(state, pr, method, issue, session, result)
+        Msg::Started { key, result } => started(state, key, result),
+        Msg::Stopped { key, result } => stopped(state, key, result),
+        Msg::Resumed { key, result } => resumed(state, key, result),
+        Msg::Removed { key, result } => removed(state, key, result),
+        Msg::RemovedAfterMerge { pr, method, key, session, result } => {
+            removed_after_merge(state, pr, method, key, session, result)
         }
         Msg::Cleaned(report) => cleaned(state, &report),
         Msg::Opened { target, result } => opened(state, target, result),
         Msg::PageUrl { target, result } => page_url(state, target, result),
         Msg::Copied { target, result } => copied(state, target, result),
-        Msg::Sent { issue, kind, result } => sent(state, issue, kind, result),
+        Msg::Sent { key, kind, result } => sent(state, key, kind, result),
         Msg::Merged { ask, run } => merged(state, ask, run),
         Msg::Attached(result) => attached(state, result),
         Msg::Saved(result) => {

@@ -80,9 +80,9 @@ fn a_toast_is_red_for_a_failed_job_and_plain_for_a_warning_whatever_its_text() {
     let error = crate::proc::fake::fail("git", 128, "no network");
     let base = crate::domain::OriginRef::parse("origin/main").expect("ref");
     let warning = crate::session::error::StartWarning::FetchFailed { base, error };
-    let session = state.sessions[&IssueNumber(3)].clone();
+    let session = state.sessions[&issue_key(3)].clone();
     let outcome = crate::session::StartOutcome { session, warnings: vec![warning] };
-    let _ = app::update(&mut state, Msg::Started { issue: IssueNumber(3), result: Ok(outcome) });
+    let _ = app::update(&mut state, Msg::Started { key: issue_key(3), result: Ok(outcome) });
     let (text, style) = super::footer::message(&state).expect("toast");
     assert!(text.contains("fetch failed"), "{text}");
     assert_eq!(style, palette::PLAIN, "a start that went on is not an error");

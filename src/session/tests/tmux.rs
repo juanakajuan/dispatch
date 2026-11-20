@@ -1,8 +1,8 @@
 use super::{GitWorld, br, launch, req, workspace};
-use crate::domain::IssueNumber;
 use crate::proc::fake;
 use crate::session::mux::Backend;
 use crate::session::{AttachPlan, SessionState, tmux};
+use crate::testutil::issue_key;
 use crate::testutil::temp_dir;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -144,11 +144,11 @@ fn stop_kills_the_window_by_a_fresh_observation_and_keeps_the_worktree() {
         Rc::new(RefCell::new(Sim { git: GitWorld::started(), window: true, tagged: true, ..Sim::default() })),
     );
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
-    ws.stop(IssueNumber(142)).expect("stop");
+    ws.stop(issue_key(142)).expect("stop");
     let calls = fake::calls();
     assert!(calls.iter().any(|c| c == "tmux kill-window -t @4"));
     assert!(!calls.iter().any(|c| c.contains("worktree remove") || c.contains("branch -")));
-    assert!(ws.stop(IssueNumber(999)).is_ok(), "no session is already stopped");
+    assert!(ws.stop(issue_key(999)).is_ok(), "no session is already stopped");
 }
 
 #[test]
@@ -170,7 +170,7 @@ fn resume_respawns_a_dead_pane_in_an_old_sibling_worktree() {
             Ok(String::new())
         }
     });
-    ws.resume(IssueNumber(142), &launch()).expect("resume");
+    ws.resume(issue_key(142), &launch()).expect("resume");
     let last = fake::calls().pop().expect("a call");
     assert_eq!(last, format!("tmux respawn-window -k -t @4 -c {} -- claude --continue", dir.display()));
 }
@@ -182,7 +182,7 @@ fn attach_inside_switches_and_outside_suspends() {
     std::fs::create_dir_all(base.join("orbit/.claude/worktrees/142")).expect("mkdir");
     let sim = Rc::new(RefCell::new(Sim { git: GitWorld::started(), window: true, tagged: true, ..Sim::default() }));
     install_world(base.clone(), Rc::clone(&sim));
-    let id = IssueNumber(142);
+    let id = issue_key(142);
     assert_eq!(
         ws.attach_plan(id).expect("plan"),
         AttachPlan::Switch(

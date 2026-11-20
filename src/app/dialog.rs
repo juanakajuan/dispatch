@@ -4,13 +4,16 @@ use super::msg::Cmd;
 use super::sessions::{begin_start, goto_session};
 use super::toast;
 use super::{Focus, State};
-use crate::domain::{BranchName, Issue, IssueNumber, Mode};
-use crate::session::request::start_defaults;
+use crate::domain::{BranchName, Issue, Mode, PullRequest, SessionKey};
 use crate::session::request::{StartFrom, StartRequest};
+use crate::session::request::{prompt_for_pr, start_defaults};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 pub struct StartDialog {
-    pub issue: IssueNumber,
+    pub key: SessionKey,
+    /// Where the branch starts. Only a new issue branch is editable: a PR
+    /// session works on the PR's own branch.
+    pub from: StartFrom,
     pub title: String,
     pub branch: tui_textarea::TextArea<'static>,
     pub mode: Mode,
@@ -29,26 +32,42 @@ pub enum DialogField {
 
 pub(super) const FIELDS: [DialogField; 3] = [DialogField::Branch, DialogField::Mode, DialogField::Prompt];
 
-pub(super) fn open_dialog(issue: &Issue) -> StartDialog {
-    let defaults = start_defaults(issue);
-    let mut branch = tui_textarea::TextArea::new(vec![defaults.branch.as_str().to_string()]);
-    branch.move_cursor(tui_textarea::CursorMove::End);
-    let prompt = tui_textarea::TextArea::new(defaults.prompt.split('\n').map(str::to_string).collect());
+impl StartDialog {
+    pub fn branch_editable(&self) -> bool {
+        self.from == StartFrom::Base
+    }
+}
+
+fn dialog(key: SessionKey, from: StartFrom, title: &str, branch: &BranchName, mode: Mode, prompt: &str) -> StartDialog {
+    let mut field = tui_textarea::TextArea::new(vec![branch.as_str().to_string()]);
+    field.move_cursor(tui_textarea::CursorMove::End);
     StartDialog {
-        issue: issue.number,
-        title: issue.title.clone(),
-        branch,
-        mode: defaults.mode,
-        prompt,
+        key,
+        from,
+        title: title.to_string(),
+        branch: field,
+        mode,
+        prompt: tui_textarea::TextArea::new(prompt.split('\n').map(str::to_string).collect()),
         field: DialogField::Branch,
         error: None,
     }
 }
 
+pub(super) fn open_dialog(issue: &Issue) -> StartDialog {
+    let defaults = start_defaults(issue);
+    dialog(issue.number.into(), StartFrom::Base, &issue.title, &defaults.branch, defaults.mode, &defaults.prompt)
+}
+
+/// The dialog for a PR: `branch` and `from` come from the PR's head.
+pub(super) fn open_pr_dialog(pr: &PullRequest, branch: &BranchName, from: StartFrom) -> StartDialog {
+    dialog(pr.number.into(), from, &pr.title, branch, Mode::Implement, &prompt_for_pr(pr))
+}
+
 pub(super) fn dialog_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     let Focus::Dialog(dialog) = &mut state.focus else { return Vec::new() };
     let key = key_of(ev);
-    let on_text = matches!(dialog.field, DialogField::Branch | DialogField::Prompt);
+    let on_text =
+        dialog.field == DialogField::Prompt || (dialog.field == DialogField::Branch && dialog.branch_editable());
     match key {
         Some(Key::Code(KeyCode::Esc)) => state.focus = Focus::List,
         Some(Key::Ctrl('s')) => return confirm_dialog(state),
@@ -101,8 +120,8 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
         dialog.field = DialogField::Prompt;
         return Vec::new();
     }
-    let req = StartRequest { issue: dialog.issue, branch, mode: dialog.mode, prompt, from: StartFrom::Base };
-    let n = req.issue;
+    let req = StartRequest { key: dialog.key, branch, mode: dialog.mode, prompt, from: dialog.from.clone() };
+    let n = req.key;
     let cmd = begin_start(state, req);
     state.focus = Focus::List;
     goto_session(state, n);

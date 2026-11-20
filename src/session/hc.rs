@@ -11,7 +11,7 @@
 use super::AttachPlan;
 use super::error::MuxError;
 use super::mux::{Liveness, Mux, Observed, Repo};
-use crate::domain::{IssueNumber, WorktreePath};
+use crate::domain::{SessionKey, WorktreePath};
 use crate::proc::{self, ProcError};
 use serde::Deserialize;
 use std::path::Path;
@@ -67,8 +67,8 @@ impl Mux for Hc {
         list_windows(repo.root)
     }
 
-    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<(), MuxError> {
-        open_window(repo.root, dir, issue, &self.launch_argv(argv)).map(|_| ())
+    fn open(&self, repo: Repo<'_>, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<(), MuxError> {
+        open_window(repo.root, dir, key, &self.launch_argv(argv)).map(|_| ())
     }
 
     /// hc cannot restart a finished terminal, so a new one takes its place.
@@ -77,11 +77,11 @@ impl Mux for Hc {
         repo: Repo<'_>,
         window: &Pane,
         dir: &WorktreePath,
-        issue: IssueNumber,
+        key: SessionKey,
         argv: &[String],
     ) -> Result<(), MuxError> {
         remove(&window.address)?;
-        self.open(repo, dir, issue, argv)
+        self.open(repo, dir, key, argv)
     }
 
     /// The app shows a space for as long as one terminal carries its label,
@@ -234,12 +234,15 @@ pub(super) fn space_id(worktree: &Path) -> Space {
 }
 
 /// `--no-parent` keeps the terminal alive when dispatch exits.
-fn open_window(repo_root: &Path, dir: &WorktreePath, issue: IssueNumber, argv: &[String]) -> Result<Address, MuxError> {
+fn open_window(repo_root: &Path, dir: &WorktreePath, key: SessionKey, argv: &[String]) -> Result<Address, MuxError> {
     let cwd = dir.as_path().to_string_lossy().into_owned();
     let labels = [
         format!("herdr.space={}", space_id(dir.as_path())),
         format!("dispatch.repo={}", repo_root.display()),
-        format!("dispatch.issue={}", issue.0),
+        match key {
+            SessionKey::Issue(n) => format!("dispatch.issue={}", n.0),
+            SessionKey::Pr(n) => format!("dispatch.pr={}", n.0),
+        },
     ];
     let mut run = vec!["run", "--bg", "--json", "--no-parent", "--no-notify", "--cwd", cwd.as_str()];
     for label in &labels {

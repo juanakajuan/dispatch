@@ -1,12 +1,13 @@
 use super::{br, markers, req, win, wp, wt};
 use crate::config::ClaudeCommand;
-use crate::domain::{IssueNumber, Mode, OriginRef, RepoSlug, WorktreePath};
+use crate::domain::{Mode, OriginRef, RepoSlug, WorktreePath};
 use crate::session::error::StartConflict;
 use crate::session::join::{join, sessions};
 use crate::session::mux::{Liveness, Observed};
 use crate::session::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use crate::session::request::{StartFrom, StartRequest};
 use crate::session::{git, tmux};
+use crate::testutil::{issue_key, pr_key};
 use std::path::PathBuf;
 
 /// `worktree_dir_for` of `layout().repo_root` and issue 142.
@@ -23,7 +24,7 @@ fn layout() -> Layout {
 
 struct World {
     worktrees: Vec<git::Worktree>,
-    markers: git::Markers,
+    markers: crate::session::markers::Markers,
     windows: Vec<Observed<tmux::WindowId>>,
     target_dir: TargetDir,
     branch: LocalBranch,
@@ -34,7 +35,7 @@ impl World {
     fn empty() -> World {
         World {
             worktrees: vec![wt("/a/orbit", Some("main"))],
-            markers: git::Markers::new(),
+            markers: crate::session::markers::Markers::new(),
             windows: Vec::new(),
             target_dir: TargetDir::Free,
             branch: LocalBranch::Missing,
@@ -68,8 +69,8 @@ impl World {
                 self.branch = LocalBranch::Exists;
                 self.target_dir = TargetDir::Taken;
             }
-            Step::Mark { branch, issue } => {
-                self.markers.insert(branch.clone(), *issue);
+            Step::Mark { branch, key } => {
+                self.markers.insert(branch.clone(), *key);
             }
             Step::OpenWindow { dir, .. } => {
                 self.windows.push(Observed {
@@ -100,7 +101,7 @@ fn origin(remote_ref: &str) -> OriginRef {
 }
 
 fn mark(branch: &str) -> Step {
-    Step::Mark { branch: br(branch), issue: IssueNumber(142) }
+    Step::Mark { branch: br(branch), key: issue_key(142) }
 }
 
 fn steps(plan: Result<StartPlan, StartConflict>) -> Vec<Step> {
@@ -116,7 +117,7 @@ fn plan_session_with_live_window_is_already_running() {
     w.worktrees.push(wt(TARGET, Some("fix/142-x")));
     w.markers = markers(&[("fix/142-x", 142)]);
     w.windows.push(win("@3", TARGET, Liveness::Working));
-    assert!(matches!(w.plan(), Ok(StartPlan::AlreadyRunning(s)) if s.issue == IssueNumber(142)));
+    assert!(matches!(w.plan(), Ok(StartPlan::AlreadyRunning(s)) if s.key == issue_key(142)));
 }
 
 #[test]
@@ -166,7 +167,7 @@ fn plan_branch_marked_for_another_issue_conflicts() {
     let mut w = World::empty();
     w.markers = markers(&[("fix/142-x", 7)]);
     w.branch = LocalBranch::Exists;
-    assert_eq!(w.plan(), Err(StartConflict::BranchBelongsTo { branch: br("fix/142-x"), issue: IssueNumber(7) }));
+    assert_eq!(w.plan(), Err(StartConflict::BranchBelongsTo { branch: br("fix/142-x"), key: issue_key(7) }));
 }
 
 #[test]
@@ -286,4 +287,72 @@ fn a_session_whose_worktree_changed_branch_reopens_and_marks_nothing() {
     w.markers = markers(&[("fix/142-x", 142)]);
     w.target_dir = TargetDir::Taken;
     assert_eq!(steps(w.plan()), [open_step()]);
+}
+
+fn pr_request(from: StartFrom) -> StartRequest {
+    StartRequest { key: pr_key(7), branch: br("chore/dep"), from, ..req() }
+}
+
+const PR_TARGET: &str = "/a/orbit/.claude/worktrees/pr-7";
+
+fn pr_step_add(from: Option<&str>) -> Step {
+    Step::AddWorktree { dir: PathBuf::from(PR_TARGET), branch: br("chore/dep"), from: from.map(origin) }
+}
+
+fn pr_mark() -> Step {
+    Step::Mark { branch: br("chore/dep"), key: pr_key(7) }
+}
+
+fn pr_open() -> Step {
+    let Step::OpenWindow { argv, .. } = open_step() else { panic!("open step") };
+    Step::OpenWindow { dir: wp(PR_TARGET), argv }
+}
+
+#[test]
+fn plan_for_a_pr_key_creates_the_branch_from_origin_in_the_pr_dir_and_marks_it_for_the_pr() {
+    let got = steps(plan_start(&World::empty().obs(), &pr_request(StartFrom::Origin), &layout()));
+    assert_eq!(got, [fetch("origin/chore/dep"), pr_step_add(Some("origin/chore/dep")), pr_mark(), pr_open()]);
+}
+
+#[test]
+fn plan_for_a_fork_pr_key_fetches_the_fork_branch_and_marks_it_for_the_pr() {
+    let r = StartRequest { branch: br("fork/pr-7"), ..pr_request(from_fork()) };
+    let got = steps(plan_start(&World::empty().obs(), &r, &layout()));
+    let fetch_fork = Step::FetchFork {
+        repo: RepoSlug::parse("maxbeizer/cli").expect("slug"),
+        head: br("fix-scope"),
+        branch: br("fork/pr-7"),
+    };
+    let add = Step::AddWorktree { dir: PathBuf::from(PR_TARGET), branch: br("fork/pr-7"), from: None };
+    let mark = Step::Mark { branch: br("fork/pr-7"), key: pr_key(7) };
+    assert_eq!(got, [fetch_fork, add, mark, pr_open()]);
+}
+
+#[test]
+fn plan_pr_7_and_issue_7_coexist() {
+    let mut w = World::empty();
+    w.worktrees.push(wt("/a/orbit/.claude/worktrees/7", Some("fix/7-x")));
+    w.markers = markers(&[("fix/7-x", 7)]);
+    w.windows.push(win("@3", "/a/orbit/.claude/worktrees/7", Liveness::Working));
+    let got = steps(plan_start(&w.obs(), &pr_request(StartFrom::Origin), &layout()));
+    assert_eq!(got[1..3], [pr_step_add(Some("origin/chore/dep")), pr_mark()], "the issue 7 session does not stop it");
+
+    let mut w = World::empty();
+    w.worktrees.push(wt(PR_TARGET, Some("chore/dep")));
+    w.markers = [(br("chore/dep"), pr_key(7))].into_iter().collect();
+    w.windows.push(win("@4", PR_TARGET, Liveness::Working));
+    let plan = plan_start(&w.obs(), &pr_request(StartFrom::Origin), &layout());
+    assert!(matches!(plan, Ok(StartPlan::AlreadyRunning(s)) if s.key == pr_key(7)));
+}
+
+#[test]
+fn plan_branch_marked_for_a_pr_conflicts_with_an_issue_start_on_it() {
+    let mut w = World::empty();
+    w.markers = [(br("fix/142-x"), pr_key(7))].into_iter().collect();
+    w.branch = LocalBranch::Exists;
+    assert_eq!(w.plan(), Err(StartConflict::BranchBelongsTo { branch: br("fix/142-x"), key: pr_key(7) }));
+    assert_eq!(
+        StartConflict::BranchBelongsTo { branch: br("fix/142-x"), key: pr_key(7) }.to_string(),
+        "branch fix/142-x already belongs to PR #7"
+    );
 }

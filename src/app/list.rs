@@ -1,7 +1,7 @@
 use super::State;
 use super::filter::{Facets, Query};
 use super::toast;
-use crate::domain::{GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest};
+use crate::domain::{GithubRef, Issue, IssueNumber, PrNumber, PrState, PullRequest, SessionKey};
 use crate::session::{Session, SessionState};
 use crate::sort::{self, Cycle, IssueSort, PrSort, SessionSort};
 use std::collections::BTreeSet;
@@ -73,8 +73,8 @@ pub fn group_of(state: &State, key: RowKey) -> Group {
             Some(SessionState::Running) => SessionGroup::Working,
             Some(SessionState::Exited) | None => SessionGroup::Exited,
         }),
-        RowKey::Issue(n) => Group::Issue(match activity(state, n) {
-            _ if session_merged(state, n) => IssueGroup::Merged,
+        RowKey::Issue(n) => Group::Issue(match activity(state, n.into()) {
+            _ if session_merged(state, n.into()) => IssueGroup::Merged,
             Some(SessionState::NeedsYou) => IssueGroup::NeedsYou,
             Some(SessionState::Running) => IssueGroup::Working,
             Some(SessionState::Exited) | None => match lead_pr(state, n).map(|p| p.state) {
@@ -98,16 +98,17 @@ pub fn group_of(state: &State, key: RowKey) -> Group {
 pub enum RowKey {
     Issue(IssueNumber),
     Pr(PrNumber),
-    Session(IssueNumber),
+    Session(SessionKey),
 }
 
-/// The page `o` opens for a row. A session row opens its issue. Exhaustive,
+/// The page `o` opens for a row. A session row opens its issue or PR. Exhaustive,
 /// so a new row kind does not compile until it says what `o` opens.
 impl From<RowKey> for GithubRef {
     fn from(key: RowKey) -> GithubRef {
         match key {
-            RowKey::Issue(n) | RowKey::Session(n) => GithubRef::Issue(n),
+            RowKey::Issue(n) => GithubRef::Issue(n),
             RowKey::Pr(n) => GithubRef::Pr(n),
+            RowKey::Session(key) => key.into(),
         }
     }
 }
@@ -117,7 +118,7 @@ impl From<RowKey> for GithubRef {
 pub struct Tabs {
     pub issues: TabState<IssueNumber, IssueSort>,
     pub prs: TabState<PrNumber, PrSort>,
-    pub sessions: TabState<IssueNumber, SessionSort>,
+    pub sessions: TabState<SessionKey, SessionSort>,
 }
 
 /// A tab's selected row and sort mode. Selection stores the key, see `RowKey`.
@@ -214,7 +215,7 @@ pub fn visible_rows(state: &State) -> Vec<RowKey> {
 
 pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
     let query = Query::parse(&state.filter, state.viewer.login());
-    let activity = |n| activity(state, n);
+    let issue_activity = |n: IssueNumber| activity(state, n.into());
     match state.tab {
         Tab::Issues => {
             let mut rows: Vec<&Issue> = state
@@ -228,7 +229,7 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
                     query.matches(&text, Facets::from(*i))
                 })
                 .collect();
-            sort::issues(&mut rows, state.tabs.issues.sort, activity);
+            sort::issues(&mut rows, state.tabs.issues.sort, issue_activity);
             rows.into_iter().map(|i| RowKey::Issue(i.number)).collect()
         }
         Tab::Prs => {
@@ -242,33 +243,43 @@ pub(super) fn sorted_rows(state: &State) -> Vec<RowKey> {
             rows.into_iter().map(|p| RowKey::Pr(p.number)).collect()
         }
         Tab::Sessions => {
-            let numbers: BTreeSet<IssueNumber> = state.sessions.keys().chain(state.starting.iter()).copied().collect();
-            let mut rows: Vec<IssueNumber> = numbers
+            let keys: BTreeSet<SessionKey> = state.sessions.keys().chain(state.starting.iter()).copied().collect();
+            let mut rows: Vec<SessionKey> = keys
                 .into_iter()
-                .filter(|n| {
-                    let issue = state.issues.items.iter().find(|i| i.number == *n);
-                    let title = issue.map_or("", |i| i.title.as_str());
-                    let session = state.sessions.get(n);
+                .filter(|key| {
+                    let (title, facets) = session_subject(state, *key);
+                    let session = state.sessions.get(key);
                     let branch = session.map_or("", |s| s.branch.as_str());
                     let checked_out = session.map_or("", Session::checked_out);
-                    query.matches(
-                        &[&n.to_string(), title, branch, checked_out],
-                        issue.map(Facets::from).unwrap_or_default(),
-                    )
+                    query.matches(&[&key.to_string(), title, branch, checked_out], facets)
                 })
                 .collect();
-            sort::sessions(&mut rows, state.tabs.sessions.sort, activity);
+            sort::sessions(&mut rows, state.tabs.sessions.sort, |key| activity(state, key));
             rows.into_iter().map(RowKey::Session).collect()
         }
     }
 }
 
-/// The state of issue `n`'s session for sorting. A start in flight counts as
+/// The title and filter facets of what a session is for: its issue or its PR.
+pub fn session_subject(state: &State, key: SessionKey) -> (&str, Facets<'_>) {
+    match key {
+        SessionKey::Issue(n) => {
+            let issue = state.issues.items.iter().find(|i| i.number == n);
+            (issue.map_or("", |i| i.title.as_str()), issue.map(Facets::from).unwrap_or_default())
+        }
+        SessionKey::Pr(n) => {
+            let pr = state.prs.items.iter().find(|p| p.number == n);
+            (pr.map_or("", |p| p.title.as_str()), pr.map(Facets::from).unwrap_or_default())
+        }
+    }
+}
+
+/// The state of the session `key` for sorting. A start in flight counts as
 /// running, so the row does not jump when the window appears.
-pub(super) fn activity(state: &State, n: IssueNumber) -> Option<SessionState> {
-    match state.sessions.get(&n) {
+pub(super) fn activity(state: &State, key: SessionKey) -> Option<SessionState> {
+    match state.sessions.get(&key) {
         Some(s) => Some(s.state),
-        None => state.starting.contains(&n).then_some(SessionState::Running),
+        None => state.starting.contains(&key).then_some(SessionState::Running),
     }
 }
 
@@ -283,12 +294,14 @@ pub fn selected_row(state: &State) -> Option<RowKey> {
 /// issue's session, or the session of the issue the selected PR closes.
 pub fn current_session(state: &State) -> Option<&Session> {
     match selected_row(state)? {
-        RowKey::Issue(n) | RowKey::Session(n) => state.sessions.get(&n),
+        RowKey::Issue(n) => state.sessions.get(&n.into()),
+        RowKey::Session(key) => state.sessions.get(&key),
         RowKey::Pr(n) => {
             let pr = state.prs.items.iter().find(|p| p.number == n)?;
             pr.closes
                 .iter()
-                .find_map(|c| state.sessions.get(c))
+                .find_map(|c| state.sessions.get(&(*c).into()))
+                .or_else(|| state.sessions.get(&n.into()))
                 .or_else(|| state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)))
         }
     }
@@ -311,10 +324,10 @@ pub fn lead_pr(state: &State, n: IssueNumber) -> Option<&PullRequest> {
     prs_closing(state, n).filter_map(|p| Some(((rank(p)?, p.number), p))).max_by_key(|(k, _)| *k).map(|(_, p)| p)
 }
 
-/// Issue `n` has a session whose branch has a merged PR. Its work is done,
+/// The session `key` has a branch with a merged PR. Its work is done,
 /// whatever its window still does.
-pub fn session_merged(state: &State, n: IssueNumber) -> bool {
-    state.sessions.get(&n).and_then(|s| pr_for_session(state, s)).is_some_and(|pr| pr.state == PrState::Merged)
+pub fn session_merged(state: &State, key: SessionKey) -> bool {
+    state.sessions.get(&key).and_then(|s| pr_for_session(state, s)).is_some_and(|pr| pr.state == PrState::Merged)
 }
 
 /// A PR whose head branch equals the session branch.

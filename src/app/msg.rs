@@ -1,7 +1,7 @@
 use crate::clipboard::CopyError;
 use crate::config::settings::Setting;
 use crate::config::{Config, ConfigError};
-use crate::domain::{GithubRef, Issue, IssueNumber, MergeMethod, PrNumber, PullRequest};
+use crate::domain::{GithubRef, Issue, MergeMethod, PrNumber, PullRequest, SessionKey};
 use crate::github::GhError;
 use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
@@ -30,25 +30,25 @@ pub enum Msg {
     Viewer(Result<String, GhError>),
     Observed(Result<Observation, SessionError>),
     Started {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<StartOutcome, SessionError>,
     },
     Stopped {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<(), SessionError>,
     },
     Resumed {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<(), SessionError>,
     },
     Removed {
-        issue: IssueNumber,
+        key: SessionKey,
         result: Result<RemoveOutcome, SessionError>,
     },
     RemovedAfterMerge {
         pr: PrNumber,
         method: MergeMethod,
-        issue: IssueNumber,
+        key: SessionKey,
         session: SessionState,
         result: Result<RemoveOutcome, SessionError>,
     },
@@ -67,7 +67,7 @@ pub enum Msg {
         result: Result<String, CopyError>,
     },
     Sent {
-        issue: IssueNumber,
+        key: SessionKey,
         kind: SendKind,
         result: Result<(), SessionError>,
     },
@@ -87,7 +87,7 @@ pub enum Msg {
 pub struct Observation {
     pub sessions: Sessions,
     /// Only sessions that have a conversation.
-    pub transcripts: BTreeMap<IssueNumber, Transcript>,
+    pub transcripts: BTreeMap<SessionKey, Transcript>,
     /// Only sessions whose git reads worked.
     pub work: Works,
 }
@@ -96,7 +96,7 @@ pub struct Observation {
 pub enum Cmd {
     Job(Job),
     /// Runs on the main thread: `AttachPlan::Suspend` must own the terminal.
-    Attach(IssueNumber),
+    Attach(SessionKey),
     /// Runs on the main thread: the copy writes to the terminal.
     Copy {
         target: GithubRef,
@@ -137,8 +137,8 @@ pub enum ReadJob {
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteJob {
     Start(StartRequest, Launch),
-    Stop(IssueNumber),
-    Resume(IssueNumber, Launch),
+    Stop(SessionKey),
+    Resume(SessionKey, Launch),
     /// Close the window, then remove the worktree and branch, unless they hold
     /// work that is not saved.
     Remove(RemoveTarget),
@@ -156,7 +156,7 @@ pub enum WriteJob {
     },
     /// Type a line into the session's Claude prompt and submit it.
     Send {
-        issue: IssueNumber,
+        key: SessionKey,
         kind: SendKind,
         text: String,
     },

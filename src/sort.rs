@@ -2,7 +2,7 @@
 //! mode that does not apply to a tab, such as most comments on PRs, can not be
 //! set there.
 
-use crate::domain::{Checks, Issue, IssueNumber, Mergeability, PrState, PullRequest};
+use crate::domain::{Checks, Issue, IssueNumber, Mergeability, PrState, PullRequest, SessionKey};
 use crate::session::SessionState;
 use std::cmp::Ordering;
 
@@ -166,7 +166,7 @@ pub fn prs(rows: &mut [&PullRequest], sort: PrSort) {
     });
 }
 
-pub fn sessions(rows: &mut [IssueNumber], sort: SessionSort, session: impl Fn(IssueNumber) -> Option<SessionState>) {
+pub fn sessions(rows: &mut [SessionKey], sort: SessionSort, session: impl Fn(SessionKey) -> Option<SessionState>) {
     match sort {
         SessionSort::Attention => rows.sort_by_key(|n| (urgency(session(*n)), *n)),
         SessionSort::Number => rows.sort(),
@@ -275,16 +275,20 @@ mod tests {
 
     #[test]
     fn sessions_sort_by_number_as_a_number_and_by_state_in_attention() {
-        let state = |n: IssueNumber| match n.0 {
-            10 => Some(SessionState::Running),
-            100 => Some(SessionState::NeedsYou),
+        let issue = |n| SessionKey::Issue(IssueNumber(n));
+        let state = |key: SessionKey| match key {
+            SessionKey::Issue(IssueNumber(10)) => Some(SessionState::Running),
+            SessionKey::Issue(IssueNumber(100)) => Some(SessionState::NeedsYou),
             _ => Some(SessionState::Exited),
         };
-        let mut rows: Vec<IssueNumber> = [10, 9, 100, 2].map(IssueNumber).to_vec();
+        let mut rows: Vec<SessionKey> = [10, 9, 100, 2].map(issue).to_vec();
         sessions(&mut rows, SessionSort::Number, state);
-        assert_eq!(rows, [2, 9, 10, 100].map(IssueNumber));
+        assert_eq!(rows, [2, 9, 10, 100].map(issue));
         sessions(&mut rows, SessionSort::Attention, state);
-        assert_eq!(rows, [100, 10, 2, 9].map(IssueNumber));
+        assert_eq!(rows, [100, 10, 2, 9].map(issue));
+        let mut mixed = vec![SessionKey::Pr(PrNumber(1)), issue(5)];
+        sessions(&mut mixed, SessionSort::Number, state);
+        assert_eq!(mixed, [issue(5), SessionKey::Pr(PrNumber(1))], "issue sessions list before PR sessions");
     }
 
     #[test]

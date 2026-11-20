@@ -213,8 +213,8 @@ fn a_new_start_uses_the_changed_settings() {
 #[test]
 fn a_resume_uses_the_changed_command() {
     let (mut state, _) = app();
-    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
-    state.transcripts.insert(IssueNumber(3), crate::transcript::Transcript { said: None });
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
+    state.transcripts.insert(issue_key(3), crate::transcript::Transcript { said: None });
     open_menu_at(&mut state, Setting::ClaudeCommand);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " --x");
