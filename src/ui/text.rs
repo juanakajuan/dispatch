@@ -18,6 +18,10 @@ pub(crate) fn cells(text: &str) -> usize {
     Span::raw(text).width()
 }
 
+pub(super) fn char_cells(c: char) -> usize {
+    cells(c.encode_utf8(&mut [0; 4]))
+}
+
 /// Word-wraps `text` to rows of at most `width` cells. A word wider than a
 /// whole row is split by cell.
 pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
@@ -52,7 +56,7 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     let mut out = String::new();
     let mut used = 0;
     for c in text.chars() {
-        let w = cells(c.encode_utf8(&mut [0; 4]));
+        let w = char_cells(c);
         if used + w + 1 > width {
             break;
         }
@@ -62,6 +66,45 @@ pub(super) fn fit(text: &str, width: usize) -> String {
     if width > 0 {
         out.push('…');
     }
+    out
+}
+
+/// Cuts `spans` to at most `width` cells across span boundaries, with no mark.
+pub(super) fn cut_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut used = 0;
+    for s in spans {
+        let room = width.saturating_sub(used);
+        if s.width() <= room {
+            used += s.width();
+            out.push(s);
+            continue;
+        }
+        let mut text = String::new();
+        for c in s.content.chars() {
+            let w = char_cells(c);
+            if w > room.saturating_sub(cells(&text)) {
+                break;
+            }
+            text.push(c);
+        }
+        if !text.is_empty() {
+            out.push(Span::styled(text, s.style));
+        }
+        break;
+    }
+    out
+}
+
+/// Cuts `spans` to at most `width` cells and ends them with an ellipsis, in
+/// the style of the last kept span, when cut. Spans that fit stay as they are.
+pub(super) fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    if spans_width(&spans) <= width || width == 0 {
+        return if width == 0 { Vec::new() } else { spans };
+    }
+    let mut out = cut_spans(spans, width - 1);
+    let style = out.last().map(|s| s.style).unwrap_or_default();
+    out.push(Span::styled("…", style));
     out
 }
 
