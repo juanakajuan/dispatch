@@ -4,11 +4,11 @@
 //! "given this state, this msg -> this state and these cmds".
 
 use crate::config::Config;
-use crate::domain::{Issue, IssueNumber, PullRequest, SessionKey};
+use crate::domain::{Issue, IssueNumber, MergeMethod, PrNumber, PullRequest, SessionKey};
 use crate::session::{Diff, Sessions};
 use crossterm::event::KeyEventKind;
 use ratatui::layout::Position;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Instant;
 
 use batch::{BatchStart, batch_key};
@@ -19,7 +19,7 @@ use filter::{Viewer, filter_key};
 use keys::{act, action_for};
 use list::{Tab, Tabs};
 use menus::{SettingsMenu, keybinds_key, settings_key};
-use merge::{Armed, merged, removed_after_merge};
+use merge::{Armed, handed_off_merged, merged, removed_after_merge};
 use message::{message_key, sent};
 use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
@@ -139,6 +139,10 @@ pub struct State {
     /// Set by an `m` or `D` that waits for one more press of the same key on
     /// the same PR or issue. Any other key clears it.
     pub armed: Option<Armed>,
+    /// PRs that `m` gave to an agent to fix and merge, with the method it was
+    /// told to use. The agent merges, so the PR refresh that shows one merged
+    /// does what a direct merge does.
+    pub handed_off: BTreeMap<PrNumber, MergeMethod>,
     pub transcripts: std::collections::BTreeMap<SessionKey, crate::transcript::Transcript>,
     /// What each session committed, left uncommitted, and pushed.
     pub work: crate::session::Works,
@@ -169,6 +173,7 @@ pub fn init(now: Instant, config: Config, context: Context) -> (State, Vec<Cmd>)
         last_click: None,
         pointer: None,
         armed: None,
+        handed_off: BTreeMap::new(),
         transcripts: std::collections::BTreeMap::new(),
         work: crate::session::Works::new(),
         config,
@@ -222,7 +227,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         }
         Msg::Prs { result, at } => {
             state.prs.landed(result, at);
-            Vec::new()
+            handed_off_merged(state)
         }
         Msg::Viewer(result) => {
             state.viewer = result.map_or(Viewer::Failed, Viewer::Login);
