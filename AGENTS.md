@@ -16,6 +16,7 @@ If an issue or PR is about something a user sees, put images of it in the body. 
 - Show one state with a PNG. Show a flow (press a key, then see the result) with a GIF. GitHub cannot play an mp4 that `gh` uploads, so do not use video.
 - Make the images from the `verify` run that proves the change. Do not make up a screen. Use `media.sh png` or `media.sh gif` on the `shot` files, then use `media.sh publish pr-<n>` (or `issue-<n>`) and paste the Markdown lines that it prints. The "Evidence" section of the `verify` skill gives the commands.
 - For a PR, show the screen before the change and after it, when the change replaces something that a user already saw.
+- The hook `.claude/hooks/media-gate.sh` blocks `gh pr create` when the PR changes `src/ui/` or `src/app/` and the body has no image. If no visible thing changed, add the body line `No images: <reason>`.
 
 ## Where a feature lives
 
@@ -42,3 +43,4 @@ A feature has one name. `src/app/<name>.rs` holds its state and flow, and `src/<
 | A silenced lint | `#[allow]` is denied; `#[expect]` needs a reason |
 | The key bar cuts `? to keys` or `q to quit` | `ui/tests/footer.rs` |
 | The verify sandbox leaks your shell environment | `verify.sh doctor` |
+| A PR that changes a screen has no image | `.claude/hooks/media-gate.sh` |

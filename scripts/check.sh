@@ -6,3 +6,4 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 .claude/skills/verify/scripts/verify_test.sh
+.claude/hooks/media-gate_test.sh
