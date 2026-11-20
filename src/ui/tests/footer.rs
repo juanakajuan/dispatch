@@ -210,7 +210,27 @@ fn the_filter_footer_is_clickable() {
     send(&mut state, KeyCode::Char('/'));
     let screen = draw_into(&mut state, 100, 24);
     assert_clickable(&state, &screen, "enter to keep", HitTarget::Key(Key::Code(KeyCode::Enter)));
+    assert_clickable(&state, &screen, "tab to complete", HitTarget::Key(Key::Code(KeyCode::Tab)));
     assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
+}
+
+#[test]
+fn the_prompt_shows_negated_invalid_and_incomplete_terms_by_kind() {
+    let mut state = full_state();
+    state.filter = "-label:bug -author:@me state:bogus -has: is:fork".to_string();
+    let fg = |state: &mut State, needle: &str| {
+        let screen = draw_into(state, 120, 24);
+        let (x, y) = find(&screen, needle);
+        Some(render(state, 120, 24)[(x, y)].fg)
+    };
+    assert_eq!(fg(&mut state, "-label:bug"), palette::ACCENT.fg, "the minus is part of the term");
+    assert_eq!(fg(&mut state, "-author:@me"), palette::ACCENT.fg);
+    assert_eq!(fg(&mut state, "state:bogus"), palette::ERROR.fg, "a value outside the set");
+    assert_eq!(fg(&mut state, "-has:"), palette::DIM.fg, "a negated key with no value yet");
+    assert_eq!(fg(&mut state, "is:fork"), palette::ACCENT.fg);
+
+    let _ = app::update(&mut state, Msg::Viewer(Err(crate::github::GhError::EmptyLogin)));
+    assert_eq!(fg(&mut state, "-author:@me"), palette::ERROR.fg, "@me can not match without the login");
 }
 
 #[test]

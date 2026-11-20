@@ -317,7 +317,11 @@ const fn hint(keys: &'static str, desc: &'static str, key: Key) -> Hint {
 pub fn footer_hints(state: &State) -> Vec<Hint> {
     let (enter, esc) = (Key::Code(KeyCode::Enter), Key::Code(KeyCode::Esc));
     match &state.focus {
-        Focus::Filter => vec![hint("enter", "keep", enter), hint("esc", "clear", esc)],
+        Focus::Filter => vec![
+            hint("enter", "keep", enter),
+            hint("tab", "complete", Key::Code(KeyCode::Tab)),
+            hint("esc", "clear", esc),
+        ],
         Focus::Message { .. } => vec![hint("enter", "send", enter), hint("esc", "cancel", esc)],
         Focus::Dialog(_) => vec![
             hint("ctrl-s", "start", Key::Ctrl('s')),
