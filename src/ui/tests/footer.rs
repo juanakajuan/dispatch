@@ -147,7 +147,7 @@ fn the_prompt_opens_the_filter_and_the_clear_control_clears_it() {
     assert_clickable(&state, &screen, "/ to filter issues", HitTarget::Key(Key::Char('/')));
     assert!(!screen.contains("esc to clear"), "nothing to clear yet\n{screen}");
 
-    state.filter = "retry".to_string();
+    state.tabs.issues.filter = "retry".to_string();
     let screen = draw_into(&mut state, 100, 24);
     assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
     let (x, y) = find(&screen, "/retry");
@@ -216,7 +216,7 @@ fn the_filter_footer_is_clickable() {
 #[test]
 fn the_prompt_shows_each_filter_term_in_the_accent_colour() {
     let mut state = full_state();
-    state.filter = "retry label:bug assignee:@me milestone:".to_string();
+    state.tabs.issues.filter = "retry label:bug assignee:@me milestone:".to_string();
     let fg = |state: &mut State, needle: &str| {
         let screen = draw_into(state, 120, 24);
         let (x, y) = find(&screen, needle);

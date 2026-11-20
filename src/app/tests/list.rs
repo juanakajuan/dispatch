@@ -83,9 +83,9 @@ fn filter_esc_clears_and_backspace_edits() {
     press(&mut state, key('a'));
     press(&mut state, key('b'));
     press(&mut state, code(KeyCode::Backspace));
-    assert_eq!(state.filter, "a");
+    assert_eq!(state.filter(), "a");
     press(&mut state, code(KeyCode::Esc));
-    assert_eq!((state.filter.as_str(), matches!(state.focus, Focus::List)), ("", true));
+    assert_eq!((state.filter(), matches!(state.focus, Focus::List)), ("", true));
 }
 
 #[test]
@@ -154,15 +154,15 @@ fn clicking_the_filter_prompt_opens_the_filter_and_clicking_clear_removes_it() {
     assert!(matches!(state.focus, Focus::Filter));
 
     let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
-    state.filter = "json".to_string();
+    *state.filter_mut() = "json".to_string();
     press(&mut state, click(0, 0, now));
-    assert!(state.filter.is_empty());
+    assert!(state.filter().is_empty());
 
     let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
-    state.filter = "json".to_string();
+    *state.filter_mut() = "json".to_string();
     state.focus = Focus::Filter;
     press(&mut state, click(0, 0, now));
-    assert!(state.filter.is_empty() && matches!(state.focus, Focus::List), "in the filter, clear also closes it");
+    assert!(state.filter().is_empty() && matches!(state.focus, Focus::List), "in the filter, clear also closes it");
 }
 
 #[test]
