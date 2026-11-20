@@ -1,9 +1,10 @@
 use super::error::StartConflict;
+use super::markers;
 use super::request::{StartFrom, StartRequest};
-use super::start_argv::claude_argv;
+use super::start_argv::agent_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
-use crate::config::AgentCommand;
+use crate::config::{AgentCommand, Harness};
 use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
 use std::path::PathBuf;
 
@@ -11,7 +12,7 @@ use std::path::PathBuf;
 pub(super) struct StartObservation {
     pub(super) sessions: Sessions,
     pub(super) worktrees: Vec<git::Worktree>,
-    pub(super) markers: git::Markers,
+    pub(super) markers: markers::Markers,
     pub(super) target_dir: TargetDir,
     pub(super) branch: LocalBranch,
 }
@@ -34,7 +35,8 @@ pub(super) struct Layout {
     pub(super) repo_root: PathBuf,
     pub(super) base: OriginRef,
     pub(super) hooks: Option<&'static str>,
-    pub(super) claude: AgentCommand,
+    pub(super) harness: Harness,
+    pub(super) command: AgentCommand,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -56,10 +58,11 @@ pub(super) enum Step {
     /// `git worktree add <dir> -b <branch> <from>` when the branch is new,
     /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
     AddWorktree { dir: PathBuf, branch: BranchName, from: Option<OriginRef> },
-    /// `git config branch.<b>.dispatch-issue N`.
+    /// `git config branch.<b>.dispatch-issue N` and
+    /// `git config branch.<b>.dispatch-harness <harness>`.
     /// Overwrites, so running it twice is harmless.
-    Mark { branch: BranchName, issue: IssueNumber },
-    /// `Mux::open` with argv `claude ...`.
+    Mark { branch: BranchName, issue: IssueNumber, harness: Harness },
+    /// `Mux::open` with the harness's argv.
     OpenWindow { dir: WorktreePath, argv: Vec<String> },
 }
 
@@ -91,9 +94,9 @@ pub(super) fn plan_start(
     let target = worktree_dir_for(&layout.repo_root, req.issue);
     let open = |dir: WorktreePath| Step::OpenWindow {
         dir,
-        argv: claude_argv(&layout.claude, layout.hooks, req.mode, &req.prompt),
+        argv: agent_argv(&layout.command, layout.harness, layout.hooks, req.mode, &req.prompt),
     };
-    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue };
+    let mark = |branch: BranchName| Step::Mark { branch, issue: req.issue, harness: layout.harness };
     let add = |branch: BranchName, from: Option<OriginRef>| Step::AddWorktree { dir: target.clone(), branch, from };
     let planned = WorktreePath::planned(target.clone());
 

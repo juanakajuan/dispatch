@@ -57,6 +57,7 @@ pub(super) fn full_state() -> State {
             branch: BranchName::parse("fix/3-x").expect("branch"),
             checkout: crate::session::Checkout::SessionBranch,
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),
+            harness: crate::config::Harness::Claude,
             state: SessionState::NeedsYou,
         },
     );

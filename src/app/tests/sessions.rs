@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::Harness;
 use crate::domain::OriginRef;
 use crate::session::error::StartWarning;
 use crate::transcript::Transcript;
@@ -21,7 +22,33 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
     state.transcripts.insert(IssueNumber(3), Transcript { said: None });
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == IssueNumber(3)));
-    assert!(state.toast.as_ref().is_some_and(|t| t.text().contains("claude --continue")));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with claude --continue"));
+}
+
+#[test]
+fn a_resumes_a_codex_session_with_no_transcript_using_the_session_harness() {
+    let (mut state, _) = app();
+    let mut exited = session(3, SessionState::Exited);
+    exited.harness = Harness::Codex;
+    state.sessions.insert(IssueNumber(3), exited);
+    assert!(!state.transcripts.contains_key(&IssueNumber(3)));
+    let cmds = press(&mut state, key('a'));
+    let [Cmd::Job(Job::Write(WriteJob::Resume(n, launch)))] = cmds.as_slice() else { panic!("one resume") };
+    assert_eq!(*n, IssueNumber(3));
+    assert_eq!(launch.harness, Harness::Codex);
+    assert_eq!(launch.command.words(), "codex");
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with codex resume --last"));
+}
+
+#[test]
+fn a_resume_keeps_a_claude_session_on_claude_when_the_config_changes() {
+    let (mut state, _) = app();
+    state.config.harness = Harness::Codex;
+    state.sessions.insert(IssueNumber(3), session(3, SessionState::Exited));
+    state.transcripts.insert(IssueNumber(3), Transcript { said: None });
+    let cmds = press(&mut state, key('a'));
+    let [Cmd::Job(Job::Write(WriteJob::Resume(_, launch)))] = cmds.as_slice() else { panic!("one resume") };
+    assert_eq!((launch.harness, launch.command.words()), (Harness::Claude, "claude".to_string()));
 }
 
 #[test]

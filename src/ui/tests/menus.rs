@@ -12,7 +12,8 @@ fn the_settings_menu_shows_each_key_value_and_default() {
         " Settings ",
         "detect_waiting   off   default: on",
         "icons            unicode   default: unicode",
-        "claude_command   claude   default: claude",
+        "harness          claude   default: claude",
+        "command          claude   default: claude",
         "remove_on_merge  off   default: off",
         "Applies to sessions you start or resume after this change.",
         "j/k move · enter change · esc close",
@@ -27,7 +28,7 @@ fn the_settings_menu_shows_each_key_value_and_default() {
 fn the_settings_menu_shows_the_editor_and_its_error() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char(','));
-    for _ in 0..3 {
+    for _ in 0..4 {
         send(&mut state, KeyCode::Char('j'));
     }
     send(&mut state, KeyCode::Enter);
@@ -36,7 +37,7 @@ fn the_settings_menu_shows_the_editor_and_its_error() {
     }
     send(&mut state, KeyCode::Enter);
     let screen = text(&render(&state, 100, 30));
-    for want in ["claude_command   claude 'oops▏", "has a quote that never closes", "enter save · esc cancel"] {
+    for want in ["command          claude 'oops▏", "has a quote that never closes", "enter save · esc cancel"] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
     assert!(!screen.contains("Applies to sessions"), "the error takes the note's line\n{screen}");
@@ -89,7 +90,8 @@ fn settings_rows_and_the_close_control_are_clickable() {
         ("detect_waiting", Setting::DetectWaiting),
         ("icons ", Setting::Icons),
         ("multiplexer", Setting::Multiplexer),
-        ("claude_command  ", Setting::ClaudeCommand),
+        ("harness  ", Setting::Harness),
+        ("command  ", Setting::Command),
         ("remove_on_merge  ", Setting::RemoveOnMerge),
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Setting(setting));

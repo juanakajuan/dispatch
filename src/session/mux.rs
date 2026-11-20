@@ -108,7 +108,7 @@ impl Backend {
 }
 
 pub(super) fn hooks<M: Mux>(mux: &M, launch: &Launch) -> Option<&'static str> {
-    launch.detect_waiting.then(|| mux.waiting_hooks()).flatten()
+    (launch.detect_waiting && launch.harness.takes_waiting_hooks()).then(|| mux.waiting_hooks()).flatten()
 }
 
 /// Claude hooks passed with `--settings` when `detect_waiting` is on.

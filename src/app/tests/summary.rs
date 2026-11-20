@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::Harness;
 use crate::transcript::{Summary, SummaryKind, Transcript};
 
 fn said(state: &mut State, n: u32, text: &str) {
@@ -42,4 +43,21 @@ fn i_opens_the_summary_of_the_selected_session_and_esc_or_i_closes_it() {
     press(&mut state, key('i'));
     press(&mut state, key('i'));
     assert!(matches!(state.focus, Focus::List), "i closes it again");
+}
+
+#[test]
+fn i_on_a_session_with_no_transcript_says_so_by_name() {
+    for (harness, text) in [
+        (Harness::Codex, "Codex does not report what it said."),
+        (Harness::OpenCode, "OpenCode does not report what it said."),
+        (Harness::Antigravity, "Antigravity does not report what it said."),
+    ] {
+        let (mut state, _) = app();
+        let mut running = session(3, SessionState::Running);
+        running.harness = harness;
+        state.sessions.insert(IssueNumber(3), running);
+        press(&mut state, key('i'));
+        assert!(matches!(state.focus, Focus::List));
+        assert_eq!(state.toast.as_ref().map(Toast::text), Some(text));
+    }
 }

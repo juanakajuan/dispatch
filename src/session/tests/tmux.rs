@@ -68,15 +68,16 @@ fn start_runs_the_steps_in_order_and_a_second_start_runs_none() {
     let dir = base.join("orbit/.claude/worktrees/142");
     let calls = fake::calls();
     let ran = mutating(&calls);
-    assert_eq!(ran.len(), 5, "{ran:?}");
+    assert_eq!(ran.len(), 6, "{ran:?}");
     assert_eq!(ran[0], "git fetch origin main");
     assert_eq!(ran[1], format!("git worktree add {} -b fix/142-x origin/main", dir.display()));
     assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
-    assert!(ran[3].starts_with(&format!(
+    assert_eq!(ran[3], "git config branch.fix/142-x.dispatch-harness claude");
+    assert!(ran[4].starts_with(&format!(
         "tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p",
         dir.display()
     )));
-    assert!(ran[4].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
+    assert!(ran[5].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
     let exclude = base.join("orbit/.git/info/exclude");
     assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
 
@@ -97,7 +98,7 @@ fn start_after_a_crash_between_steps_runs_only_the_rest() {
     assert_eq!(out.session.branch, br("fix/142-x"));
     let calls = fake::calls();
     let ran = mutating(&calls);
-    assert_eq!(ran.len(), 3, "{ran:?}");
+    assert_eq!(ran.len(), 4, "{ran:?}");
     assert!(ran[0].starts_with("git config branch.fix/142-x.dispatch-issue"));
     assert!(ran.iter().all(|c| !c.starts_with("git worktree add") && !c.starts_with("git fetch")));
 }

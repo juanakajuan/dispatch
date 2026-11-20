@@ -51,20 +51,22 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         toast::info(state, "No session for this issue. Press s to start one.".to_string());
         return Vec::new();
     };
-    let issue = session.issue;
+    let (issue, harness) = (session.issue, session.harness);
     if session.state.is_live() {
         vec![Cmd::Attach(issue)]
-    } else if !state.transcripts.contains_key(&issue) {
+    } else if harness.has_transcript() && !state.transcripts.contains_key(&issue) {
         start_again(state, issue);
         Vec::new()
     } else {
-        toast::info(state, format!("Resuming {issue} with claude --continue"));
-        vec![Cmd::Job(Job::Write(WriteJob::Resume(issue, Launch::from_config(&state.config))))]
+        let launch = Launch::for_session(&state.config, harness);
+        toast::info(state, format!("Resuming {issue} with {}", launch.resume_words()));
+        vec![Cmd::Job(Job::Write(WriteJob::Resume(issue, launch)))]
     }
 }
 
 /// `claude --continue` exits at once in a worktree with no conversation,
-/// as after a start whose Claude never ran.
+/// as after a start whose Claude never ran. Only Claude has a transcript to
+/// tell, so another harness always resumes.
 fn start_again(state: &mut State, n: IssueNumber) {
     match state.issues.items.iter().find(|i| i.number == n) {
         Some(issue) => {
