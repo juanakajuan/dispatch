@@ -2,7 +2,7 @@
 //! captured from git 2.56.
 
 use super::error::{FsAction, FsError, GitError, SessionError};
-use crate::domain::{BranchName, IssueNumber, OriginRef, RepoSlug, WorktreePath};
+use crate::domain::{BranchName, CommitOid, IssueNumber, OriginRef, RepoSlug, WorktreePath};
 use crate::proc::{self, ProcError};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -212,13 +212,31 @@ pub(super) fn has_uncommitted(worktree: &Path) -> Result<bool, ProcError> {
     git(worktree, ["status", "--porcelain"]).map(|t| !t.trim().is_empty())
 }
 
-/// How many commits of `branch`, or of the worktree's `HEAD`, are on no
-/// remote-tracking ref. `HEAD` counts because the worktree may have a
-/// detached `HEAD` checked out, whose commits no branch keeps. Output that is not a number is an error, never zero: zero lets
-/// the caller delete the branch.
-pub(super) fn unpushed_count(worktree: &Path, branch: &BranchName) -> Result<u32, SessionError> {
-    let out = git(worktree, ["rev-list", "--count", branch.as_str(), "HEAD", "--not", "--remotes"])
-        .map_err(SessionError::Git)?;
+fn commit_exists(worktree: &Path, oid: &CommitOid) -> Result<bool, ProcError> {
+    let s = oid.as_str();
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Ok(false);
+    }
+    let rev = format!("{s}^{{commit}}");
+    match git(worktree, ["rev-parse", "--verify", "--quiet", rev.as_str()]) {
+        Ok(_) => Ok(true),
+        Err(e) if e.exit_code() == Some(1) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+pub(super) fn unpushed_count(
+    worktree: &Path,
+    branch: &BranchName,
+    merged_head: Option<&CommitOid>,
+) -> Result<u32, SessionError> {
+    let mut args = vec!["rev-list", "--count", branch.as_str(), "HEAD", "--not", "--remotes"];
+    if let Some(oid) = merged_head
+        && commit_exists(worktree, oid).map_err(SessionError::Git)?
+    {
+        args.push(oid.as_str());
+    }
+    let out = git(worktree, args).map_err(SessionError::Git)?;
     out.trim().parse().map_err(|_| SessionError::NotACount(out.trim().to_string()))
 }
 
@@ -300,6 +318,10 @@ pub(super) fn remove_worktree(root: &Path, worktree: &Path) -> Result<(), ProcEr
 /// section too, so the marker goes with it.
 pub(super) fn delete_branch(root: &Path, branch: &BranchName) -> Result<(), ProcError> {
     git(root, ["branch", "-D", branch.as_str()]).map(|_| ())
+}
+
+pub(super) fn prune_worktrees(root: &Path) -> Result<(), ProcError> {
+    git(root, ["worktree", "prune"]).map(|_| ())
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use super::merge::{Armed, merge_key, merge_target};
 use super::message::open_message;
 use super::msg::Cmd;
 use super::open::open_key;
-use super::remove::{removable, remove_key};
+use super::remove::{clean_key, has_merged_sessions, removable, remove_key};
 use super::sessions::{attach_key, start_key, stop_key};
 use super::summary::summary_key;
 use super::{Focus, OpenWith, State};
@@ -32,6 +32,7 @@ pub enum Action {
     Attach,
     Stop,
     Remove,
+    Clean,
     Open,
     Merge,
     Refresh,
@@ -84,6 +85,7 @@ pub enum When {
     Said,
     /// The session exited, or its PR is merged.
     Removable,
+    HasMergedSessions,
     /// The selection has an open or draft PR.
     Mergeable,
     OpenWith(OpenWith),
@@ -231,6 +233,13 @@ pub static BINDINGS: &[Binding] = &[
         bar: &[bar("D", "remove", When::Removable)],
     },
     Binding {
+        keys: &[Key::Char('c')],
+        action: Action::Clean,
+        group: KeyGroup::Sessions,
+        desc: "remove all merged sessions (press twice)",
+        bar: &[bar("c", "clean merged", When::HasMergedSessions)],
+    },
+    Binding {
         keys: &[Key::Char('m')],
         action: Action::Merge,
         group: KeyGroup::PullRequests,
@@ -345,6 +354,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
         When::SessionExited => session == Some(SessionState::Exited),
         When::Said => said,
         When::Removable => removable(state),
+        When::HasMergedSessions => state.tab == Tab::Sessions && has_merged_sessions(state),
         When::Mergeable => merge_target(state).is_ok(),
         When::OpenWith(with) => state.context.open_with == with,
     };
@@ -388,6 +398,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         Action::Attach => return attach_key(state),
         Action::Stop => return stop_key(state),
         Action::Remove => return remove_key(state, armed),
+        Action::Clean => return clean_key(state, armed),
         Action::Open => return open_key(state),
         Action::Merge => return merge_key(state, armed),
         Action::Refresh => {

@@ -23,7 +23,7 @@ use message::{message_key, sent};
 use mouse::{HitMap, HitTarget, on_mouse};
 use msg::{Cmd, Msg, ReadJob, SESSIONS_EVERY};
 use open::{copied, opened, page_url};
-use remove::removed;
+use remove::{cleaned, removed};
 use sessions::{attached, resumed, started, stopped};
 use summary::summary_overlay_key;
 use toast::Toast;
@@ -205,6 +205,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Stopped { issue, result } => stopped(state, issue, result),
         Msg::Resumed { issue, result } => resumed(state, issue, result),
         Msg::Removed { issue, result } => removed(state, issue, result),
+        Msg::Cleaned(report) => cleaned(state, &report),
         Msg::Opened { target, result } => opened(state, target, result),
         Msg::PageUrl { target, result } => page_url(state, target, result),
         Msg::Copied { target, result } => copied(state, target, result),

@@ -6,7 +6,10 @@ use super::mux::{Mux, Observed, hooks};
 use super::plan::{Layout, LocalBranch, StartObservation, StartPlan, Step, TargetDir, plan_start};
 use super::request::{Launch, StartRequest};
 use super::worktree::{WORKTREES_EXCLUDE, worktree_dir_for};
-use super::{AttachPlan, RemoveOutcome, RemoveRefusal, Sessions, StartOutcome, Workspace, git, start_argv};
+use super::{
+    AttachPlan, Checkout, CleanReport, RemoveOutcome, RemoveRefusal, RemoveTarget, Sessions, StartOutcome, Workspace,
+    git, start_argv,
+};
 use crate::domain::IssueNumber;
 use std::num::NonZeroU32;
 
@@ -141,17 +144,16 @@ pub(super) fn stop<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Resul
     }
 }
 
-/// Refuses before it changes anything: uncommitted work, then commits on no
-/// remote. Then it closes the window and removes the worktree and the branch.
-pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Result<RemoveOutcome, SessionError> {
-    let Some(row) = row(ws, mux, issue)? else {
-        return Err(SessionError::NoSession(issue));
+fn remove_one<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
+    let Some(row) = row(ws, mux, target.issue)? else {
+        return Err(SessionError::NoSession(target.issue));
     };
     let git_err = SessionError::Git;
     if git::has_uncommitted(row.worktree.as_path()).map_err(git_err)? {
         return Ok(RemoveOutcome::Refused(RemoveRefusal::Uncommitted));
     }
-    let unpushed = git::unpushed_count(row.worktree.as_path(), &row.branch)?;
+    let merged = (row.checkout == Checkout::SessionBranch).then_some(target.merged_head.as_ref()).flatten();
+    let unpushed = git::unpushed_count(row.worktree.as_path(), &row.branch, merged)?;
     if let Some(count) = NonZeroU32::new(unpushed) {
         return Ok(RemoveOutcome::Refused(RemoveRefusal::Unpushed(count)));
     }
@@ -162,6 +164,27 @@ pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber) -> Res
     git::delete_branch(&ws.repo_root, &row.branch).map_err(git_err)?;
     git::remove_fork_remote(&ws.repo_root, &row.branch).map_err(git_err)?;
     Ok(RemoveOutcome::Removed)
+}
+
+pub(super) fn remove<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
+    let outcome = remove_one(ws, mux, target)?;
+    if outcome == RemoveOutcome::Removed {
+        let _ = git::prune_worktrees(&ws.repo_root);
+    }
+    Ok(outcome)
+}
+
+pub(super) fn clean<M: Mux>(ws: &Workspace, mux: &M, targets: &[RemoveTarget]) -> CleanReport {
+    let mut report = CleanReport::default();
+    for target in targets {
+        match remove_one(ws, mux, target) {
+            Ok(RemoveOutcome::Removed) => report.removed.push(target.issue),
+            Ok(RemoveOutcome::Refused(why)) => report.skipped.push((target.issue, why)),
+            Err(err) => report.failed.push((target.issue, err)),
+        }
+    }
+    let _ = git::prune_worktrees(&ws.repo_root);
+    report
 }
 
 pub(super) fn send<M: Mux>(ws: &Workspace, mux: &M, issue: IssueNumber, text: &str) -> Result<(), SessionError> {

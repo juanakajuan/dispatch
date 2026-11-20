@@ -7,7 +7,7 @@ use crate::merge::MergeAsk;
 use crate::merge::job::MergeRun;
 use crate::session::error::{AttachError, SessionError};
 use crate::session::request::{Launch, StartRequest};
-use crate::session::{RemoveOutcome, Sessions, StartOutcome, Works};
+use crate::session::{CleanReport, RemoveOutcome, RemoveTarget, Sessions, StartOutcome, Works};
 use crate::transcript::Transcript;
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::collections::BTreeMap;
@@ -45,6 +45,7 @@ pub enum Msg {
         issue: IssueNumber,
         result: Result<RemoveOutcome, SessionError>,
     },
+    Cleaned(CleanReport),
     Attached(Result<(), AttachError>),
     Opened {
         target: GithubRef,
@@ -133,7 +134,8 @@ pub enum WriteJob {
     Resume(IssueNumber, Launch),
     /// Close the window, then remove the worktree and branch, unless they hold
     /// work that is not saved.
-    Remove(IssueNumber),
+    Remove(RemoveTarget),
+    Clean(Vec<RemoveTarget>),
     /// Save one setting to the config file.
     SaveConfig {
         setting: Setting,

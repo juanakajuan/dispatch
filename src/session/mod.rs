@@ -34,7 +34,7 @@ pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
 use crate::config::Multiplexer;
-use crate::domain::{BranchName, IssueNumber, OriginRef, WorktreePath};
+use crate::domain::{BranchName, CommitOid, IssueNumber, OriginRef, WorktreePath};
 use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
@@ -115,6 +115,19 @@ pub enum RemoveRefusal {
     Unpushed(NonZeroU32),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoveTarget {
+    pub issue: IssueNumber,
+    pub merged_head: Option<CommitOid>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CleanReport {
+    pub removed: Vec<IssueNumber>,
+    pub skipped: Vec<(IssueNumber, RemoveRefusal)>,
+    pub failed: Vec<(IssueNumber, SessionError)>,
+}
+
 /// How the shell attaches. Pure data, so the choice is unit tested.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AttachPlan {
@@ -188,11 +201,12 @@ impl Workspace {
         each_backend!(&self.mux, mux => ops::stop(self, mux, issue))
     }
 
-    /// Closes the window, then removes the worktree and the branch. Refuses
-    /// when the worktree has uncommitted changes or the branch has commits
-    /// that no remote has. Never forces.
-    pub fn remove(&self, issue: IssueNumber) -> Result<RemoveOutcome, SessionError> {
-        each_backend!(&self.mux, mux => ops::remove(self, mux, issue))
+    pub fn remove(&self, target: &RemoveTarget) -> Result<RemoveOutcome, SessionError> {
+        each_backend!(&self.mux, mux => ops::remove(self, mux, target))
+    }
+
+    pub fn clean(&self, targets: &[RemoveTarget]) -> CleanReport {
+        each_backend!(&self.mux, mux => ops::clean(self, mux, targets))
     }
 
     /// Types `text` into the session's Claude prompt and submits it. Refuses

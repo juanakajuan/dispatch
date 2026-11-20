@@ -87,6 +87,7 @@ A burst of events makes one load, at most one each 5 seconds.
 | `x` | Stop the session. The window closes. The worktree stays |
 | `i` | Show all of what the session's Claude said last. `j` / `k` scroll it. `i` or Esc closes it. See [What Claude said](#what-claude-said) |
 | `D` | Remove the worktree and the branch of a session that has exited or whose PR is merged. Press `D` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
+| `c` | Remove all clean merged sessions. Press `c` twice to confirm. See [Remove a session's worktree](#remove-a-sessions-worktree) |
 | `m` | Merge the selected PR, or the PR of the selected issue or session. Press `m` twice to confirm. A draft is marked ready first. A merge closes the session on the PR's branch. See [Merge](#merge) |
 | `o` | Open the selected issue or PR on GitHub. On the Sessions tab, open the session's issue |
 | `r` | Fetch the issues and pull requests now |
@@ -221,8 +222,13 @@ Press `D` twice on a session that has exited, or whose PR is merged. The first p
 2. It closes the session's window, if the window still exists.
 3. It runs `git worktree remove <path>`, without `--force`.
 4. It runs `git branch -D <branch>`. This is safe, because step 1 showed that every commit is on a remote. `-D` also removes the markers in `.git/config`, so the session leaves the list.
+5. It runs `git worktree prune` to clean up stale worktree metadata.
 
-A session that is running or waits for you is not removed. Press `x` to stop it first. The exception is a session whose PR is merged: `D` closes its window too. Any other key between the two presses cancels.
+If a PR was squash-merged or rebase-merged and its remote branch was deleted, `D` still removes the session when the worktree is clean, is on the session branch, and has no local commits beyond the merged PR head commit. `D` still refuses uncommitted changes, commits added after the PR head, or another checked-out branch with unpushed commits.
+
+Press `c` twice to remove all clean merged sessions in one step. The key bar shows `c to clean merged` on the Sessions tab when at least one merged session is listed. dispatch skips sessions with uncommitted changes or unpushed commits, continues past per-session errors, runs `git worktree prune` once, and reports removed, skipped, and failed counts in one toast.
+
+A session that is running or waits for you is not removed. Press `x` to stop it first. The exception is a session whose PR is merged: `D` and `c` close its window too. Any other key between the two presses cancels.
 
 To drop a worktree that has changes you do not want, remove it by hand from the main checkout:
 

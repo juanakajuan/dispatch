@@ -233,3 +233,28 @@ fn the_prompt_shows_each_filter_term_in_the_accent_colour() {
     send(&mut state, KeyCode::Char('/'));
     assert_eq!(fg(&mut state, "label:bug"), palette::ACCENT.fg, "while typing too");
 }
+
+#[test]
+fn sessions_tab_with_merged_session_keeps_keys_and_quit_at_min_width_and_clicks_clean_when_wide() {
+    let mut state = full_state();
+    state.prs.items[0].state = PrState::Merged;
+    send(&mut state, KeyCode::Char('3'));
+
+    let narrow = text(&render(&state, MIN_WIDTH, 30));
+    let footer = narrow.lines().last().unwrap_or_default().trim().to_string();
+    assert!(!footer.contains('…'), "a hint is cut in {footer:?}");
+    let hints: Vec<_> = app::keys::footer_hints(&state).into_iter().map(|h| (h.keys, h.desc)).collect();
+    assert!(hints.contains(&("D", "remove")));
+    assert!(hints.contains(&("c", "clean merged")));
+    let before_sort = footer.split("S sort:").next().unwrap_or_default().trim();
+    let known: Vec<String> = hints.iter().map(|h| shown(*h)).collect();
+    for part in before_sort.split(" · ").filter(|p| !p.is_empty()) {
+        assert!(known.contains(&part.to_string()), "{part:?} is not one of {known:?} in {footer:?}");
+    }
+    for keep in [("?", "keys"), ("q", "quit")] {
+        assert!(footer.contains(&shown(keep)), "{:?} dropped from {footer:?}", shown(keep));
+    }
+
+    let wide = draw_into(&mut state, 200, 30);
+    assert_clickable(&state, &wide, "c to clean merged", HitTarget::Key(Key::Char('c')));
+}
