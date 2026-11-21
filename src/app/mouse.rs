@@ -6,7 +6,7 @@ use super::menus::click_setting;
 use super::msg::{Cmd, DOUBLE_CLICK, Msg};
 use super::{Focus, State, update};
 use crate::config::settings::Setting;
-use crate::domain::Mode;
+use crate::domain::{Mode, PageUrl};
 use crossterm::event::{KeyCode, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use std::time::Instant;
@@ -18,6 +18,9 @@ pub struct HitMap {
     pub targets: Vec<(Rect, HitTarget)>,
     /// How far the open overlay (keys or summary) can scroll at the last drawn size.
     pub max_scroll: u16,
+    /// Cells that the terminal links to a page (OSC 8): the shell writes the
+    /// links over these cells after the draw, so the cells keep their width.
+    pub links: Vec<(Rect, PageUrl)>,
 }
 
 impl HitMap {

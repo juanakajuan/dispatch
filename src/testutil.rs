@@ -1,7 +1,7 @@
 //! Shared fixtures for unit tests.
 
 use crate::domain::{
-    Checks, CommitOid, Issue, IssueNumber, Mergeability, PrBranch, PrNumber, PrState, PullRequest, SessionKey,
+    Checks, CommitOid, Issue, IssueNumber, Mergeability, PageUrl, PrBranch, PrNumber, PrState, PullRequest, SessionKey,
 };
 use std::path::PathBuf;
 
@@ -16,6 +16,7 @@ pub fn issue(number: u32, title: &str, labels: &[&str]) -> Issue {
         created_at: jiff::Timestamp::UNIX_EPOCH,
         updated_at: jiff::Timestamp::UNIX_EPOCH,
         comment_count: 0,
+        url: PageUrl::parse(&format!("https://github.com/o/r/issues/{number}")),
     }
 }
 
@@ -38,6 +39,7 @@ pub fn pr(number: u32, head: &str, closes: &[u32]) -> PullRequest {
         checks: Checks::None,
         mergeability: Mergeability::Clean,
         closes: closes.iter().map(|n| IssueNumber(*n)).collect(),
+        url: PageUrl::parse(&format!("https://github.com/o/r/pull/{number}")),
     }
 }
 

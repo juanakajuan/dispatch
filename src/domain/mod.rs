@@ -225,6 +225,24 @@ impl std::fmt::Display for RepoSlug {
     }
 }
 
+/// The web page of an issue or PR, as `gh` reports it. Only `https://` and
+/// printable ASCII with no space, so the URL can go inside a terminal escape
+/// sequence (OSC 8) and never end it early.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PageUrl(String);
+
+impl PageUrl {
+    pub fn parse(raw: &str) -> Option<PageUrl> {
+        let ok =
+            raw.len() > "https://".len() && raw.starts_with("https://") && raw.bytes().all(|b| b.is_ascii_graphic());
+        ok.then(|| PageUrl(raw.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// A commit SHA as GitHub reports it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommitOid(String);
@@ -279,6 +297,7 @@ pub struct Issue {
     pub created_at: jiff::Timestamp,
     pub updated_at: jiff::Timestamp,
     pub comment_count: usize,
+    pub url: Option<PageUrl>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -320,6 +339,7 @@ pub struct PullRequest {
     pub checks: Checks,
     pub mergeability: Mergeability,
     pub closes: Vec<IssueNumber>,
+    pub url: Option<PageUrl>,
 }
 
 /// Whether GitHub can merge an open PR, from its `mergeable` and

@@ -61,7 +61,8 @@
   "updatedAt": "2026-11-08T00:07:11Z",
   "labels": [],
   "assignees": [],
-  "milestone": null
+  "milestone": null,
+  "url": "https://github.com/sharkdp/hyperfine/pull/1028"
  },
  {
   "additions": 1,
@@ -129,7 +130,8 @@
   "updatedAt": "2026-10-12T08:33:48Z",
   "labels": [],
   "assignees": [],
-  "milestone": null
+  "milestone": null,
+  "url": "https://github.com/sharkdp/hyperfine/pull/1002"
  },
  {
   "additions": 4835,
@@ -183,7 +185,8 @@
   "updatedAt": "2026-11-03T21:29:03Z",
   "labels": [],
   "assignees": [],
-  "milestone": null
+  "milestone": null,
+  "url": "https://github.com/cli/cli/pull/14927"
  },
  {
   "additions": 13779,
@@ -243,6 +246,7 @@
    }
   ],
   "assignees": [],
-  "milestone": null
+  "milestone": null,
+  "url": "https://github.com/cli/cli/pull/14035"
  }
 ]
