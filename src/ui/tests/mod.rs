@@ -29,6 +29,7 @@ mod batch;
 mod columns;
 mod dialog;
 mod footer;
+mod glyphs;
 mod hover;
 mod links;
 mod markdown;

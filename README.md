@@ -64,17 +64,18 @@ A PR session has the key `PR #<n>`. It uses the tmux window `PR #<n>` and the wo
 
 If dispatch runs inside tmux, the window goes into your current tmux session. If not, dispatch creates a detached session named `dispatch-<repo>`. In that case `a` suspends dispatch and runs `tmux attach`. Detach with `Ctrl-b d` to come back.
 
-An issue row without a session shows the state of the pull request that closes it, before the number:
+An issue row without a session shows the state of the pull request that closes it, before the number. A row on the Pull requests tab shows the same icon for its PR. Each icon has one meaning in this column: `●` is always a running session, never a PR.
 
 | Icon | Meaning |
 |---|---|
 | `·` gray | No PR, or only closed PRs |
 | `◌` gray | Draft PR |
-| `●` yellow | Open PR, checks running |
-| `●` red | Open PR, checks failing |
-| `●` green | Open PR, checks passing |
-| `●` white | Open PR, no checks |
+| `◉` yellow | Open PR, checks running |
+| `◉` red | Open PR, checks failing |
+| `◉` green | Open PR, checks passing |
+| `◉` white | Open PR, no checks |
 | `✓` purple | Merged PR |
+| `✗` gray | Closed PR (Pull requests tab) |
 
 If more than one PR closes the issue, the row shows the most advanced one: merged, then open, then draft. A PR counts when GitHub links it to the issue, for example with `Closes #5` in its description. Press `r` to refresh.
 

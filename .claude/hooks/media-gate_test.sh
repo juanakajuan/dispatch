@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Tests for media-gate.sh, against a throwaway git repo.
 set -euo pipefail
+# A git hook (pre-push runs check.sh) sets GIT_DIR and friends. Clear them,
+# or every git call below acts on the real repo, not the throwaway one.
+unset $(git rev-parse --local-env-vars)
 
 HOOK="$(realpath "$(dirname "$0")/media-gate.sh")"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
