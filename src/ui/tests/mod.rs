@@ -35,6 +35,7 @@ mod links;
 mod markdown;
 mod menus;
 mod screen;
+mod scroll;
 mod text;
 
 pub(super) fn full_state() -> State {

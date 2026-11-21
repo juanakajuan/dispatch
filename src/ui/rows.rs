@@ -359,7 +359,9 @@ pub(super) fn draw_rows(
     }
     let height = usize::from(area.height);
     let at = lines.iter().position(|(row, _)| row.as_ref().is_some_and(|r| Some(r.key) == selected)).unwrap_or(0);
-    let top = (at + 1).saturating_sub(height);
+    // Keep the selected line at the center, as `scrolloff=999` does in Neovim,
+    // but never scroll past the last line.
+    let top = at.saturating_sub(height / 2).min(lines.len().saturating_sub(height));
     for (i, (row, line)) in lines.into_iter().skip(top).take(height).enumerate() {
         let rect = Rect::new(area.x, area.y + u16::try_from(i).unwrap_or(0), area.width, 1);
         frame.render_widget(Paragraph::new(line), rect);
