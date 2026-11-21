@@ -84,14 +84,14 @@ fn issue_rows_show_the_lead_pr_state_and_follow_a_refresh() {
     let mark = |state: &State| (mark_cell(&render(state, 100, 20), 3), mark_cell(&render(state, 100, 20), 2));
     assert_eq!(
         mark(&state),
-        (("●".to_string(), palette::FG), ("·".to_string(), palette::GRAY)),
+        (("◉".to_string(), palette::FG), ("·".to_string(), palette::GRAY)),
         "open, no checks; #2 has no PR"
     );
     for (pr_state, checks, want, color) in [
         (PrState::Draft, Checks::Pass, "◌", palette::GRAY),
-        (PrState::Open, Checks::Pending, "●", palette::YELLOW),
-        (PrState::Open, Checks::Fail, "●", palette::RED),
-        (PrState::Open, Checks::Pass, "●", palette::GREEN),
+        (PrState::Open, Checks::Pending, "◉", palette::YELLOW),
+        (PrState::Open, Checks::Fail, "◉", palette::RED),
+        (PrState::Open, Checks::Pass, "◉", palette::GREEN),
         (PrState::Merged, Checks::Fail, "✓", palette::PURPLE),
         (PrState::Closed, Checks::Pass, "·", palette::GRAY),
     ] {
