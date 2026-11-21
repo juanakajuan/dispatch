@@ -2,7 +2,8 @@
 
 use super::GhError;
 use crate::domain::{
-    CommitOid, ForkPush, GithubRef, Issue, IssueNumber, MergeMethod, PrBranch, PrNumber, PrState, PullRequest, RepoSlug,
+    CommitOid, ForkPush, GithubRef, Issue, IssueNumber, MergeMethod, PageUrl, PrBranch, PrNumber, PrState, PullRequest,
+    RepoSlug,
 };
 use checks::{WireCheck, mergeability, rollup};
 use serde::de::DeserializeOwned;
@@ -49,6 +50,7 @@ pub(super) fn issues_from_wire(wire: Vec<WireIssue>) -> Result<Vec<Issue>, GhErr
                 milestone: w.milestone.map(|m| m.title),
                 author: login(w.author),
                 comment_count: w.comments.len(),
+                url: w.url.as_deref().and_then(PageUrl::parse),
             })
         })
         .collect()
@@ -93,6 +95,7 @@ pub(super) fn pr_from_wire(w: WirePr) -> Result<PullRequest, GhError> {
         checks: rollup(&w.status_check_rollup),
         mergeability: mergeability(&w.mergeable, &w.merge_state_status),
         closes: w.closing_issues_references.iter().map(|r| IssueNumber(r.number)).collect(),
+        url: w.url.as_deref().and_then(PageUrl::parse),
     })
 }
 
@@ -117,6 +120,8 @@ pub(super) struct WireIssue {
     created_at: String,
     updated_at: String,
     comments: Vec<serde::de::IgnoredAny>,
+    #[serde(default)]
+    url: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -160,6 +165,8 @@ pub(super) struct WirePr {
     mergeable: String,
     merge_state_status: String,
     closing_issues_references: Vec<WireIssueRef>,
+    #[serde(default)]
+    url: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone, Copy)]

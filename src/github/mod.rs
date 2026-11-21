@@ -68,10 +68,10 @@ pub fn fetch_issues(repo_root: &Path) -> Result<Vec<Issue>, GhError> {
 }
 
 /// The fields `Issue` needs, for `gh issue list`.
-const ISSUE_FIELDS: &str = "number,title,labels,assignees,milestone,author,createdAt,updatedAt,comments";
+const ISSUE_FIELDS: &str = "number,title,labels,assignees,milestone,author,createdAt,updatedAt,comments,url";
 
 /// The fields `PullRequest` needs, for both `gh pr list` and `gh pr view`.
-const PR_FIELDS: &str = "number,title,state,isDraft,labels,assignees,milestone,author,createdAt,updatedAt,headRefName,isCrossRepository,headRepository,maintainerCanModify,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences";
+const PR_FIELDS: &str = "number,title,state,isDraft,labels,assignees,milestone,author,createdAt,updatedAt,headRefName,isCrossRepository,headRepository,maintainerCanModify,baseRefName,additions,deletions,headRefOid,statusCheckRollup,mergeable,mergeStateStatus,closingIssuesReferences,url";
 
 /// The 100 newest PRs in any state, plus each older PR that closes an open
 /// issue. A refresh runs every 60 s, so it costs at most three calls: the
@@ -104,7 +104,7 @@ fn prs_query(numbers: &[PrNumber]) -> String {
          assignees(first:100){{nodes{{login}}}} milestone{{title}} author{{login}} createdAt updatedAt headRefName \
          isCrossRepository headRepository{{nameWithOwner}} maintainerCanModify headRefOid baseRefName additions deletions mergeable mergeStateStatus \
          statusCheckRollup{{contexts(first:100){{nodes{{__typename ...on CheckRun{{status conclusion}} \
-         ...on StatusContext{{state}}}}}}}} closingIssuesReferences(first:100){{nodes{{number}}}}}}"
+         ...on StatusContext{{state}}}}}}}} closingIssuesReferences(first:100){{nodes{{number}}}} url}}"
     )
 }
 

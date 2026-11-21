@@ -5,7 +5,7 @@ use crate::app::feed::LastFetch;
 use crate::app::list::{Group, IssueGroup, PrGroup, RowKey, SessionGroup, Tab};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State};
-use crate::domain::{Checks, Issue, IssueNumber, PrState, PullRequest, SessionKey};
+use crate::domain::{Checks, Issue, IssueNumber, PageUrl, PrState, PullRequest, SessionKey};
 use crate::glyphs::Icons;
 use crate::session::{Checkout, Push, Session, SessionState, Work};
 use ratatui::Frame;
@@ -121,34 +121,73 @@ fn work_spans(w: Work, icons: &Icons) -> Vec<Span<'static>> {
     v
 }
 
-/// `#3 ` in front of a row's name.
-fn numbered(n: impl std::fmt::Display, name: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    let mut v = vec![Span::raw(format!("{n} "))];
-    v.extend(name);
-    v
+/// The `#3` cells of a row and the page they link to. `x` counts from the
+/// left edge of the row.
+pub(super) struct NumberLink {
+    x: u16,
+    width: u16,
+    url: PageUrl,
+}
+
+/// The name of a row: `#3 ` in front of its title.
+pub(super) struct Name {
+    spans: Vec<Span<'static>>,
+    link: Option<NumberLink>,
+}
+
+impl Name {
+    fn numbered(n: impl std::fmt::Display, url: Option<&PageUrl>, title: Vec<Span<'static>>) -> Name {
+        let number = n.to_string();
+        let width = u16::try_from(number.chars().count()).unwrap_or(u16::MAX);
+        let link = url.map(|url| NumberLink { x: 0, width, url: url.clone() });
+        let mut spans = vec![Span::raw(format!("{number} "))];
+        spans.extend(title);
+        Name { spans, link }
+    }
+
+    fn empty() -> Name {
+        Name { spans: Vec::new(), link: None }
+    }
+}
+
+/// A line that draws a row. A group heading, or the gap before it, draws none.
+struct DrawnRow {
+    key: RowKey,
+    number: Option<NumberLink>,
 }
 
 pub(super) struct RowParts {
     glyph: Span<'static>,
-    name: Vec<Span<'static>>,
+    name: Name,
     summary: Vec<Span<'static>>,
     work: Vec<Span<'static>>,
     age: String,
 }
 
 impl RowParts {
-    fn new(glyph: Span<'static>, name: Vec<Span<'static>>, summary: Vec<Span<'static>>, age: String) -> RowParts {
+    fn new(glyph: Span<'static>, name: Name, summary: Vec<Span<'static>>, age: String) -> RowParts {
         RowParts { glyph, name, summary, work: Vec::new(), age }
     }
 }
 
-/// The title and update time of what session `key` is for: its issue or its PR.
-fn subject_of(state: &State, key: SessionKey) -> (Option<&str>, Option<jiff::Timestamp>) {
+/// What a session row shows of its issue or PR.
+struct Subject<'a> {
+    title: &'a str,
+    updated_at: jiff::Timestamp,
+    url: Option<&'a PageUrl>,
+}
+
+/// The issue or PR that session `key` is for, when the list has it.
+fn subject_of(state: &State, key: SessionKey) -> Option<Subject<'_>> {
     match key {
-        SessionKey::Issue(i) => issue_of(state, i).map(|i| (i.title.as_str(), i.updated_at)).unzip(),
-        SessionKey::Pr(p) => {
-            state.prs.items.iter().find(|r| r.number == p).map(|r| (r.title.as_str(), r.updated_at)).unzip()
+        SessionKey::Issue(i) => {
+            issue_of(state, i).map(|i| Subject { title: &i.title, updated_at: i.updated_at, url: i.url.as_ref() })
         }
+        SessionKey::Pr(p) => state.prs.items.iter().find(|r| r.number == p).map(|r| Subject {
+            title: &r.title,
+            updated_at: r.updated_at,
+            url: r.url.as_ref(),
+        }),
     }
 }
 
@@ -176,7 +215,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
     match key {
         RowKey::Issue(n) => {
             let Some(i) = issue_of(state, n) else {
-                return RowParts::new(Span::raw(" "), Vec::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), Name::empty(), Vec::new(), String::new());
             };
             let glyph = session_glyph(n.into()).unwrap_or_else(|| {
                 if state.marked.contains(&n) {
@@ -199,14 +238,14 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
             };
             RowParts::new(
                 glyph,
-                numbered(n, markdown::title(&i.title, Style::default())),
+                Name::numbered(n, i.url.as_ref(), markdown::title(&i.title, Style::default())),
                 summary,
                 age(i.updated_at, now),
             )
         }
         RowKey::Pr(n) => {
             let Some(p) = state.prs.items.iter().find(|p| p.number == n) else {
-                return RowParts::new(Span::raw(" "), Vec::new(), Vec::new(), String::new());
+                return RowParts::new(Span::raw(" "), Name::empty(), Vec::new(), String::new());
             };
             let mut summary = vec![
                 span(format!("{} → {}  ", p.head.display(), p.base.display()), palette::DIM),
@@ -227,7 +266,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
             };
             RowParts::new(
                 glyph,
-                numbered(n, markdown::title(&p.title, Style::default())),
+                Name::numbered(n, p.url.as_ref(), markdown::title(&p.title, Style::default())),
                 summary,
                 age(p.updated_at, now),
             )
@@ -235,20 +274,22 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
         RowKey::Session(n) => {
             let glyph = session_glyph(n).unwrap_or(span(icons.idle, palette::DIM));
             let session = state.sessions.get(&n);
-            let (title, updated_at) = subject_of(state, n);
-            let name = title
-                .map(|t| markdown::title(t, Style::default()))
+            let subject = subject_of(state, n);
+            let title = subject
+                .as_ref()
+                .map(|s| markdown::title(s.title, Style::default()))
                 .or_else(|| session.map(|s| vec![Span::raw(s.branch.as_str().to_string())]))
                 .unwrap_or_default();
+            let name = Name::numbered(n, subject.as_ref().and_then(|s| s.url), title);
             let summary = session
                 .and_then(off_branch)
                 .or_else(|| said(state, n))
                 .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
-            let age = updated_at.map(|t| age(t, now)).unwrap_or_default();
+            let age = subject.map(|s| age(s.updated_at, now)).unwrap_or_default();
             let work = state.work.get(&n).map(|w| work_spans(*w, icons)).unwrap_or_default();
-            RowParts { work, ..RowParts::new(glyph, numbered(n, name), summary, age) }
+            RowParts { work, ..RowParts::new(glyph, name, summary, age) }
         }
     }
 }
@@ -277,12 +318,12 @@ pub(super) fn draw_rows(
     let name_ws: Vec<usize> = groups
         .iter()
         .map(|g| {
-            let name_need = in_group(*g).map(|p| spans_width(&p.name)).max().unwrap_or(0);
+            let name_need = in_group(*g).map(|p| spans_width(&p.name.spans)).max().unwrap_or(0);
             let summary_need = in_group(*g).map(|p| spans_width(&p.summary)).max().unwrap_or(0);
             name_width(usize::from(area.width), avail, name_need, summary_need)
         })
         .collect();
-    let mut lines: Vec<(Option<RowKey>, Line<'static>)> = Vec::new();
+    let mut lines: Vec<(Option<DrawnRow>, Line<'static>)> = Vec::new();
     let mut last_group = None;
     for (((key, RowParts { glyph, name, summary, work, age }), group), name_w) in
         rows.iter().zip(parts).zip(groups.iter().copied()).zip(name_ws)
@@ -305,26 +346,33 @@ pub(super) fn draw_rows(
         let name_style = if on { palette::HEADING } else { palette::PLAIN };
         let summary_text = fit_spans(summary, summary_w);
         let used = spans_width(&summary_text);
+        let Name { spans: name, link } = name;
         let name =
             fit_spans(name.into_iter().map(|s| Span::styled(s.content, name_style.patch(s.style))).collect(), name_w);
         let name_pad = name_w.saturating_sub(spans_width(&name));
         let mut line = vec![marker, Span::raw(" "), glyph, Span::raw(" ")];
+        // A name cut short can cut the number too: link only what is drawn.
+        let x = u16::try_from(spans_width(&line)).unwrap_or(u16::MAX);
+        let drawn = u16::try_from(spans_width(&name)).unwrap_or(u16::MAX);
+        let number = link.map(|l| NumberLink { x, width: l.width.min(drawn), url: l.url }).filter(|l| l.width > 0);
         line.extend(name);
         line.push(span(" ".repeat(name_pad + 2), name_style));
         line.extend(summary_text);
         line.push(Span::raw(" ".repeat(summary_w.saturating_sub(used) + work_gap + work_w - spans_width(&work))));
         line.extend(work);
         line.push(span(format!("{age:>age_w$}"), palette::DIM));
-        lines.push((Some(*key), Line::from(line)));
+        lines.push((Some(DrawnRow { key: *key, number }), Line::from(line)));
     }
     let height = usize::from(area.height);
-    let at = lines.iter().position(|(k, _)| k.is_some() && *k == selected).unwrap_or(0);
+    let at = lines.iter().position(|(row, _)| row.as_ref().is_some_and(|r| Some(r.key) == selected)).unwrap_or(0);
     let top = (at + 1).saturating_sub(height);
-    for (i, (key, line)) in lines.into_iter().skip(top).take(height).enumerate() {
+    for (i, (row, line)) in lines.into_iter().skip(top).take(height).enumerate() {
         let rect = Rect::new(area.x, area.y + u16::try_from(i).unwrap_or(0), area.width, 1);
         frame.render_widget(Paragraph::new(line), rect);
-        if let Some(key) = key {
-            hits.targets.push((rect, HitTarget::Row(key)));
+        let Some(DrawnRow { key, number }) = row else { continue };
+        hits.targets.push((rect, HitTarget::Row(key)));
+        if let Some(NumberLink { x, width, url }) = number {
+            hits.links.push((Rect::new(rect.x.saturating_add(x), rect.y, width, 1).intersection(rect), url));
         }
     }
 }

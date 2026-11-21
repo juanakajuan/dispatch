@@ -18,6 +18,7 @@ mod config;
 mod domain;
 mod github;
 mod glyphs;
+mod hyperlink;
 mod jobs;
 mod merge;
 mod proc;
@@ -34,6 +35,7 @@ use crossterm::event::{self, DisableFocusChange, DisableMouseCapture, EnableFocu
 use session::error::{AttachError, SetupError};
 use session::{AttachPlan, AttachTo, Workspace};
 use std::fmt;
+use std::io::Write;
 use std::process::ExitCode;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -105,11 +107,17 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
     let context = Context { repo_name, open_with, start_preview: ws.start_preview() };
     let (mut state, mut cmds) = app::init(Instant::now(), config, context);
     let mut pending: Vec<Msg> = Vec::new();
+    // The links last written, and the size they were written at. ratatui
+    // writes a cell again only when it changes, and that drops its link, but
+    // then the bytes for that cell change too. A resize or an attach redraws
+    // every cell, so it writes the links again.
+    let mut shown_links: Option<(ratatui::layout::Rect, Vec<u8>)> = None;
     loop {
         for cmd in std::mem::take(&mut cmds) {
             match cmd {
                 Cmd::Quit => return Ok(()),
                 Cmd::Attach { key, to } => {
+                    shown_links = None;
                     pending.push(Msg::Attached { key, to, result: attach(terminal, ws, key, to) });
                 }
                 Cmd::Copy { target, text } => {
@@ -129,7 +137,14 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
             }
         }
         let mut hits = app::mouse::HitMap::default();
-        terminal.draw(|frame| hits = ui::draw(frame, &state))?;
+        let frame = terminal.draw(|frame| hits = ui::draw(frame, &state))?;
+        let links = (frame.area, hyperlink::overlay(frame.buffer, &hits.links)?);
+        if shown_links.as_ref() != Some(&links) {
+            let backend = terminal.backend_mut();
+            backend.write_all(&links.1)?;
+            backend.flush()?;
+            shown_links = Some(links);
+        }
         state.hits = hits;
 
         let mut msgs: Vec<Msg> = drain(&rx);
