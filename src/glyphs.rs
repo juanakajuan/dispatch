@@ -1,6 +1,6 @@
 //! Every glyph that marks a state. `Icons` names each mark once, so a new
 //! mark must exist in both sets. Each glyph is one cell wide, so both sets
-//! give the same layout.
+//! give the same layout. In the row glyph column, each glyph has one meaning.
 
 use serde::Deserialize;
 
@@ -48,7 +48,7 @@ pub const UNICODE: Icons = Icons {
     check_fail: "✗",
     check_pending: "●",
     check_none: "·",
-    pr_open: "●",
+    pr_open: "◉",
     pr_draft: "◌",
     pr_merged: "✓",
     pr_closed: "✗",
@@ -139,6 +139,30 @@ mod tests {
                 i.pushed,
             ] {
                 assert_eq!(crate::ui::text::cells(g), 1, "{set:?} glyph {g:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_glyph_in_the_row_glyph_column_has_one_meaning() {
+        for set in [IconSet::Unicode, IconSet::NerdFont] {
+            let i = set.icons();
+            let column = [
+                ("running", i.running),
+                ("needs_you", i.needs_you),
+                ("exited", i.exited),
+                ("starting", i.starting),
+                ("marked", i.marked),
+                ("idle", i.idle),
+                ("pr_open", i.pr_open),
+                ("pr_draft", i.pr_draft),
+                ("pr_merged", i.pr_merged),
+                ("pr_closed", i.pr_closed),
+            ];
+            for (a, (name_a, g_a)) in column.iter().enumerate() {
+                for (name_b, g_b) in &column[a + 1..] {
+                    assert_ne!(g_a, g_b, "{set:?}: {name_a} and {name_b} share {g_a:?}");
+                }
             }
         }
     }

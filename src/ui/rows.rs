@@ -37,21 +37,21 @@ pub(super) fn pr_state_span(state: PrState) -> Span<'static> {
         PrState::Open => span("open", palette::PASS),
         PrState::Draft => span("draft", palette::DIM),
         PrState::Merged => span("merged", palette::MERGED),
-        PrState::Closed => span("closed", palette::FAIL),
+        PrState::Closed => span("closed", palette::DIM),
     }
 }
 
-/// Two cells before an issue title: the state of its lead PR, or blank.
-pub(super) fn pr_mark(pr: Option<&PullRequest>, icons: &Icons) -> Span<'static> {
-    let Some(p) = pr else { return Span::raw("  ") };
+/// The glyph of a PR in the row glyph column, the same on each tab. The
+/// shape gives its state; the colour of an open PR gives its checks.
+pub(super) fn pr_glyph(p: &PullRequest, icons: &Icons) -> Span<'static> {
     match (p.state, p.checks) {
-        (PrState::Merged, _) => span(format!("{} ", icons.pr_merged), palette::MERGED),
-        (PrState::Draft, _) => span(format!("{} ", icons.pr_draft), palette::DIM),
-        (PrState::Open, Checks::Pass) => span(format!("{} ", icons.pr_open), palette::PASS),
-        (PrState::Open, Checks::Fail) => span(format!("{} ", icons.pr_open), palette::FAIL),
-        (PrState::Open, Checks::Pending) => span(format!("{} ", icons.pr_open), palette::PENDING),
-        (PrState::Open, Checks::None) => span(format!("{} ", icons.pr_open), palette::PLAIN),
-        (PrState::Closed, _) => Span::raw("  "),
+        (PrState::Merged, _) => span(icons.pr_merged, palette::MERGED),
+        (PrState::Draft, _) => span(icons.pr_draft, palette::DIM),
+        (PrState::Closed, _) => span(icons.pr_closed, palette::DIM),
+        (PrState::Open, Checks::Pass) => span(icons.pr_open, palette::PASS),
+        (PrState::Open, Checks::Fail) => span(icons.pr_open, palette::FAIL),
+        (PrState::Open, Checks::Pending) => span(icons.pr_open, palette::PENDING),
+        (PrState::Open, Checks::None) => span(icons.pr_open, palette::PLAIN),
     }
 }
 
@@ -182,12 +182,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 if state.marked.contains(&n) {
                     return span(icons.marked, palette::ACCENT);
                 }
-                let m = pr_mark(app::list::lead_pr(state, n), icons);
-                if m.content.trim().is_empty() {
-                    span(icons.idle, palette::DIM)
-                } else {
-                    span(m.content.trim().to_string(), m.style)
-                }
+                app::list::lead_pr(state, n).map_or_else(|| span(icons.idle, palette::DIM), |p| pr_glyph(p, icons))
             });
             let summary = match (said(state, n.into()), app::list::lead_pr(state, n)) {
                 (Some(said), _) => said,
@@ -213,18 +208,17 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 span(format!("+{}", p.additions), palette::PASS),
                 span(" ", palette::DIM),
                 span(format!("-{}", p.deletions), palette::FAIL),
-                span(format!(" · {}", checks_word(p.checks)), palette::DIM),
+                span(" · ", palette::DIM),
             ];
+            if p.checks != Checks::None {
+                summary.extend([checks_span(p.checks, icons), Span::raw(" ")]);
+            }
+            summary.push(span(checks_word(p.checks), palette::DIM));
             if !p.closes.is_empty() {
                 let c = p.closes.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
                 summary.push(span(format!(" · closes {c}"), palette::DIM));
             }
-            let glyph = match p.state {
-                PrState::Merged => span(icons.pr_merged, palette::MERGED),
-                PrState::Draft => span(icons.pr_draft, palette::DIM),
-                PrState::Closed => span(icons.pr_closed, palette::DIM),
-                PrState::Open => checks_span(p.checks, icons),
-            };
+            let glyph = pr_glyph(p, icons);
             RowParts::new(
                 glyph,
                 numbered(n, markdown::title(&p.title, Style::default())),

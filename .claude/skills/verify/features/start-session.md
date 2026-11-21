@@ -50,7 +50,7 @@ Preconditions:
 ## Gotchas
 
 - The live repo can have no open issue. Then this journey is not verified. Use `up --repo OWNER/NAME` with a repo that has open issues, and report the repo.
-- An issue whose PR is open shows a PR icon (`●`) before the number. This does not block a start. After the start, the session glyph takes its place.
+- An issue whose PR is open shows a PR icon (`◉`) before the number. This does not block a start. After the start, the session glyph takes its place.
 - The backend is chosen once, at launch, from the `multiplexer` setting and the environment. The sandbox writes `"multiplexer": "tmux"` and removes the herdr and herdr app variables. If you change `multiplexer` in the settings menu and then `restart`, sessions leave the sandbox. Set it back to `tmux` first.
 - An empty `pane=` or no `--settings` in `claude-calls.log` means dispatch did not use tmux. Hooks are added only on tmux.
 - The default mode is `Implement directly`. The Mode radio changes with Left, Right, or Space only when the `Mode` field has focus (`›` before `Mode`).
