@@ -52,14 +52,7 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.push(span("/", palette::LABEL));
             spans.extend(filter_spans(state, palette::LABEL));
         }
-        (_, true) => spans.push(span(
-            match state.tab {
-                Tab::Issues => "/ to filter issues · s to start a session",
-                Tab::Prs => "/ to filter pull requests · s to start a session",
-                Tab::Sessions => "/ to filter sessions · enter to attach",
-            },
-            palette::DIM,
-        )),
+        (_, true) => spans.push(span(app::keys::prompt_hint(state), palette::DIM)),
     }
     let used = spans_width(&spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);

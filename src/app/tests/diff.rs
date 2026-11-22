@@ -1,4 +1,5 @@
 use super::*;
+use crate::session::{Push, Work};
 
 fn read(state: &mut State, n: u32, diff: Diff) {
     update(state, Msg::Diff { key: issue_key(n), result: Ok(diff) });
@@ -103,5 +104,37 @@ fn the_key_bar_shows_diff_and_shell_only_with_a_session() {
     let (mut state, _) = app();
     assert!(!shows(&state, "d", "show diff") && !shows(&state, "!", "open shell"));
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
+    assert!(!shows(&state, "d", "show diff") && shows(&state, "!", "open shell"));
+    state.work.insert(issue_key(3), Work { commits: 1, uncommitted: 0, push: Push::NotPushed });
     assert!(shows(&state, "d", "show diff") && shows(&state, "!", "open shell"));
+}
+
+#[test]
+fn the_key_bar_shows_diff_only_when_the_session_has_changes() {
+    let (mut state, _) = app();
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+
+    for tab in ['1', '2', '3'] {
+        press(&mut state, key(tab));
+        assert!(!shows(&state, "d", "show diff"), "tab {tab}: no work entry");
+        assert!(shows(&state, "!", "open shell"), "tab {tab}: shell still shows");
+    }
+
+    state.work.insert(issue_key(3), Work { commits: 0, uncommitted: 0, push: Push::NotPushed });
+    for tab in ['1', '2', '3'] {
+        press(&mut state, key(tab));
+        assert!(!shows(&state, "d", "show diff"), "tab {tab}: zero commits and zero uncommitted");
+        assert!(shows(&state, "!", "open shell"), "tab {tab}: shell still shows with zero work");
+    }
+
+    for work in [
+        Work { commits: 1, uncommitted: 0, push: Push::NotPushed },
+        Work { commits: 0, uncommitted: 1, push: Push::Pushed },
+    ] {
+        state.work.insert(issue_key(3), work);
+        for tab in ['1', '2', '3'] {
+            press(&mut state, key(tab));
+            assert!(shows(&state, "d", "show diff"), "tab {tab}: {work:?}");
+        }
+    }
 }

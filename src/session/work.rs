@@ -17,6 +17,12 @@ pub struct Work {
     pub push: Push,
 }
 
+impl Work {
+    pub fn has_changes(self) -> bool {
+        self.commits > 0 || self.uncommitted > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Push {
     /// `origin` has no branch of this name.

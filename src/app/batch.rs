@@ -25,6 +25,10 @@ fn has_session(state: &State, n: IssueNumber) -> bool {
     state.sessions.contains_key(&key) || state.starting.contains(&key)
 }
 
+pub(super) fn markable(state: &State) -> bool {
+    matches!(selected_row(state), Some(RowKey::Issue(n)) if state.tab == Tab::Issues && !has_session(state, n))
+}
+
 /// Space on an issue row.
 pub(super) fn mark_key(state: &mut State) {
     let Some(RowKey::Issue(n)) = selected_row(state).filter(|_| state.tab == Tab::Issues) else { return };

@@ -23,7 +23,7 @@ This directory is the maintained source for verifying what a dispatch user sees 
 
 - Send keys only with `$V keys "$RUN" …` and `$V type "$RUN" …`. They go to the dispatch pane by its pane id, even when another window is active.
 - After each key that changes state, `$V wait` for the text that proves the change. Do not sleep.
-- Number keys switch tabs: `1` Issues, `2` Pull requests, `3` Sessions. The key bar tells which tab has focus, for example `enter to go to issue` only on tab 2.
+- Number keys switch tabs: `1` Issues, `2` Pull requests, `3` Sessions. The prompt tells which tab has focus (`/ to filter issues`, `/ to filter pull requests`, `/ to filter sessions`), and `enter to go to issue` shows only on tab 2 for a PR that closes an issue.
 - Find a row by `#<number> `. Move to it with `j` and `k`. The selected row starts with `❯`. The selection of each tab stays when you leave the tab and come back.
 
 ## Proof and skip reporting

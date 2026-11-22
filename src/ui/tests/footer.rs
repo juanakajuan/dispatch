@@ -278,3 +278,66 @@ fn sessions_tab_with_merged_session_keeps_keys_and_quit_at_min_width_and_clicks_
     let wide = draw_into(&mut state, 200, 30);
     assert_clickable(&state, &wide, "c to clean merged", HitTarget::Key(Key::Char('c')));
 }
+
+fn prompt_line(state: &State) -> String {
+    let screen = text(&render(state, 120, 24));
+    screen
+        .lines()
+        .find(|l| l.trim_start().starts_with("❯ /"))
+        .unwrap_or_else(|| panic!("no prompt line in\n{screen}"))
+        .trim()
+        .to_string()
+}
+
+#[test]
+fn prompt_placeholder_on_sessions_tab_matches_the_selected_session() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('3'));
+    assert_eq!(prompt_line(&state), "❯ / to filter sessions · a to attach", "needs you session");
+
+    state.sessions.get_mut(&issue_key(3)).expect("session").state = SessionState::Running;
+    assert_eq!(prompt_line(&state), "❯ / to filter sessions · a to attach", "running session");
+
+    state.sessions.get_mut(&issue_key(3)).expect("session").state = SessionState::Exited;
+    assert_eq!(prompt_line(&state), "❯ / to filter sessions · a to resume", "exited session");
+
+    state.sessions.clear();
+    let empty = prompt_line(&state);
+    assert_eq!(empty, "❯ / to filter sessions", "empty sessions tab");
+    assert!(!empty.contains("attach") && !empty.contains("enter"), "empty sessions tab: {empty:?}");
+
+    state.starting.insert(issue_key(3));
+    assert_eq!(prompt_line(&state), "❯ / to filter sessions", "only a starting session");
+}
+
+#[test]
+fn prompt_placeholder_on_issues_tab_matches_whether_the_row_can_start() {
+    let mut state = full_state();
+    assert_eq!(prompt_line(&state), "❯ / to filter issues · s to start a session", "open issue");
+
+    state.sessions.clear();
+    state.starting.insert(issue_key(3));
+    assert_eq!(prompt_line(&state), "❯ / to filter issues", "issue already starting");
+
+    state.starting.clear();
+    state.issues.items.clear();
+    assert_eq!(prompt_line(&state), "❯ / to filter issues", "empty issues tab");
+}
+
+#[test]
+fn prompt_placeholder_on_prs_tab_matches_whether_the_pr_can_start() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('2'));
+    assert_eq!(prompt_line(&state), "❯ / to filter pull requests · s to start a session", "open PR");
+
+    state.prs.items[0].state = PrState::Draft;
+    assert_eq!(prompt_line(&state), "❯ / to filter pull requests · s to start a session", "draft PR");
+
+    for done in [PrState::Merged, PrState::Closed] {
+        state.prs.items[0].state = done;
+        assert_eq!(prompt_line(&state), "❯ / to filter pull requests", "{done:?} PR");
+    }
+
+    state.prs.items.clear();
+    assert_eq!(prompt_line(&state), "❯ / to filter pull requests", "empty pull requests tab");
+}

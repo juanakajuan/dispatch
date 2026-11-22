@@ -16,7 +16,7 @@ Over SSH (`SSH_CONNECTION` or `SSH_TTY` is set), `gh … --web` would open a bro
 ## How to get to it (user POV)
 
 - Select a row on any tab and press `o`. While the filter input has focus, `o` is typed into the filter.
-- The key bar shows `o to open on GitHub`, or `o to copy URL` over SSH. Use it to check which path dispatch took at launch.
+- When a row is selected, the key bar shows `o to open on GitHub`, or `o to copy URL` over SSH. Use it to check which path dispatch took at launch. When a list is empty, the key bar hides `o`.
 
 ## Driving it with verify.sh
 
@@ -28,7 +28,7 @@ Preconditions:
 - **PR.** Press `2`, select `#P`, press `o`. The toast is `Opening PR #P on GitHub`. `browser.log` gets `…/pull/P`, and `gh-calls.log` has `gh pr view P --web`.
 - **Session.** A session for `#N` must exist ([Start a session](./start-session.md)). Press `3`, select the `#N` session, press `o`. The toast is `Opening issue #N on GitHub`. `browser.log` gets `…/issues/N`, and `gh-calls.log` has `gh issue view N --web`.
 - **PR session.** A PR session `PR #P` must exist (**PR session** in [Start a session](./start-session.md)). Press `3`, select the `PR #P` row, press `o`. The toast is `Opening PR #P on GitHub`. `browser.log` gets `…/pull/P`, and `gh-calls.log` has `gh pr view P --web`.
-- **Nothing selected.** Press `/`, type text that matches nothing, press Enter, then `o`. The message row shows `Nothing to open.` and `gh-calls.log` gets no `--web` line. Press Esc to clear the filter.
+- **Nothing selected.** Press `/`, type text that matches nothing, and press Enter. The key bar hides `o to open on GitHub` (and `o to copy URL`). Press `o`: the message row shows `Nothing to open.` and `gh-calls.log` gets no `--web` line. Press Esc to clear the filter.
 - **Proof.** Run `$V shot "$RUN" open-toast` after each press, and quote the `browser.log` lines.
 - **Copy over SSH.** Start the run with `$V up --over-ssh`. The key bar shows `o to copy URL`. Press `2`, select `#P`, press `o`, `$V wait "$RUN" 'Copying the PR #P URL'`, and `$V wait "$RUN" 'Copied https://'`. `$V tmux "$RUN" show-buffer` prints the URL. `gh-calls.log` has `gh pr view P --json url --jq .url`, and `browser.log` gets no line.
 - **OSC 52 outside tmux.** Run `$V tmux "$RUN" set-option -g set-clipboard on`. Then start `env -u TMUX -u TMUX_PANE SSH_CONNECTION=… $BIN` in a new window of the run's server (the server's `TMUX_TMPDIR` keeps it off the user's tmux) and press `2 o` there. tmux turns dispatch's own OSC 52 into a buffer, and `show-buffer` prints the URL.
