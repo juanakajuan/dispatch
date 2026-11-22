@@ -4,8 +4,8 @@ use super::*;
 fn question_mark_opens_and_closes_the_keybinds_menu() {
     let (mut state, _) = app();
     assert_eq!(
-        key_bar(&state).first().map(|b| (b.keys, b.desc)),
-        Some(("?", "keys")),
+        key_bar(&state).first().map(|b| (b.keys.as_str(), b.desc)),
+        Some(("?", "show keys")),
         "a narrow terminal still shows it"
     );
     assert!(press(&mut state, key('?')).is_empty());

@@ -21,7 +21,7 @@ fn key_bar_follows_the_context() {
     assert_eq!(
         names(&state),
         [
-            "? keys",
+            "? show keys",
             "s start session",
             "enter go to issue",
             "a resume",
@@ -68,7 +68,7 @@ fn every_bound_key_round_trips_through_its_key_event() {
 #[test]
 fn every_key_bar_entry_carries_the_first_key_of_its_binding() {
     let (mut state, _) = app();
-    let bar_keys = |state: &State| key_bar(state).iter().map(|b| (b.keys, b.key)).collect::<Vec<_>>();
+    let bar_keys = |state: &State| key_bar(state).into_iter().map(|b| (b.keys, b.key)).collect::<Vec<_>>();
     assert_eq!(
         bar_keys(&state),
         [
@@ -79,9 +79,10 @@ fn every_key_bar_entry_carries_the_first_key_of_its_binding() {
             ("o", Key::Char('o')),
             ("q", Key::Char('q'))
         ]
+        .map(|(keys, key)| (keys.to_string(), key))
     );
     press(&mut state, key('2'));
-    assert!(bar_keys(&state).contains(&("enter", Key::Code(KeyCode::Enter))));
+    assert!(bar_keys(&state).contains(&("enter".to_string(), Key::Code(KeyCode::Enter))));
 }
 
 #[test]
@@ -121,13 +122,17 @@ fn clicking_a_keybinds_entry_closes_the_menu_and_runs_its_action() {
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))), "the r entry refreshes");
 }
 
-fn bar_pairs(state: &State) -> Vec<(&'static str, &'static str)> {
+fn bar_pairs(state: &State) -> Vec<(String, &'static str)> {
     key_bar(state).into_iter().map(|h| (h.keys, h.desc)).collect()
+}
+
+fn pairs<const N: usize>(want: [(&str, &'static str); N]) -> Vec<(String, &'static str)> {
+    want.into_iter().map(|(keys, desc)| (keys.to_string(), desc)).collect()
 }
 
 #[test]
 fn empty_tabs_show_only_keys_and_quit() {
-    let only_global = [("?", "keys"), ("q", "quit")];
+    let only_global = pairs([("?", "show keys"), ("q", "quit")]);
 
     let (mut state, _) = app();
     press(&mut state, key('3'));
@@ -168,13 +173,17 @@ fn enter_shows_only_on_prs_that_close_an_issue_and_never_duplicates_attach() {
     for live in [SessionState::Running, SessionState::NeedsYou] {
         state.sessions.insert(issue_key(3), session(3, live));
         let bar = bar_pairs(&state);
-        assert_eq!(bar.iter().filter(|&&h| h == ("a", "attach")).count(), 1, "{live:?}: one attach hint");
+        assert_eq!(
+            bar.iter().filter(|(k, d)| (k.as_str(), *d) == ("a", "attach")).count(),
+            1,
+            "{live:?}: one attach hint"
+        );
         assert!(!bar.iter().any(|(k, _)| *k == "enter"), "{live:?}: sessions tab uses a");
     }
 
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     let bar = bar_pairs(&state);
-    assert_eq!(bar.iter().filter(|&&h| h == ("a", "resume")).count(), 1, "one resume hint");
+    assert_eq!(bar.iter().filter(|(k, d)| (k.as_str(), *d) == ("a", "resume")).count(), 1, "one resume hint");
     assert!(!bar.iter().any(|(k, _)| *k == "enter"), "exited session uses a");
 }
 

@@ -16,7 +16,6 @@ fn the_settings_menu_shows_each_key_value_and_default() {
         "command          claude   default: claude",
         "remove_on_merge  off   default: off",
         "Applies to sessions you start or resume after this change.",
-        "j/k move · enter change · esc close",
         "Saved to config.json",
     ] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
@@ -37,7 +36,8 @@ fn the_settings_menu_shows_the_editor_and_its_error() {
     }
     send(&mut state, KeyCode::Enter);
     let screen = text(&render(&state, 100, 30));
-    for want in ["command          claude 'oops▏", "has a quote that never closes", "enter save · esc cancel"] {
+    for want in ["command          claude 'oops▏", "has a quote that never closes", "enter to save · esc to cancel"]
+    {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
     assert!(!screen.contains("Applies to sessions"), "the error takes the note's line\n{screen}");
@@ -52,11 +52,11 @@ fn the_keybinds_menu_shows_every_key_in_bindings() {
         assert!(screen.contains(group.title()), "missing heading {:?} in\n{screen}", group.title());
     }
     for b in app::keys::BINDINGS {
-        let keys = b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
+        let keys = app::keys::labels(b.keys);
         let shown = screen.lines().any(|l| l.contains(&format!(" {keys} ")) && l.contains(b.desc));
         assert!(shown, "no row shows {keys:?} with {:?} in\n{screen}", b.desc);
     }
-    for want in ["j / down", "q / ctrl+c", "esc ", "j/k to scroll · esc to close"] {
+    for want in ["j/down", "q/ctrl+c", "esc ", "j/k to scroll · esc to close"] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
 }

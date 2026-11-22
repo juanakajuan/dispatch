@@ -5,7 +5,7 @@ const MIN_WIDTH: u16 = 80;
 
 struct Footer {
     at: String,
-    hints: Vec<(&'static str, &'static str)>,
+    hints: Vec<(String, &'static str)>,
     line: String,
 }
 
@@ -53,12 +53,12 @@ fn at_the_narrowest_width_every_shown_hint_is_whole_and_keys_and_quit_stay() {
     for Footer { at, hints, line: footer } in footers(MIN_WIDTH) {
         assert!(!footer.contains('…'), "{at}: a hint is cut in {footer:?}");
         let before_sort = footer.split("S sort:").next().unwrap_or_default().trim();
-        let known: Vec<String> = hints.iter().map(|h| shown(*h)).collect();
+        let known: Vec<String> = hints.iter().map(|(k, d)| shown((k, d))).collect();
         for part in before_sort.split(" · ").filter(|p| !p.is_empty()) {
             assert!(known.contains(&part.to_string()), "{at}: {part:?} is not one of {known:?} in {footer:?}");
         }
-        for keep in [("?", "keys"), ("q", "quit")] {
-            if hints.contains(&keep) {
+        for keep in [("?", "show keys"), ("q", "quit")] {
+            if hints.iter().any(|(k, d)| (k.as_str(), *d) == keep) {
                 assert!(footer.contains(&shown(keep)), "{at}: {:?} dropped from {footer:?}", shown(keep));
             }
         }
@@ -68,8 +68,9 @@ fn at_the_narrowest_width_every_shown_hint_is_whole_and_keys_and_quit_stay() {
 #[test]
 fn at_a_wide_width_every_hint_is_shown() {
     for Footer { at, hints, line: footer } in footers(240) {
-        for hint in hints {
-            assert!(footer.contains(&shown(hint)), "{at}: {:?} missing from {footer:?}", shown(hint));
+        for (keys, desc) in hints {
+            let hint = shown((&keys, desc));
+            assert!(footer.contains(&hint), "{at}: {hint:?} missing from {footer:?}");
         }
     }
 }
@@ -111,32 +112,32 @@ fn key_bar_entries_and_the_sort_footer_are_clickable() {
     let mut state = full_state();
     let screen = draw_into(&mut state, 200, 24);
     for (needle, key) in [
-        ("? to keys", Key::Char('?')),
+        ("? to show keys", Key::Char('?')),
         ("s to start session", Key::Char('s')),
         ("q to quit", Key::Char('q')),
         ("S sort: attention", Key::Char('S')),
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Key(key));
     }
-    let (x, y) = find(&screen, "? to keys");
-    let gap = x + u16::try_from(cells("? to keys")).expect("w");
+    let (x, y) = find(&screen, "? to show keys");
+    let gap = x + u16::try_from(cells("? to show keys")).expect("w");
     assert_eq!(state.hits.at(gap, y).map(|(_, t)| t), None, "the separator is not part of an entry");
 }
 
-/// The footer drops hints from the right to keep `? to keys` and `q to
+/// The footer drops hints from the right to keep `? to show keys` and `q to
 /// quit`. A dropped hint has no target, a kept one does, and a kept one that
 /// the edge still cuts has none.
 #[test]
 fn a_key_bar_entry_cut_by_a_narrow_terminal_is_not_clickable() {
     let mut state = full_state();
     let screen = draw_into(&mut state, 40, 24);
-    assert!(screen.contains("? to keys") && screen.contains("q to quit"), "{screen}");
+    assert!(screen.contains("? to show keys") && screen.contains("q to quit"), "{screen}");
     assert!(!screen.contains("s to start session") && !screen.contains("S sort"), "{screen}");
     assert_clickable(&state, &screen, "q to quit", HitTarget::Key(Key::Char('q')));
     assert_eq!(footer_keys(&state, 24), [Key::Char('?'), Key::Char('q')], "dropped hints and the sort are not targets");
 
     let screen = draw_into(&mut state, 20, 24);
-    assert!(screen.contains("? to keys") && !screen.contains("q to quit"), "{screen}");
+    assert!(screen.contains("? to show keys") && !screen.contains("q to quit"), "{screen}");
     assert_eq!(footer_keys(&state, 24), [Key::Char('?')], "the cut q hint is not a target");
 }
 
@@ -178,8 +179,8 @@ fn overlay_footers_are_clickable_and_the_base_screen_is_not() {
     send(&mut state, KeyCode::Char('s'));
     let screen = draw_into(&mut state, 120, 40);
     for (needle, key) in [
-        ("ctrl-s to start", Key::Ctrl('s')),
-        ("tab to next field", Key::Code(KeyCode::Tab)),
+        ("ctrl+s to start", Key::Ctrl('s')),
+        ("tab to go to next field", Key::Code(KeyCode::Tab)),
         ("esc to cancel", Key::Code(KeyCode::Esc)),
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Key(key));
@@ -264,14 +265,14 @@ fn sessions_tab_with_merged_session_keeps_keys_and_quit_at_min_width_and_clicks_
     let footer = narrow.lines().last().unwrap_or_default().trim().to_string();
     assert!(!footer.contains('…'), "a hint is cut in {footer:?}");
     let hints: Vec<_> = app::keys::footer_hints(&state).into_iter().map(|h| (h.keys, h.desc)).collect();
-    assert!(hints.contains(&("D", "remove")));
-    assert!(hints.contains(&("c", "clean merged")));
+    assert!(hints.contains(&("D".to_string(), "remove")));
+    assert!(hints.contains(&("c".to_string(), "clean merged")));
     let before_sort = footer.split("S sort:").next().unwrap_or_default().trim();
-    let known: Vec<String> = hints.iter().map(|h| shown(*h)).collect();
+    let known: Vec<String> = hints.iter().map(|(k, d)| shown((k, d))).collect();
     for part in before_sort.split(" · ").filter(|p| !p.is_empty()) {
         assert!(known.contains(&part.to_string()), "{part:?} is not one of {known:?} in {footer:?}");
     }
-    for keep in [("?", "keys"), ("q", "quit")] {
+    for keep in [("?", "show keys"), ("q", "quit")] {
         assert!(footer.contains(&shown(keep)), "{:?} dropped from {footer:?}", shown(keep));
     }
 
@@ -340,4 +341,64 @@ fn prompt_placeholder_on_prs_tab_matches_whether_the_pr_can_start() {
 
     state.prs.items.clear();
     assert_eq!(prompt_line(&state), "❯ / to filter pull requests", "empty pull requests tab");
+}
+
+/// Under a dialog or menu the list keys do not work, so their hints go: the
+/// prompt hint, `esc to clear`, and `S sort: <order>`. The overlay's own
+/// hints show one time, in the key bar.
+#[test]
+fn an_overlay_hides_the_list_hints_and_shows_its_own_hints_once() {
+    let overlays: [(&str, &[KeyCode]); 4] = [
+        ("start dialog", &[KeyCode::Char('j'), KeyCode::Char('s')]),
+        (
+            "batch dialog",
+            &[KeyCode::Char('j'), KeyCode::Char(' '), KeyCode::Char('j'), KeyCode::Char(' '), KeyCode::Char('s')],
+        ),
+        ("settings", &[KeyCode::Char(',')]),
+        ("keys", &[KeyCode::Char('?')]),
+    ];
+    for (name, keys) in overlays {
+        let mut state = full_state();
+        // #3 has a session, so the batch dialog needs one more issue.
+        state.issues.items.push(issue(1, "Add json output", &["feature"]));
+        send(&mut state, KeyCode::Char('1'));
+        state.tabs.issues.filter = "o".to_string();
+        assert!(draw_into(&mut state, 160, 60).contains("esc to clear"), "{name}: the list shows the clear hint");
+        for key in keys {
+            send(&mut state, *key);
+        }
+        let screen = draw_into(&mut state, 160, 60);
+        assert!(!matches!(state.focus, Focus::List), "{name}: no overlay opened\n{screen}");
+        for gone in ["/ to filter", "esc to clear", "S sort:"] {
+            assert!(!screen.contains(gone), "{name}: {gone:?} shows under the overlay\n{screen}");
+        }
+        for h in app::keys::footer_hints(&state) {
+            let hint = shown((&h.keys, h.desc));
+            assert_eq!(screen.matches(&hint).count(), 1, "{name}: {hint:?} is not shown one time\n{screen}");
+        }
+    }
+}
+
+/// The key bar writes a key as the keys menu does: `ctrl+s`, `down/up`.
+#[test]
+fn the_key_bar_and_the_keys_menu_write_keys_the_same_way() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('1'));
+    send(&mut state, KeyCode::Char('j'));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = draw_into(&mut state, 120, 40);
+    assert!(screen.contains("ctrl+s to start") && !screen.contains("ctrl-s"), "{screen}");
+
+    let mut state = full_state();
+    state.config.saved_filters = vec!["label:bug".to_string()];
+    send(&mut state, KeyCode::Char('/'));
+    let screen = draw_into(&mut state, 160, 24);
+    assert!(screen.contains("down/up to pick a saved filter") && !screen.contains('↑'), "{screen}");
+
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('?'));
+    let screen = draw_into(&mut state, 100, 60);
+    for want in ["j/down", "k/up", "q/ctrl+c"] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
 }

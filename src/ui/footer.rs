@@ -52,7 +52,9 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.push(span("/", palette::LABEL));
             spans.extend(filter_spans(state, palette::LABEL));
         }
-        (_, true) => spans.push(span(app::keys::prompt_hint(state), palette::DIM)),
+        (Focus::List, true) => spans.push(span(app::keys::prompt_hint(state), palette::DIM)),
+        // Under a dialog or menu the list keys do not work, so it has no hint.
+        (_, true) => {}
     }
     let used = spans_width(&spans);
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
@@ -60,7 +62,8 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
         hits.targets.push((area, HitTarget::Key(Key::Char('/'))));
     }
     let clear_w = cells(CLEAR_FILTER);
-    if !state.filter().is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
+    let clears = matches!(state.focus, Focus::List | Focus::Filter);
+    if clears && !state.filter().is_empty() && clear_w <= usize::from(area.width).saturating_sub(used + 1) {
         let clear = cell_rect(area, usize::from(area.width) - clear_w, clear_w);
         frame.render_widget(Paragraph::new(span(CLEAR_FILTER, palette::DIM)), clear);
         hits.targets.push((clear, HitTarget::Key(Key::Code(KeyCode::Esc))));
@@ -98,10 +101,10 @@ fn filter_spans(state: &State, text: Style) -> Vec<Span<'static>> {
 }
 
 /// Hints that stay when the footer is too narrow for all of them.
-const KEPT_HINTS: [&str; 2] = ["?", "q"];
+const KEPT_HINTS: [Key; 2] = [Key::Char('?'), Key::Char('q')];
 
 fn hints_width(hints: &[Hint]) -> usize {
-    let words: usize = hints.iter().map(|h| cells(h.keys) + " to ".len() + cells(h.desc)).sum();
+    let words: usize = hints.iter().map(|h| cells(&h.keys) + " to ".len() + cells(h.desc)).sum();
     words + " · ".chars().count() * hints.len().saturating_sub(1)
 }
 
@@ -109,7 +112,7 @@ fn hints_width(hints: &[Hint]) -> usize {
 /// kept hint is never dropped, so the result can still be wider than `room`.
 fn fit_hints(mut hints: Vec<Hint>, room: usize) -> Vec<Hint> {
     while hints_width(&hints) > room {
-        let Some(last) = hints.iter().rposition(|h| !KEPT_HINTS.contains(&h.keys)) else { break };
+        let Some(last) = hints.iter().rposition(|h| !KEPT_HINTS.contains(&h.key)) else { break };
         hints.remove(last);
     }
     hints
@@ -119,8 +122,12 @@ fn fit_hints(mut hints: Vec<Hint>, room: usize) -> Vec<Hint> {
 /// target, and neither has a kept hint that `row_line` had to cut.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
     let width = usize::from(area.width);
-    let mut sort =
-        vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.tabs.sort_label(state.tab)), palette::DIM)];
+    // `S` sorts only in the list, so a dialog, menu, or prompt hides the order.
+    let mut sort = if matches!(state.focus, Focus::List) {
+        vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.tabs.sort_label(state.tab)), palette::DIM)]
+    } else {
+        Vec::new()
+    };
     let offered = app::keys::footer_hints(state);
     let mut shown = fit_hints(offered.clone(), width.saturating_sub(spans_width(&sort) + 1));
     if hints_width(&shown) + spans_width(&sort) + 1 > width {
