@@ -5,6 +5,12 @@ use super::toast;
 use super::{Focus, State};
 use crossterm::event::{KeyCode, KeyEvent};
 
+pub(super) fn has_transcript_summary(state: &State) -> bool {
+    current_session(state).is_some_and(|s| {
+        s.harness.has_transcript() && state.transcripts.get(&s.key).and_then(|t| t.said.as_ref()).is_some()
+    })
+}
+
 /// `i`: show all of what the selected session's Claude last said. The row
 /// shows only its first line.
 pub(super) fn summary_key(state: &mut State) -> Vec<Cmd> {

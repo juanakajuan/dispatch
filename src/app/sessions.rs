@@ -2,62 +2,99 @@ use super::batch::open_batch;
 use super::dialog::{open_dialog, open_pr_dialog};
 use super::feed::observe_now;
 use super::list::{RowKey, Tab, current_session, jump_to, selected_row};
-use super::merge::{NoTarget, head_start};
+use super::merge::{CannotFix, NoTarget, head_start};
 use super::msg::{Cmd, Job, WriteJob};
 use super::toast;
 use super::{Focus, State};
-use crate::domain::{IssueNumber, PrNumber, PrState, SessionKey};
+use crate::domain::{BranchName, IssueNumber, PrNumber, PrState, PullRequest, SessionKey};
 use crate::session::error::{AttachError, SessionError};
-use crate::session::request::{Launch, StartRequest};
+use crate::session::request::{Launch, StartFrom, StartRequest};
 use crate::session::{AttachTo, StartOutcome};
+
+enum StartAction {
+    Batch,
+    Goto(SessionKey),
+    IssueDialog(IssueNumber),
+    PrDialog { pr: PrNumber, branch: BranchName, from: StartFrom },
+}
+
+enum StartBlocked {
+    NoRow,
+    AlreadyStarting(SessionKey),
+    NotOpen(PrNumber),
+    CannotFix(CannotFix),
+}
+
+fn existing_pr_session(state: &State, pr: &PullRequest) -> Option<SessionKey> {
+    let key = SessionKey::Pr(pr.number);
+    let on_branch = state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)).map(|s| s.key);
+    on_branch.or_else(|| state.sessions.contains_key(&key).then_some(key))
+}
+
+fn plan_start(state: &State) -> Result<StartAction, StartBlocked> {
+    match selected_row(state) {
+        Some(RowKey::Issue(n)) if state.tab == Tab::Issues => {
+            if !state.marked.is_empty() {
+                return Ok(StartAction::Batch);
+            }
+            let key = SessionKey::Issue(n);
+            if state.sessions.contains_key(&key) {
+                Ok(StartAction::Goto(key))
+            } else if state.starting.contains(&key) {
+                Err(StartBlocked::AlreadyStarting(key))
+            } else if state.issues.items.iter().any(|i| i.number == n) {
+                Ok(StartAction::IssueDialog(n))
+            } else {
+                Err(StartBlocked::NoRow)
+            }
+        }
+        Some(RowKey::Pr(n)) if state.tab == Tab::Prs => {
+            let Some(pr) = state.prs.items.iter().find(|p| p.number == n) else {
+                return Err(StartBlocked::NoRow);
+            };
+            if matches!(pr.state, PrState::Merged | PrState::Closed) {
+                return Err(StartBlocked::NotOpen(n));
+            }
+            let key = SessionKey::Pr(n);
+            if let Some(existing) = existing_pr_session(state, pr) {
+                Ok(StartAction::Goto(existing))
+            } else if state.starting.contains(&key) {
+                Err(StartBlocked::AlreadyStarting(key))
+            } else {
+                head_start(pr)
+                    .map(|(branch, from)| StartAction::PrDialog { pr: n, branch, from })
+                    .map_err(StartBlocked::CannotFix)
+            }
+        }
+        _ => Err(StartBlocked::NoRow),
+    }
+}
+
+pub(super) fn can_start(state: &State) -> bool {
+    plan_start(state).is_ok()
+}
 
 /// `s` on an issue or a PR, Enter on an issue, or a double-click on an issue.
 pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
-    match selected_row(state) {
-        Some(RowKey::Issue(n)) if state.tab == Tab::Issues => {
-            if state.marked.is_empty() {
-                start_issue(state, n);
-            } else {
-                open_batch(state);
+    match plan_start(state) {
+        Ok(StartAction::Batch) => open_batch(state),
+        Ok(StartAction::Goto(key)) => goto_session(state, key),
+        Ok(StartAction::IssueDialog(n)) => {
+            if let Some(issue) = state.issues.items.iter().find(|i| i.number == n) {
+                state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
             }
         }
-        Some(RowKey::Pr(n)) if state.tab == Tab::Prs => start_pr(state, n),
-        _ => {}
+        Ok(StartAction::PrDialog { pr, branch, from }) => {
+            if let Some(pr) = state.prs.items.iter().find(|p| p.number == pr) {
+                state.focus = Focus::Dialog(Box::new(open_pr_dialog(pr, &branch, from)));
+            }
+        }
+        Err(StartBlocked::NoRow) => {}
+        Err(StartBlocked::AlreadyStarting(key)) => toast::info(state, format!("{key} is already starting")),
+        Err(StartBlocked::NotOpen(n)) => toast::info(state, NoTarget::NotOpen(n).to_string()),
+        Err(StartBlocked::CannotFix(why)) => toast::info(state, why.to_string()),
     }
     Vec::new()
-}
-
-pub(super) fn start_issue(state: &mut State, n: IssueNumber) {
-    let key = SessionKey::Issue(n);
-    if state.sessions.contains_key(&key) {
-        goto_session(state, key);
-    } else if state.starting.contains(&key) {
-        toast::info(state, format!("{key} is already starting"));
-    } else if let Some(issue) = state.issues.items.iter().find(|i| i.number == n) {
-        state.focus = Focus::Dialog(Box::new(open_dialog(issue)));
-    }
-}
-
-/// `s` on an open PR: go to its session when one is on the PR's branch or
-/// has its key, else open the start dialog on the PR's branch.
-pub(super) fn start_pr(state: &mut State, n: PrNumber) {
-    let Some(pr) = state.prs.items.iter().find(|p| p.number == n) else { return };
-    if matches!(pr.state, PrState::Merged | PrState::Closed) {
-        toast::info(state, NoTarget::NotOpen(n).to_string());
-        return;
-    }
-    let key = SessionKey::Pr(n);
-    let on_branch = state.sessions.values().find(|s| pr.head.branch() == Some(&s.branch)).map(|s| s.key);
-    if let Some(existing) = on_branch.or_else(|| state.sessions.contains_key(&key).then_some(key)) {
-        goto_session(state, existing);
-    } else if state.starting.contains(&key) {
-        toast::info(state, format!("{key} is already starting"));
-    } else {
-        match head_start(pr) {
-            Ok((branch, from)) => state.focus = Focus::Dialog(Box::new(open_pr_dialog(pr, &branch, from))),
-            Err(why) => toast::info(state, why.to_string()),
-        }
-    }
 }
 
 /// Registers a start and returns its job. The issue is no longer marked.

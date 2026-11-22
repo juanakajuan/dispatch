@@ -104,6 +104,8 @@ fn the_key_bar_shows_diff_and_shell_only_with_a_session() {
     let (mut state, _) = app();
     assert!(!shows(&state, "d", "show diff") && !shows(&state, "!", "open shell"));
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
+    assert!(!shows(&state, "d", "show diff") && shows(&state, "!", "open shell"));
+    state.work.insert(issue_key(3), Work { commits: 1, uncommitted: 0, push: Push::NotPushed });
     assert!(shows(&state, "d", "show diff") && shows(&state, "!", "open shell"));
 }
 

@@ -25,7 +25,6 @@ fn key_bar_follows_the_context() {
             "s start session",
             "enter go to issue",
             "a resume",
-            "d show diff",
             "! open shell",
             "D remove",
             "m merge",
@@ -82,7 +81,6 @@ fn every_key_bar_entry_carries_the_first_key_of_its_binding() {
         ]
     );
     press(&mut state, key('2'));
-    press(&mut state, key('j'));
     assert!(bar_keys(&state).contains(&("enter", Key::Code(KeyCode::Enter))));
 }
 

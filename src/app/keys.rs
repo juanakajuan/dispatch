@@ -1,18 +1,19 @@
-use super::batch::mark_key;
+use super::batch::{mark_key, markable};
 use super::diff::diff_key;
 use super::feed::{observe_now, refresh_github};
-use super::list::{Move, RowKey, Tab, current_session, go_to_issue_of_pr, move_selection, select, selected_row};
+use super::list::{
+    Move, Tab, closed_issue_of_pr, current_session, go_to_issue_of_pr, move_selection, select, selected_row,
+};
 use super::menus::SettingsMenu;
 use super::merge::{Armed, merge_key, merge_target};
 use super::message::open_message;
 use super::msg::Cmd;
 use super::open::open_key;
 use super::remove::{clean_key, has_merged_sessions, removable, remove_key};
-use super::sessions::{attach_key, shell_key, start_key, stop_key};
-use super::summary::summary_key;
+use super::sessions::{attach_key, can_start, shell_key, start_key, stop_key};
+use super::summary::{has_transcript_summary, summary_key};
 use super::{Focus, OpenWith, State};
 use crate::config::settings::SETTINGS;
-use crate::domain::PrState;
 use crate::session::SessionState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -80,17 +81,15 @@ impl KeyGroup {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum When {
     Always,
-    OnIssues,
-    OnPrs,
-    /// The Pull requests tab, on an open or draft PR.
-    OpenPr,
-    OnSessions,
+    CanStart,
+    Markable,
+    PrClosesIssue,
     SessionLive,
     SessionExited,
-    /// The selected session's Claude has said something.
-    Said,
+    HasTranscriptSummary,
     /// The selection has a session.
     HasSession,
+    HasDiff,
     /// The session exited, or its PR is merged.
     Removable,
     HasMergedSessions,
@@ -189,21 +188,21 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Start,
         group: KeyGroup::Sessions,
         desc: "start a session for the issue or PR",
-        bar: &[bar("s", "start session", When::OnIssues), bar("s", "start session", When::OpenPr)],
+        bar: &[bar("s", "start session", When::CanStart)],
     },
     Binding {
         keys: &[Key::Char(' ')],
         action: Action::Mark,
         group: KeyGroup::Sessions,
         desc: "mark the issue to start several at once",
-        bar: &[bar("space", "mark", When::OnIssues)],
+        bar: &[bar("space", "mark", When::Markable)],
     },
     Binding {
         keys: &[Key::Code(KeyCode::Enter)],
         action: Action::Enter,
         group: KeyGroup::Navigation,
         desc: "start, go to the PR's issue, or attach",
-        bar: &[bar("enter", "go to issue", When::OnPrs), bar("enter", "attach", When::OnSessions)],
+        bar: &[bar("enter", "go to issue", When::PrClosesIssue)],
     },
     Binding {
         keys: &[Key::Char('a')],
@@ -231,14 +230,14 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Summary,
         group: KeyGroup::Sessions,
         desc: "show all of what Claude last said",
-        bar: &[bar("i", "read summary", When::Said)],
+        bar: &[bar("i", "read summary", When::HasTranscriptSummary)],
     },
     Binding {
         keys: &[Key::Char('d')],
         action: Action::Diff,
         group: KeyGroup::Sessions,
         desc: "show the diff of the session's worktree",
-        bar: &[bar("d", "show diff", When::HasSession)],
+        bar: &[bar("d", "show diff", When::HasDiff)],
     },
     Binding {
         keys: &[Key::Char('!')],
@@ -372,31 +371,40 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
     }
 }
 
-/// The selected row is an open or draft PR, which `s` can start a session for.
-fn selected_pr_open(state: &State) -> bool {
-    let Some(RowKey::Pr(n)) = selected_row(state) else { return false };
-    state.prs.items.iter().any(|p| p.number == n && matches!(p.state, PrState::Open | PrState::Draft))
+pub fn prompt_hint(state: &State) -> &'static str {
+    match state.tab {
+        Tab::Issues if can_start(state) => "/ to filter issues · s to start a session",
+        Tab::Issues => "/ to filter issues",
+        Tab::Prs if can_start(state) => "/ to filter pull requests · s to start a session",
+        Tab::Prs => "/ to filter pull requests",
+        Tab::Sessions => match current_session(state).map(|s| s.state) {
+            Some(SessionState::Running | SessionState::NeedsYou) => "/ to filter sessions · a to attach",
+            Some(SessionState::Exited) => "/ to filter sessions · a to resume",
+            None => "/ to filter sessions",
+        },
+    }
 }
 
 /// The key bar for the list. A click on an entry presses its binding's first key.
 pub(super) fn key_bar(state: &State) -> Vec<Hint> {
+    let has_row = selected_row(state).is_some();
     let current = current_session(state);
     let session = current.map(|s| s.state);
-    let said = current.and_then(|s| state.transcripts.get(&s.key)).is_some_and(|t| t.said.is_some());
+    let has_diff = current.and_then(|s| state.work.get(&s.key)).is_some_and(|w| w.has_changes());
     let shown = |when: When| match when {
         When::Always => true,
-        When::OnIssues => state.tab == Tab::Issues,
-        When::OnPrs => state.tab == Tab::Prs,
-        When::OpenPr => state.tab == Tab::Prs && selected_pr_open(state),
-        When::OnSessions => state.tab == Tab::Sessions && session.is_some(),
+        When::CanStart => can_start(state),
+        When::Markable => markable(state),
+        When::PrClosesIssue => closed_issue_of_pr(state).is_some(),
         When::SessionLive => session.is_some_and(SessionState::is_live),
         When::SessionExited => session == Some(SessionState::Exited),
-        When::Said => said,
+        When::HasTranscriptSummary => has_transcript_summary(state),
         When::HasSession => current.is_some(),
+        When::HasDiff => has_diff,
         When::Removable => removable(state),
         When::HasMergedSessions => state.tab == Tab::Sessions && has_merged_sessions(state),
         When::Mergeable => merge_target(state).is_ok(),
-        When::OpenWith(with) => state.context.open_with == with,
+        When::OpenWith(with) => has_row && state.context.open_with == with,
     };
     BINDINGS
         .iter()

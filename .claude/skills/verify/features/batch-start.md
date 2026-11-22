@@ -4,7 +4,7 @@ A user marks several issues with Space, then starts a session for each with one 
 
 ## Sub-features
 
-- `batch-mark` toggles the mark of the selected issue with Space on the Issues tab. The key bar shows `space to mark`. An issue that has a session, or is starting, is not marked: the message row shows `#N already has a session`.
+- `batch-mark` toggles the mark of the selected issue with Space on the Issues tab. The key bar shows `space to mark` only when the selected issue has no session. An issue that has a session, or is starting, is not marked: the message row shows `#N already has a session`.
 - `batch-open` opens the dialog with `s`, Enter, or a double-click while at least one issue is marked. The title is ` Start N sessions `, or ` Start 1 session ` for one issue. If no marked issue can start, no dialog opens, every mark clears, and the message row shows `No marked issue can start.`
 - `batch-mode` shows the `Mode` radios. Left, Right, Space, Tab, and BackTab switch the mode. A click on an option picks it.
 - `batch-start` starts one session per issue on Ctrl-S, Enter, or `[ Start ]`. The marks clear, dispatch goes to the Sessions tab, and the message row shows `Starting #A, #B`.

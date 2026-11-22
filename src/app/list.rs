@@ -187,10 +187,14 @@ impl Tabs {
     }
 }
 
+pub(super) fn closed_issue_of_pr(state: &State) -> Option<IssueNumber> {
+    let Some(RowKey::Pr(n)) = selected_row(state).filter(|_| state.tab == Tab::Prs) else { return None };
+    state.prs.items.iter().find(|p| p.number == n).and_then(|p| p.closes.first().copied())
+}
+
 pub(super) fn go_to_issue_of_pr(state: &mut State) {
     let Some(RowKey::Pr(n)) = selected_row(state) else { return };
-    let closes = state.prs.items.iter().find(|p| p.number == n).and_then(|p| p.closes.first().copied());
-    match closes {
+    match closed_issue_of_pr(state) {
         Some(issue) => jump_to(state, RowKey::Issue(issue)),
         None => toast::info(state, format!("PR {n} closes no issue.")),
     }
