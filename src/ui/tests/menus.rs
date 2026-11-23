@@ -10,12 +10,13 @@ fn the_settings_menu_shows_each_key_value_and_default() {
     let screen = text(&render(&state, 100, 30));
     for want in [
         " Settings ",
-        "detect_waiting   off   default: on",
-        "icons            unicode   default: unicode",
-        "harness          claude   default: claude",
+        "detect_waiting   < off >   default: on",
+        "icons            < unicode >   default: unicode",
+        "harness          < claude >   default: claude",
         "command          claude   default: claude",
-        "remove_on_merge  off   default: off",
+        "remove_on_merge  < off >   default: off",
         "Applies to sessions you start or resume after this change.",
+        "Press ←/→ to change the value.",
         "Changes save to config.json when you press enter.",
         "j/k to move · h/l to change · enter to save · esc to cancel",
     ] {
@@ -130,7 +131,7 @@ fn the_settings_menu_shows_pending_values_and_says_they_are_not_saved() {
     send(&mut state, KeyCode::Right);
     let screen = text(&render(&state, 100, 30));
     for want in [
-        "harness          codex   default: claude",
+        "harness          < codex >   default: claude",
         "command          codex   default: claude",
         "Not saved. Press enter to save to config.json.",
     ] {
@@ -139,6 +140,8 @@ fn the_settings_menu_shows_pending_values_and_says_they_are_not_saved() {
     send(&mut state, KeyCode::Char('j'));
     let screen = text(&render(&state, 100, 30));
     assert!(screen.contains("j/k to move · enter to edit · esc to cancel"), "the command row edits\n{screen}");
+    assert!(screen.contains("Press enter to edit the command."), "the hint follows the row\n{screen}");
+    assert!(screen.contains("command          codex   default"), "a typed value has no arrows\n{screen}");
 }
 
 #[test]
