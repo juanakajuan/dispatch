@@ -52,7 +52,7 @@ fn a_failed_read_closes_the_overlay_with_a_red_toast() {
     press(&mut state, key('d'));
     update(&mut state, Msg::Diff { key: issue_key(3), result: Err(git_error("fatal: bad")) });
     assert!(matches!(state.focus, Focus::List));
-    assert_eq!(toast(&state), "Reading the diff of #3 failed: git failed with code 128: fatal: bad");
+    assert_eq!(toast(&state), "Reading the diff of #3 failed: git failed with code 128: fatal: bad.");
     assert!(state.toast.as_ref().map(Toast::level) == Some(Level::Error));
 }
 

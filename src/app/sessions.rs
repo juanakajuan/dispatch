@@ -90,7 +90,7 @@ pub(super) fn start_key(state: &mut State) -> Vec<Cmd> {
             }
         }
         Err(StartBlocked::NoRow) => {}
-        Err(StartBlocked::AlreadyStarting(key)) => toast::info(state, format!("{key} is already starting")),
+        Err(StartBlocked::AlreadyStarting(key)) => toast::info(state, format!("{key} is already starting.")),
         Err(StartBlocked::NotOpen(n)) => toast::info(state, NoTarget::NotOpen(n).to_string()),
         Err(StartBlocked::CannotFix(why)) => toast::info(state, why.to_string()),
     }
@@ -123,7 +123,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         Vec::new()
     } else {
         let launch = Launch::for_session(&state.config, harness);
-        toast::info(state, format!("Resuming {key} with {}", launch.resume_words()));
+        toast::info(state, format!("Resuming {key} with {}…", launch.resume_words()));
         vec![Cmd::Job(Job::Write(WriteJob::Resume(key, launch)))]
     }
 }
@@ -166,7 +166,7 @@ pub(super) fn shell_key(state: &mut State) -> Vec<Cmd> {
 pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
     let live = current_session(state).filter(|s| s.state.is_live());
     if let Some(key) = live.map(|s| s.key) {
-        toast::info(state, format!("Stopping {key}"));
+        toast::info(state, format!("Stopping {key}…"));
         return vec![Cmd::Job(Job::Write(WriteJob::Stop(key)))];
     }
     toast::info(state, "No running session here.".to_string());
@@ -178,14 +178,14 @@ pub(super) fn started(state: &mut State, key: SessionKey, result: Result<StartOu
     match result {
         Ok(outcome) => {
             let text = match outcome.warnings.first() {
-                Some(w) => format!("Started {key} (warning: {w})"),
-                None => format!("Started {key}"),
+                Some(w) => format!("Started {key} (warning: {w})."),
+                None => format!("Started {key}."),
             };
             state.sessions.insert(key, outcome.session);
             state.due.github_soon = true;
             toast::info(state, text);
         }
-        Err(e) => toast::error(state, format!("Start {key} failed: {e}")),
+        Err(e) => toast::error(state, toast::failed(format!("Starting {key}"), e)),
     }
     observe_now(state)
 }
@@ -193,8 +193,8 @@ pub(super) fn started(state: &mut State, key: SessionKey, result: Result<StartOu
 pub(super) fn stopped(state: &mut State, key: SessionKey, result: Result<(), SessionError>) -> Vec<Cmd> {
     state.due.github_soon = true;
     match result {
-        Ok(()) => toast::info(state, format!("Stopped {key}")),
-        Err(e) => toast::error(state, format!("Stop {key} failed: {e}")),
+        Ok(()) => toast::info(state, format!("Stopped {key}.")),
+        Err(e) => toast::error(state, toast::failed(format!("Stopping {key}"), e)),
     }
     observe_now(state)
 }
@@ -202,7 +202,7 @@ pub(super) fn stopped(state: &mut State, key: SessionKey, result: Result<(), Ses
 pub(super) fn resumed(state: &mut State, key: SessionKey, result: Result<(), SessionError>) -> Vec<Cmd> {
     match result {
         Ok(()) => toast::info(state, format!("Resumed {key}. Press a to attach.")),
-        Err(e) => toast::error(state, format!("Resume {key} failed: {e}")),
+        Err(e) => toast::error(state, toast::failed(format!("Resuming {key}"), e)),
     }
     observe_now(state)
 }
@@ -210,8 +210,8 @@ pub(super) fn resumed(state: &mut State, key: SessionKey, result: Result<(), Ses
 pub(super) fn attached(state: &mut State, key: SessionKey, to: AttachTo, result: Result<(), AttachError>) -> Vec<Cmd> {
     if let Err(e) = result {
         match to {
-            AttachTo::Claude => toast::error(state, format!("attach failed: {e}")),
-            AttachTo::Shell => toast::error(state, format!("Opening a shell in {key} failed: {e}")),
+            AttachTo::Claude => toast::error(state, toast::failed(format!("Attaching to {key}"), e)),
+            AttachTo::Shell => toast::error(state, toast::failed(format!("Opening a shell in {key}"), e)),
         }
     }
     observe_now(state)

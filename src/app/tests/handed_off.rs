@@ -66,7 +66,7 @@ fn a_pr_the_agent_merged_removes_its_session_once() {
             target: RemoveTarget { key, merged_head: Some(oid) },
         }] if *key == issue_key(3) && oid.as_str() == "agent-sha"
     ));
-    assert_eq!(toast(&state), "Merged PR #10 (rebase), removing #3");
+    assert_eq!(toast(&state), "Merged PR #10 (rebase). Removing #3…");
     let msg = merged_list(&state, "agent-sha");
     assert!(after_merge(&press(&mut state, msg)).is_empty(), "the next refresh does not remove again");
 }
@@ -77,7 +77,7 @@ fn a_pr_the_agent_merged_stops_its_session_when_remove_on_merge_is_off() {
     let msg = merged_list(&state, "agent-sha");
     let cmds = press(&mut state, msg);
     assert!(matches!(after_merge(&cmds)[..], [WriteJob::Stop(k)] if *k == issue_key(3)));
-    assert_eq!(toast(&state), "Merged PR #10 (rebase) and stopped #3's session");
+    assert_eq!(toast(&state), "Merged PR #10 (rebase) and stopped #3's session.");
 }
 
 #[test]

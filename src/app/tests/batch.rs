@@ -34,13 +34,13 @@ fn space_refuses_an_issue_that_has_a_session_or_is_starting() {
     state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key(' '));
     assert!(state.marked.is_empty());
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session."));
 
     let (mut state, _) = app();
     state.starting.insert(issue_key(3));
     press(&mut state, key(' '));
     assert!(state.marked.is_empty());
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("#3 already has a session."));
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn confirm_starts_each_marked_issue_with_its_defaults_and_the_chosen_mode() {
     assert!(matches!(state.focus, Focus::List));
     assert_eq!(state.tab, Tab::Sessions);
     assert_eq!(selected_row(&state), Some(RowKey::Session(issue_key(1))));
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #1, #3"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #1, #3…"));
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn an_issue_that_gained_a_session_while_the_dialog_was_open_is_skipped() {
     let cmds = press(&mut state, ctrl('s'));
     let reqs = starts(&cmds);
     assert_eq!(reqs.iter().map(|r| r.key).collect::<Vec<_>>(), [issue_key(3)]);
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #3"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Starting #3…"));
 }
 
 #[test]

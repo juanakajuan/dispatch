@@ -1,5 +1,17 @@
+//! Every toast follows one style, and `info`, `error`, and `append` check it
+//! in debug builds:
+//!
+//! - A toast is whole sentences. Each starts with a capital letter or a
+//!   reference such as `#16`, and ends with a full stop:
+//!   `#16 has no changes.`
+//! - A toast for work that has started and not ended ends with `…`:
+//!   `Starting #16…`.
+//! - A failure is `<Gerund> <object> failed: <error>.`, made by `failed`:
+//!   `Starting #16 failed: tmux exited.`
+
 use super::State;
 use super::msg::TOAST_FOR;
+use std::fmt::Display;
 use std::time::Instant;
 
 /// A message for the key bar. `update` has no clock for key presses, so the
@@ -31,14 +43,30 @@ impl Toast {
     pub(super) fn append(&mut self, sentence: &str) {
         self.text.push(' ');
         self.text.push_str(sentence);
+        debug_assert!(follows_style(&self.text), "toast breaks the style: {:?}", self.text);
     }
 }
 
+/// `<what> failed: <error>.` An error that ends in a full stop keeps one.
+pub(super) fn failed(what: impl Display, error: impl Display) -> String {
+    let error = error.to_string();
+    format!("{what} failed: {}.", error.strip_suffix('.').unwrap_or(&error))
+}
+
+/// The checks of the style in the module docs that need no grammar.
+pub(super) fn follows_style(text: &str) -> bool {
+    let starts_well = text.chars().next().is_some_and(|c| !c.is_lowercase() && !c.is_whitespace());
+    let ends_well = (text.ends_with('.') && !text.ends_with("..")) || text.ends_with('…');
+    starts_well && ends_well
+}
+
 pub(super) fn info(state: &mut State, text: String) {
+    debug_assert!(follows_style(&text), "toast breaks the style: {text:?}");
     state.toast = Some(Toast { level: Level::Info, text, shown_at: None });
 }
 
 pub(super) fn error(state: &mut State, text: String) {
+    debug_assert!(follows_style(&text), "toast breaks the style: {text:?}");
     state.toast = Some(Toast { level: Level::Error, text, shown_at: None });
 }
 

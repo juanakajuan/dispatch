@@ -46,9 +46,9 @@ fn d_twice_removes_an_exited_session() {
     let mut state = on_session(SessionState::Exited);
     assert!(shows(&state, "D", "remove"));
     assert!(press(&mut state, key('D')).is_empty(), "the first press only arms");
-    assert_eq!(toast(&state), "Press D again to remove #3's worktree and branch");
+    assert_eq!(toast(&state), "Press D again to remove #3's worktree and branch.");
     assert_eq!(removes(&press(&mut state, key('D'))), [target(3, None)]);
-    assert_eq!(toast(&state), "Removing #3");
+    assert_eq!(toast(&state), "Removing #3…");
     assert!(state.armed.is_none());
 }
 
@@ -58,7 +58,7 @@ fn another_key_between_the_presses_disarms() {
     press(&mut state, key('D'));
     press(&mut state, key('j'));
     assert!(press(&mut state, key('D')).is_empty(), "armed again, not removed");
-    assert_eq!(toast(&state), "Press D again to remove #3's worktree and branch");
+    assert_eq!(toast(&state), "Press D again to remove #3's worktree and branch.");
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn no_session_selected_says_so() {
 fn a_removed_result_toasts_and_asks_for_an_observation() {
     let (mut state, _) = app();
     let cmds = press(&mut state, Msg::Removed { key: issue_key(3), result: Ok(RemoveOutcome::Removed) });
-    assert_eq!(toast(&state), "Removed #3's worktree and branch");
+    assert_eq!(toast(&state), "Removed #3's worktree and branch.");
     assert_eq!(level(&state), Some(Level::Info));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Read(ReadJob::ObserveSessions))]));
 }
@@ -143,7 +143,7 @@ fn refusals_name_the_problem_and_are_not_errors() {
 fn a_failed_remove_is_an_error_toast() {
     let (mut state, _) = app();
     press(&mut state, Msg::Removed { key: issue_key(3), result: Err(git_error("boom")) });
-    assert_eq!(toast(&state), "Remove #3 failed: git failed with code 128: boom");
+    assert_eq!(toast(&state), "Removing #3 failed: git failed with code 128: boom.");
     assert_eq!(level(&state), Some(Level::Error));
 }
 
@@ -174,7 +174,7 @@ fn c_arms_with_singular_and_plural_and_disarms_on_other_key() {
     let mut state = on_session(SessionState::Running);
     state.prs.items[0].state = PrState::Merged;
     assert!(press(&mut state, key('c')).is_empty());
-    assert_eq!(toast(&state), "Press c again to remove 1 merged session");
+    assert_eq!(toast(&state), "Press c again to remove 1 merged session.");
     assert_eq!(state.armed, Some(Armed::Clean(vec![issue_key(3)])));
 
     press(&mut state, key('j'));
@@ -183,7 +183,7 @@ fn c_arms_with_singular_and_plural_and_disarms_on_other_key() {
     state.sessions.insert(issue_key(2), session(2, SessionState::Exited));
     state.prs.items.push(merged_pr(12, "fix/2-x", &[2], "sha12"));
     assert!(press(&mut state, key('c')).is_empty());
-    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions");
+    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions.");
     assert_eq!(state.armed, Some(Armed::Clean(vec![issue_key(2), issue_key(3)])));
 }
 
@@ -198,7 +198,7 @@ fn c_rearms_if_merged_sessions_change_between_presses() {
     state.prs.items.push(merged_pr(12, "fix/2-x", &[2], "sha12"));
 
     assert!(press(&mut state, key('c')).is_empty(), "changed set re-arms instead of removing");
-    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions");
+    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions.");
     assert_eq!(state.armed, Some(Armed::Clean(vec![issue_key(2), issue_key(3)])));
 }
 
@@ -212,10 +212,10 @@ fn c_twice_emits_clean_job_in_issue_order_with_merged_heads() {
     state.prs.items.push(pr(13, "fix/1-x", &[1]));
 
     assert!(press(&mut state, key('c')).is_empty());
-    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions");
+    assert_eq!(toast(&state), "Press c again to remove 2 merged sessions.");
     let cmds = press(&mut state, key('c'));
     assert_eq!(cleans(&cmds), [vec![target(2, Some("sha12")), target(3, Some("sha10"))]]);
-    assert_eq!(toast(&state), "Removing 2 merged sessions");
+    assert_eq!(toast(&state), "Removing 2 merged sessions…");
     assert!(state.armed.is_none());
 }
 
@@ -232,12 +232,12 @@ fn cleaned_reports_counts_and_levels_and_observes_sessions() {
     check(CleanReport::default(), "No merged sessions to clean.", Level::Info);
     check(
         CleanReport { removed: vec![issue_key(3)], ..CleanReport::default() },
-        "Removed 1 merged session",
+        "Removed 1 merged session.",
         Level::Info,
     );
     check(
         CleanReport { removed: vec![issue_key(2), issue_key(3)], ..CleanReport::default() },
-        "Removed 2 merged sessions",
+        "Removed 2 merged sessions.",
         Level::Info,
     );
     check(
@@ -256,7 +256,7 @@ fn cleaned_reports_counts_and_levels_and_observes_sessions() {
     );
     check(
         CleanReport { removed: Vec::new(), skipped: Vec::new(), failed: vec![(issue_key(3), git_error("boom"))] },
-        "Failed to remove 1 merged session: #3 (git failed with code 128: boom).",
+        "Removing 1 merged session failed: #3 (git failed with code 128: boom).",
         Level::Error,
     );
     check(
@@ -265,7 +265,7 @@ fn cleaned_reports_counts_and_levels_and_observes_sessions() {
             skipped: vec![(issue_key(2), RemoveRefusal::Uncommitted)],
             failed: vec![(issue_key(3), git_error("boom"))],
         },
-        "Removed 1 merged session. Skipped 1: #2 (uncommitted changes). Failed 1: #3 (git failed with code 128: boom).",
+        "Removed 1 merged session. Skipped 1: #2 (uncommitted changes). Removing 1 failed: #3 (git failed with code 128: boom).",
         Level::Error,
     );
 }
@@ -292,7 +292,7 @@ fn remove_on_merge_emits_remove_after_merge_with_fresh_head_oid_for_session_on_p
         state.config.remove_on_merge = RemoveOnMerge::On;
         state.sessions.insert(issue_key(3), session(3, session_state));
         let cmds = press(&mut state, msg());
-        assert_eq!(toast(&state), "Merged PR #10 (squash), removing #3");
+        assert_eq!(toast(&state), "Merged PR #10 (squash). Removing #3…");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
         assert!(
             cmds.iter().any(|c| matches!(
@@ -375,7 +375,7 @@ fn removed_after_merge_reports_outcomes_and_observes_sessions() {
     check(
         SessionState::Running,
         Ok(RemoveOutcome::Removed),
-        "Merged PR #10 (squash) and removed #3's worktree and branch",
+        "Merged PR #10 (squash) and removed #3's worktree and branch.",
         Level::Info,
     );
     check(
@@ -399,7 +399,7 @@ fn removed_after_merge_reports_outcomes_and_observes_sessions() {
     check(
         SessionState::Running,
         Err(git_error("boom")),
-        "Merged PR #10 (squash), but removing #3 failed: git failed with code 128: boom",
+        "Merged PR #10 (squash), but removing #3 failed: git failed with code 128: boom.",
         Level::Error,
     );
 }
