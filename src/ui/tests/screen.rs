@@ -273,6 +273,20 @@ fn empty_and_loading_lists_say_so() {
     assert!(text(&render(&state, 80, 10)).contains("Loading issues…"));
 }
 
+#[test]
+fn the_sessions_tab_says_when_the_filter_matches_no_session() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('3'));
+    state.tabs.sessions.filter = "zzz".to_string();
+    let screen = text(&render(&state, 80, 10));
+    assert!(screen.contains("No sessions match the filter."), "{screen}");
+
+    state.tabs.sessions.filter.clear();
+    state.sessions.clear();
+    let screen = text(&render(&state, 80, 10));
+    assert!(screen.contains("No sessions. Press s on an issue to start one."), "{screen}");
+}
+
 /// Issue rows with no session or PR, so each summary is author and labels.
 fn plain_issues() -> State {
     let mut state = full_state();
