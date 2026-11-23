@@ -91,3 +91,29 @@ fn the_batch_dialog_title_counts_one_session_in_the_singular() {
     let screen = text(&render(&state, 120, 30));
     assert!(screen.contains(" Start 1 session "), "{screen}");
 }
+
+#[test]
+fn the_batch_dialog_lists_titles_as_rendered_markdown() {
+    let mut state = full_state();
+    state.issues.items[1].title = "Update `eslint` 8 / `@typescript-eslint` 6".to_string();
+    send(&mut state, KeyCode::Char('j'));
+    send(&mut state, KeyCode::Char(' '));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = text(&render(&state, 120, 30));
+    assert!(screen.contains("  #2 Update eslint 8 / @typescript-eslint 6"), "{screen}");
+    assert!(!screen.contains('`'), "{screen}");
+}
+
+#[test]
+fn the_batch_dialog_cuts_a_long_markdown_title_to_the_dialog_width() {
+    let mut state = full_state();
+    state.issues.items[1].title = format!("Update `eslint` {}", "word ".repeat(40));
+    send(&mut state, KeyCode::Char('j'));
+    send(&mut state, KeyCode::Char(' '));
+    send(&mut state, KeyCode::Char('s'));
+    let screen = text(&render(&state, 120, 30));
+    let line = screen.lines().find(|l| l.contains("#2 Update eslint")).expect("issue line");
+    let inside = line.split('│').nth(1).expect("dialog border");
+    assert!(inside.trim_end().ends_with('…'), "{line}");
+    assert!(!inside.contains('`'), "{line}");
+}

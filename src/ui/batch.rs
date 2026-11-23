@@ -1,6 +1,7 @@
 use super::dialog::{Focus, draw_buttons, draw_mode_options, field_label};
+use super::markdown;
 use super::palette;
-use super::text::{fit, span};
+use super::text::{fit_spans, span};
 use crate::app::State;
 use crate::app::batch::BatchStart;
 use crate::app::mouse::HitMap;
@@ -60,7 +61,9 @@ fn title(count: usize) -> String {
 /// One line per issue. When they do not all fit, the last line says how many are left out.
 fn issue_lines(batch: &BatchStart, room: usize, width: usize) -> Vec<Line<'static>> {
     let line = |n: &crate::domain::IssueNumber, title: &str| {
-        Line::from(span(fit(&format!("  {n} {title}"), width), palette::PLAIN))
+        let mut spans = vec![span(format!("  {n} "), palette::PLAIN)];
+        spans.extend(markdown::title(title, palette::PLAIN));
+        Line::from(fit_spans(spans, width))
     };
     if batch.issues.len() <= room {
         return batch.issues.iter().map(|(n, t)| line(n, t)).collect();
