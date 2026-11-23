@@ -72,7 +72,10 @@ fn a_long_summary_in_one_group_does_not_narrow_the_titles_of_another() {
     let mut state = full_state();
     let long = "Claude says a lot of things here ".repeat(6);
     let said = crate::transcript::Summary { kind: crate::transcript::SummaryKind::Message, text: long };
-    state.transcripts.insert(issue_key(3), crate::transcript::Transcript { said: Some(said) });
+    state.transcripts.insert(
+        issue_key(3),
+        crate::transcript::Transcript { said: Some(said), active_at: jiff::Timestamp::UNIX_EPOCH },
+    );
     let title = "Docs for every setting, key, and screen that dispatch has today";
     state.issues.items[1] = crate::testutil::issue(2, title, &["docs"]);
     let screen = text(&render(&state, 160, 20));

@@ -4,7 +4,7 @@ use crate::transcript::{Summary, SummaryKind, Transcript};
 
 fn said(state: &mut State, n: u32, text: &str) {
     let said = Summary { kind: SummaryKind::Message, text: text.to_string() };
-    state.transcripts.insert(issue_key(n), Transcript { said: Some(said) });
+    state.transcripts.insert(issue_key(n), Transcript { said: Some(said), active_at: jiff::Timestamp::UNIX_EPOCH });
 }
 
 #[test]

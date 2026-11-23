@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 /// Bytes read from the end of the transcript. Transcripts grow to megabytes.
 const TAIL_BYTES: u64 = 512 * 1024;
@@ -60,6 +59,8 @@ enum Block {
 pub struct Transcript {
     /// None until Claude says something.
     pub said: Option<Summary>,
+    /// When the transcript last changed: the session's last activity.
+    pub active_at: jiff::Timestamp,
 }
 
 /// The size and mtime of a transcript file when it was last read. A file
@@ -67,7 +68,7 @@ pub struct Transcript {
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Stamp {
     len: u64,
-    modified: SystemTime,
+    modified: jiff::Timestamp,
 }
 
 /// Reads the transcripts of the sessions on each poll. It keeps what it read
@@ -101,7 +102,7 @@ impl Reader {
                 Some((old, said)) if old == stamp => said,
                 _ => read_tail(&file).and_then(|text| parse_latest(&text)),
             };
-            out.insert(key, Transcript { said: said.clone() });
+            out.insert(key, Transcript { said: said.clone(), active_at: stamp.modified });
             seen.insert(file, (stamp, said));
         }
         self.seen = seen;
@@ -134,7 +135,8 @@ fn newest_transcript(dir: &Path) -> Option<(PathBuf, Stamp)> {
         .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
         .filter_map(|e| {
             let meta = e.metadata().ok()?;
-            Some((e.path(), Stamp { len: meta.len(), modified: meta.modified().ok()? }))
+            let modified = jiff::Timestamp::try_from(meta.modified().ok()?).ok()?;
+            Some((e.path(), Stamp { len: meta.len(), modified }))
         })
         .max_by_key(|(_, stamp)| stamp.modified)
 }
@@ -263,6 +265,25 @@ mod tests {
         std::fs::write(dir.join("new.jsonl"), format!("{padding}\n{}", assistant("Last."))).unwrap();
         assert_eq!(said(&mut Reader::default(), &projects, worktree), Some("Last.".to_string()));
         assert!(said(&mut Reader::default(), &projects, Path::new("/w/none")).is_none(), "no conversation");
+    }
+
+    #[test]
+    fn a_transcript_is_active_at_its_mtime_even_when_it_is_not_read_again() {
+        let projects = crate::testutil::temp_dir("transcript-active");
+        let worktree = Path::new("/w/orbit-9");
+        let dir = projects.join(encode(worktree));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("s.jsonl");
+        std::fs::write(&file, assistant("Hi.")).unwrap();
+        let at = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        File::options().write(true).open(&file).unwrap().set_modified(at.into()).unwrap();
+        let mut reader = Reader::default();
+        let active_at = |reader: &mut Reader| {
+            reader.read_in(&projects, [(crate::testutil::issue_key(9), worktree)])[&crate::testutil::issue_key(9)]
+                .active_at
+        };
+        assert_eq!(active_at(&mut reader), at);
+        assert_eq!(active_at(&mut reader), at, "from the kept stamp");
     }
 
     #[test]

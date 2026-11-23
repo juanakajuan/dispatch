@@ -22,7 +22,7 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
     );
 
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
-    state.transcripts.insert(issue_key(3), Transcript { said: None });
+    state.transcripts.insert(issue_key(3), Transcript { said: None, active_at: jiff::Timestamp::UNIX_EPOCH });
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == issue_key(3)));
     assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with claude --continue"));
@@ -48,7 +48,7 @@ fn a_resume_keeps_a_claude_session_on_claude_when_the_config_changes() {
     let (mut state, _) = app();
     state.config.harness = Harness::Codex;
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
-    state.transcripts.insert(issue_key(3), Transcript { said: None });
+    state.transcripts.insert(issue_key(3), Transcript { said: None, active_at: jiff::Timestamp::UNIX_EPOCH });
     let cmds = press(&mut state, key('a'));
     let [Cmd::Job(Job::Write(WriteJob::Resume(_, launch)))] = cmds.as_slice() else { panic!("one resume") };
     assert_eq!((launch.harness, launch.command.words()), (Harness::Claude, "claude".to_string()));
