@@ -1,5 +1,6 @@
+use super::markdown;
 use super::palette;
-use super::text::{cells, fit, one_line, span, spans_width, wrap};
+use super::text::{cells, fit_spans, one_line, span, spans_width, wrap};
 use crate::app::keys::Key;
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, State, dialog::DialogField};
@@ -79,6 +80,15 @@ pub(super) fn field_label(text: &str, focus: Focus) -> Line<'static> {
     }
 }
 
+/// " Start session for #2 <title> ", with the title as rendered Markdown, as
+/// the row behind the dialog shows it. The prompt keeps the raw title.
+fn dialog_title(d: &app::dialog::StartDialog) -> Line<'static> {
+    let mut spans = vec![span(format!(" Start session for {} ", d.key), palette::HEADING)];
+    spans.extend(fit_spans(markdown::title(&d.title, palette::HEADING), 50));
+    spans.push(span(" ", palette::HEADING));
+    Line::from(spans)
+}
+
 /// Rows of the start dialog that are not the prompt or the "Runs" preview.
 pub(super) const DIALOG_FIXED_ROWS: u16 = 10;
 /// The prompt input keeps at least this many rows when the preview is tall.
@@ -104,7 +114,7 @@ pub(super) fn draw_dialog(
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(palette::DIM)
-        .title(span(format!(" Start session for {} {} ", d.key, fit(&d.title, 50)), palette::HEADING))
+        .title(dialog_title(d))
         .padding(Padding::new(2, 2, 1, 0));
     let inner = block.inner(area);
     frame.render_widget(block, area);

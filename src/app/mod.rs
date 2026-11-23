@@ -251,7 +251,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
         Msg::Diff { key, result } => read_diff(state, key, result),
         Msg::Saved(result) => {
             if let Err(e) = result {
-                toast::error(state, format!("Saving settings failed: {e}"));
+                toast::error(state, toast::failed("Saving settings", e));
             }
             Vec::new()
         }

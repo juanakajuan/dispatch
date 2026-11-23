@@ -136,7 +136,7 @@ fn ctrl_s_in_a_pr_dialog_starts_a_session_keyed_by_the_pr() {
     assert!(state.starting.contains(&pr_key(11)));
     assert!(state.marked.is_empty());
     assert_eq!((state.tab, state.tabs.sessions.selected), (Tab::Sessions, Some(pr_key(11))));
-    assert_eq!(toast(&state), "Starting PR #11");
+    assert_eq!(toast(&state), "Starting PR #11…");
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn s_on_a_pr_with_a_session_on_its_branch_or_key_goes_to_that_session() {
     state.starting.insert(pr_key(11));
     on_pr(&mut state, 11);
     press(&mut state, key('s'));
-    assert_eq!(toast(&state), "PR #11 is already starting");
+    assert_eq!(toast(&state), "PR #11 is already starting.");
     assert!(matches!(state.focus, Focus::List));
 }
 
@@ -243,7 +243,7 @@ fn a_x_t_and_d_act_on_a_pr_session() {
         press(&mut state, key('x')).as_slice(),
         [Cmd::Job(Job::Write(WriteJob::Stop(k)))] if *k == pr_key(11)
     ));
-    assert_eq!(toast(&state), "Stopping PR #11");
+    assert_eq!(toast(&state), "Stopping PR #11…");
 
     press(&mut state, key('t'));
     assert!(matches!(&state.focus, Focus::Message { key: k, .. } if *k == pr_key(11)));
@@ -257,7 +257,7 @@ fn a_x_t_and_d_act_on_a_pr_session() {
     assert_eq!(toast(&state), "PR #11 is still running. Press x to stop it first.");
     state.sessions.insert(pr_key(11), pr_session(11, SessionState::Exited));
     press(&mut state, key('D'));
-    assert_eq!(toast(&state), "Press D again to remove PR #11's worktree and branch");
+    assert_eq!(toast(&state), "Press D again to remove PR #11's worktree and branch.");
     let cmds = press(&mut state, key('D'));
     assert!(matches!(
         cmds.as_slice(),

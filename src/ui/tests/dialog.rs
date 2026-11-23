@@ -172,3 +172,28 @@ fn the_pr_dialog_names_the_pr_marks_the_branch_as_fixed_and_previews_that_origin
         "{screen}"
     );
 }
+
+#[test]
+fn the_dialog_title_shows_rendered_markdown_and_the_prompt_stays_raw() {
+    let mut state = full_state();
+    state.issues.items[1].title = "Fix `foo` in **bar**".to_string();
+    open_dialog(&mut state);
+    let screen = text(&render(&state, 120, 30));
+    let title = screen.lines().find(|l| l.contains("Start session for")).expect("title row");
+    assert!(title.contains("Start session for #2 Fix foo in bar "), "{title}");
+    assert!(!title.contains('`') && !title.contains("**"), "{title}");
+    let run = previewed_commands(&screen).last().cloned().expect("a run line");
+    assert!(run.contains("Fix `foo` in **bar**"), "the prompt sends the raw title: {run}");
+}
+
+#[test]
+fn the_dialog_title_cuts_a_long_markdown_title_with_one_ellipsis() {
+    let mut state = full_state();
+    state.issues.items[1].title = format!("Update `eslint` {}", "word ".repeat(30));
+    open_dialog(&mut state);
+    let screen = text(&render(&state, 120, 30));
+    let title = screen.lines().find(|l| l.contains("Start session for")).expect("title row");
+    let shown = title.split("Start session for #2 ").nth(1).and_then(|r| r.split('…').next()).expect("cut title");
+    assert_eq!(cells(shown) + 1, 50, "{title}");
+    assert!(shown.starts_with("Update eslint word"), "{title}");
+}

@@ -125,7 +125,7 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     let cmd = begin_start(state, req);
     state.focus = Focus::List;
     goto_session(state, n);
-    toast::info(state, format!("Starting {n}"));
+    toast::info(state, format!("Starting {n}…"));
     vec![cmd]
 }
 

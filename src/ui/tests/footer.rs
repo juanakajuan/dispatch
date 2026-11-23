@@ -92,7 +92,7 @@ fn a_toast_is_red_for_a_failed_job_and_plain_for_a_warning_whatever_its_text() {
     let target = crate::domain::GithubRef::Issue(IssueNumber(2));
     let _ = app::update(&mut state, Msg::Opened { target, result: Err(error) });
     let (text, style) = super::footer::message(&state).expect("toast");
-    assert_eq!(text, "Open issue #2 failed: gh failed with code 1: no browser");
+    assert_eq!(text, "Opening issue #2 failed: gh failed with code 1: no browser.");
     assert_eq!(style, palette::ERROR);
 }
 

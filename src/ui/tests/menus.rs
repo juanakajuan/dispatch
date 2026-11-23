@@ -212,7 +212,7 @@ fn the_summary_shows_all_of_what_claude_said_wrapped_and_scrolled() {
     let long = "word ".repeat(40);
     let text = format!("Fixed the retry queue.\n\n{long}\nEnd of the recap.");
     let said = Summary { kind: SummaryKind::Recap, text };
-    state.transcripts.insert(issue_key(3), Transcript { said: Some(said) });
+    state.transcripts.insert(issue_key(3), Transcript { said: Some(said), active_at: jiff::Timestamp::UNIX_EPOCH });
     send(&mut state, KeyCode::Char('3'));
     send(&mut state, KeyCode::Char('i'));
     let screen = draw_into(&mut state, 60, 40);

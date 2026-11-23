@@ -305,7 +305,9 @@ fn a_new_start_uses_the_changed_settings() {
 fn a_resume_uses_the_changed_command() {
     let (mut state, _) = app();
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
-    state.transcripts.insert(issue_key(3), crate::transcript::Transcript { said: None });
+    state
+        .transcripts
+        .insert(issue_key(3), crate::transcript::Transcript { said: None, active_at: jiff::Timestamp::UNIX_EPOCH });
     open_menu_at(&mut state, Setting::Command);
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, " --x");
@@ -325,7 +327,7 @@ fn a_failed_save_toasts_and_a_good_one_does_not() {
     press(&mut state, Msg::Saved(Err(crate::config::ConfigError::Write { path: "/c/dispatch.json".into(), source })));
     assert_eq!(
         state.toast.as_ref().map(Toast::text),
-        Some("Saving settings failed: cannot write /c/dispatch.json: disk full")
+        Some("Saving settings failed: cannot write /c/dispatch.json: disk full.")
     );
 }
 

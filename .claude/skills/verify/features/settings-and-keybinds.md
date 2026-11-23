@@ -11,7 +11,7 @@ A user presses `,` to open the settings menu and `?` to open the keys menu. The 
 - `settings-close`: Enter saves every changed setting to `config.json` in one write and closes the menu. `Esc` or `,` closes it and drops the changes. A new menu starts from the saved values.
 - `settings-edit` opens an inline editor for `command` on Enter. It shows the command that runs now (the harness program when there is no override). Enter checks the text, then saves all changes and closes the menu. Esc cancels the edit and keeps the menu open. Words split on spaces, and quotes group them.
 - `keys-mouse`: a click on a key bar entry or on `S sort: <order>` presses that key. A key cut at a narrow width is not clickable. Each menu box has `esc ✕` in its top border, which closes it. A click on a settings row selects it, and a second click selects its next value as `l` does (on `command` it opens the editor). A click never saves. A click on a keys menu entry closes the menu and runs that binding. The wheel moves through the settings and scrolls the keys menu.
-- `settings-save` writes `$XDG_CONFIG_HOME/dispatch/config.json`. It changes only the keys of the changed settings, keeps the other keys, and removes a key when the value is the default. A success shows no toast. A failure shows `Saving settings failed: <error>`.
+- `settings-save` writes `$XDG_CONFIG_HOME/dispatch/config.json`. It changes only the keys of the changed settings, keeps the other keys, and removes a key when the value is the default. A success shows no toast. A failure shows `Saving settings failed: <error>.`.
 
 ## How to get to it (user POV)
 

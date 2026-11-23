@@ -354,11 +354,33 @@ fn a_session_on_another_branch_says_so_before_its_pr() {
     assert_eq!(buf[(x, y)].fg, palette::YELLOW, "{screen}");
 }
 
+/// A transcript with nothing said that last changed `ago` before now.
+fn active(ago: jiff::SignedDuration) -> crate::transcript::Transcript {
+    crate::transcript::Transcript { said: None, active_at: jiff::Timestamp::now() - ago }
+}
+
+#[test]
+fn a_session_row_shows_the_age_of_its_last_activity_not_of_its_issue() {
+    let session_row = |transcript: Option<crate::transcript::Transcript>| {
+        let mut state = full_state();
+        if let Some(t) = transcript {
+            state.transcripts.insert(issue_key(3), t);
+        }
+        send(&mut state, KeyCode::Char('3'));
+        let screen = text(&render(&state, 100, 20));
+        let line = screen.lines().find(|l| l.contains("3 Retry queue")).unwrap_or_default();
+        line.split_whitespace().last().unwrap_or_default().to_string()
+    };
+    assert_eq!(session_row(Some(active(jiff::SignedDuration::from_hours(2)))), "2h");
+    assert_eq!(session_row(None), "open", "no transcript yet: no age, so the row ends with its PR state");
+}
+
 #[test]
 fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_the_age() {
     use crate::session::{Push, Work};
     let row = |work: Option<Work>| {
         let mut state = full_state();
+        state.transcripts.insert(issue_key(3), active(jiff::SignedDuration::from_mins(5)));
         if let Some(w) = work {
             state.work.insert(issue_key(3), w);
         }
@@ -382,7 +404,7 @@ fn a_session_row_shows_its_uncommitted_files_and_push_state_in_a_column_before_t
 
     let (buf, screen, line) = row(Some(Work { commits: 1, uncommitted: 0, push: Push::Pushed }));
     work_then_age(&line, "✓");
-    let (x, y) = find(&screen, "✓  56y");
+    let (x, y) = find(&screen, "✓   5m");
     assert_eq!(buf[(x, y)].fg, palette::GREEN, "{screen}");
 
     let (_, _, line) = row(Some(Work { commits: 1, uncommitted: 2, push: Push::Pushed }));

@@ -246,7 +246,7 @@ fn i_to_read_summary_hides_for_harnesses_without_transcripts() {
     running.harness = Harness::Codex;
     state.sessions.insert(issue_key(3), running);
     let summary = Summary { kind: SummaryKind::Message, text: "done".to_string() };
-    state.transcripts.insert(issue_key(3), Transcript { said: Some(summary) });
+    state.transcripts.insert(issue_key(3), Transcript { said: Some(summary), active_at: jiff::Timestamp::UNIX_EPOCH });
     assert!(!shows(&state, "i", "read summary"), "Codex does not report what it said");
 }
 
@@ -268,7 +268,7 @@ fn key_bar_never_emits_duplicate_keys_or_descriptions() {
     state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     state.work.insert(issue_key(3), Work { commits: 1, uncommitted: 0, push: Push::NotPushed });
     let summary = Summary { kind: SummaryKind::Message, text: "hi".to_string() };
-    state.transcripts.insert(issue_key(3), Transcript { said: Some(summary) });
+    state.transcripts.insert(issue_key(3), Transcript { said: Some(summary), active_at: jiff::Timestamp::UNIX_EPOCH });
     assert_unique("issues live session", &state);
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     assert_unique("issues exited session", &state);
