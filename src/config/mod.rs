@@ -59,6 +59,15 @@ impl Multiplexer {
         }
     }
 
+    pub fn prev(self) -> Multiplexer {
+        match self {
+            Multiplexer::Auto => Multiplexer::HerdrApp,
+            Multiplexer::Tmux => Multiplexer::Auto,
+            Multiplexer::Herdr => Multiplexer::Tmux,
+            Multiplexer::HerdrApp => Multiplexer::Herdr,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Multiplexer::Auto => "auto",

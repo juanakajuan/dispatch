@@ -5,7 +5,7 @@ use crate::app::keys::{Action, Key};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, DiffBody, State};
 use crate::config::Config;
-use crate::config::settings::SETTINGS;
+use crate::config::settings::{self, SETTINGS};
 use crate::domain::SessionKey;
 use crate::transcript::SummaryKind;
 use crossterm::event::KeyCode;
@@ -86,7 +86,7 @@ pub(super) fn draw_settings(
             spans.push(span(format!("{shown}▏"), palette::ACTIVE));
         } else {
             let default_note = format!("   default: {}", setting.show(&default));
-            let value = fit(&setting.show(&state.config), room.saturating_sub(cells(&default_note)).max(1));
+            let value = fit(&setting.show(&menu.pending), room.saturating_sub(cells(&default_note)).max(1));
             spans.push(span(value, if on { palette::ACTIVE } else { palette::PLAIN }));
             spans.push(span(default_note, palette::DIM));
         }
@@ -98,7 +98,11 @@ pub(super) fn draw_settings(
         Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
         None => menu.at.applies_note().map_or_else(|| Line::raw(""), |note| Line::from(span(note, palette::DIM))),
     });
-    lines.push(Line::from(span("Saved to config.json", palette::DIM)));
+    lines.push(if settings::changed(&state.config, &menu.pending).is_empty() {
+        Line::from(span("Changes save to config.json when you press enter.", palette::DIM))
+    } else {
+        Line::from(span("Not saved. Press enter to save to config.json.", palette::PENDING))
+    });
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

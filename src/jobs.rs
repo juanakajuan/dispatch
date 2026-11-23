@@ -75,7 +75,7 @@ fn spawn_writer(ws: Workspace, tx: Sender<Msg>) -> Sender<WriteJob> {
                 }
                 WriteJob::Clean(targets) => Msg::Cleaned(ws.clean(&targets)),
                 WriteJob::Resume(key, launch) => Msg::Resumed { key, result: ws.resume(key, &launch) },
-                WriteJob::SaveConfig { setting, config } => Msg::Saved(config::settings::save(setting, &config)),
+                WriteJob::SaveConfig { settings, config } => Msg::Saved(config::settings::save(&settings, &config)),
                 WriteJob::Send { key, kind, text } => Msg::Sent { key, kind, result: ws.send(key, &text) },
                 WriteJob::Merge(ask) => Msg::Merged { ask, run: merge::job::merge(ws.repo_root(), ask) },
             };

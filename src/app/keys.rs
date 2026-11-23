@@ -13,7 +13,6 @@ use super::remove::{clean_key, has_merged_sessions, removable, remove_key};
 use super::sessions::{attach_key, can_start, shell_key, start_key, stop_key};
 use super::summary::{has_transcript_summary, summary_key};
 use super::{Focus, OpenWith, State};
-use crate::config::settings::SETTINGS;
 use crate::session::SessionState;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -362,7 +361,14 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
             vec![hint(Key::Ctrl('s'), "start"), hint(Key::Char(' '), "change mode"), hint(esc, "cancel")]
         }
         Focus::Settings(menu) if menu.edit.is_some() => vec![hint(enter, "save"), hint(esc, "cancel")],
-        Focus::Settings(_) => vec![hint2(j, k, "move"), hint(enter, "change"), hint(esc, "close")],
+        Focus::Settings(menu) if menu.at.is_typed() => {
+            vec![hint2(j, k, "move"), hint(enter, "edit"), hint(esc, "cancel")]
+        }
+        Focus::Settings(_) => {
+            // A click on `h/l` selects the next value, as `l` does.
+            let change = Hint { keys: labels(&[Key::Char('h'), Key::Char('l')]), desc: "change", key: Key::Char('l') };
+            vec![hint2(j, k, "move"), change, hint(enter, "save"), hint(esc, "cancel")]
+        }
         Focus::Keybinds { .. } | Focus::Summary { .. } | Focus::Diff { .. } => {
             vec![hint2(j, k, "scroll"), hint(esc, "close")]
         }
@@ -463,7 +469,7 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
             }
             state.tabs.cycle_sort(state.tab);
         }
-        Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu { at: SETTINGS[0], edit: None })),
+        Action::Settings => state.focus = Focus::Settings(Box::new(SettingsMenu::new(&state.config))),
         Action::Keybinds => state.focus = Focus::Keybinds { scroll: 0 },
         Action::Summary => return summary_key(state),
         Action::Diff => return diff_key(state),

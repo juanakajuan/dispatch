@@ -26,6 +26,15 @@ impl Harness {
         }
     }
 
+    pub fn prev(self) -> Harness {
+        match self {
+            Harness::Claude => Harness::Antigravity,
+            Harness::Codex => Harness::Claude,
+            Harness::OpenCode => Harness::Codex,
+            Harness::Antigravity => Harness::OpenCode,
+        }
+    }
+
     /// The file spelling, also the `dispatch-harness` marker value.
     pub fn label(self) -> &'static str {
         match self {
@@ -89,6 +98,7 @@ mod tests {
             assert_eq!(parsed, harness);
             assert_eq!(Harness::from_label(harness.label()), Some(harness));
             assert_eq!(harness.next().next().next().next(), harness);
+            assert_eq!(harness.next().prev(), harness);
         }
         assert_eq!(Harness::from_label("gemini"), None);
         assert_eq!(Harness::default(), Harness::Claude);
