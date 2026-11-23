@@ -49,7 +49,7 @@ fn enter_sends_the_typed_line_to_the_session_and_closes_the_field() {
         "list keys type into the field, and backspace deletes"
     );
     assert_eq!(
-        footer_hints(&state).iter().map(|h| (h.keys, h.desc)).collect::<Vec<_>>(),
+        footer_hints(&state).iter().map(|h| (h.keys.as_str(), h.desc)).collect::<Vec<_>>(),
         [("enter", "send"), ("esc", "cancel")]
     );
 

@@ -99,7 +99,6 @@ pub enum When {
 }
 
 pub struct BarEntry {
-    pub keys: &'static str,
     pub desc: &'static str,
     pub when: When,
 }
@@ -123,7 +122,7 @@ impl Key {
         }
     }
 
-    /// How the keybinds menu writes the key: `j`, `down`, `ctrl+c`.
+    /// How the key bar and the keybinds menu write the key: `j`, `down`, `ctrl+c`.
     pub fn label(self) -> String {
         match self {
             Self::Char(' ') => "space".to_string(),
@@ -134,8 +133,13 @@ impl Key {
     }
 }
 
-pub(super) const fn bar(keys: &'static str, desc: &'static str, when: When) -> BarEntry {
-    BarEntry { keys, desc, when }
+/// Keys that do one thing, written as one hint: `j/down`.
+pub fn labels(keys: &[Key]) -> String {
+    keys.iter().map(|k| k.label()).collect::<Vec<_>>().join("/")
+}
+
+pub(super) const fn bar(desc: &'static str, when: When) -> BarEntry {
+    BarEntry { desc, when }
 }
 
 /// The one table behind key handling, the key bar, and the keybinds menu.
@@ -146,7 +150,7 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Keybinds,
         group: KeyGroup::App,
         desc: "show all keys",
-        bar: &[bar("?", "keys", When::Always)],
+        bar: &[bar("show keys", When::Always)],
     },
     Binding {
         keys: &[Key::Char('j'), Key::Code(KeyCode::Down)],
@@ -188,84 +192,84 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Start,
         group: KeyGroup::Sessions,
         desc: "start a session for the issue or PR",
-        bar: &[bar("s", "start session", When::CanStart)],
+        bar: &[bar("start session", When::CanStart)],
     },
     Binding {
         keys: &[Key::Char(' ')],
         action: Action::Mark,
         group: KeyGroup::Sessions,
         desc: "mark the issue to start several at once",
-        bar: &[bar("space", "mark", When::Markable)],
+        bar: &[bar("mark", When::Markable)],
     },
     Binding {
         keys: &[Key::Code(KeyCode::Enter)],
         action: Action::Enter,
         group: KeyGroup::Navigation,
         desc: "start, go to the PR's issue, or attach",
-        bar: &[bar("enter", "go to issue", When::PrClosesIssue)],
+        bar: &[bar("go to issue", When::PrClosesIssue)],
     },
     Binding {
         keys: &[Key::Char('a')],
         action: Action::Attach,
         group: KeyGroup::Sessions,
         desc: "attach to the session, or resume it",
-        bar: &[bar("a", "attach", When::SessionLive), bar("a", "resume", When::SessionExited)],
+        bar: &[bar("attach", When::SessionLive), bar("resume", When::SessionExited)],
     },
     Binding {
         keys: &[Key::Char('x')],
         action: Action::Stop,
         group: KeyGroup::Sessions,
         desc: "stop the session",
-        bar: &[bar("x", "stop", When::SessionLive)],
+        bar: &[bar("stop", When::SessionLive)],
     },
     Binding {
         keys: &[Key::Char('t')],
         action: Action::Message,
         group: KeyGroup::Sessions,
         desc: "send a message to the session",
-        bar: &[bar("t", "send message", When::SessionLive)],
+        bar: &[bar("send message", When::SessionLive)],
     },
     Binding {
         keys: &[Key::Char('i')],
         action: Action::Summary,
         group: KeyGroup::Sessions,
         desc: "show all of what Claude last said",
-        bar: &[bar("i", "read summary", When::HasTranscriptSummary)],
+        bar: &[bar("read summary", When::HasTranscriptSummary)],
     },
     Binding {
         keys: &[Key::Char('d')],
         action: Action::Diff,
         group: KeyGroup::Sessions,
         desc: "show the diff of the session's worktree",
-        bar: &[bar("d", "show diff", When::HasDiff)],
+        bar: &[bar("show diff", When::HasDiff)],
     },
     Binding {
         keys: &[Key::Char('!')],
         action: Action::Shell,
         group: KeyGroup::Sessions,
         desc: "open a shell in the session's worktree",
-        bar: &[bar("!", "open shell", When::HasSession)],
+        bar: &[bar("open shell", When::HasSession)],
     },
     Binding {
         keys: &[Key::Char('D')],
         action: Action::Remove,
         group: KeyGroup::Sessions,
         desc: "remove the worktree and branch (press twice)",
-        bar: &[bar("D", "remove", When::Removable)],
+        bar: &[bar("remove", When::Removable)],
     },
     Binding {
         keys: &[Key::Char('c')],
         action: Action::Clean,
         group: KeyGroup::Sessions,
         desc: "remove all merged sessions (press twice)",
-        bar: &[bar("c", "clean merged", When::HasMergedSessions)],
+        bar: &[bar("clean merged", When::HasMergedSessions)],
     },
     Binding {
         keys: &[Key::Char('m')],
         action: Action::Merge,
         group: KeyGroup::PullRequests,
         desc: "merge the PR (press twice)",
-        bar: &[bar("m", "merge", When::Mergeable)],
+        bar: &[bar("merge", When::Mergeable)],
     },
     Binding {
         keys: &[Key::Char('o')],
@@ -273,8 +277,8 @@ pub static BINDINGS: &[Binding] = &[
         group: KeyGroup::PullRequests,
         desc: "open on GitHub, or copy the URL",
         bar: &[
-            bar("o", "open on GitHub", When::OpenWith(OpenWith::Browser)),
-            bar("o", "copy URL", When::OpenWith(OpenWith::Clipboard)),
+            bar("open on GitHub", When::OpenWith(OpenWith::Browser)),
+            bar("copy URL", When::OpenWith(OpenWith::Clipboard)),
         ],
     },
     Binding {
@@ -311,7 +315,7 @@ pub static BINDINGS: &[Binding] = &[
         action: Action::Quit,
         group: KeyGroup::App,
         desc: "quit",
-        bar: &[bar("q", "quit", When::Always)],
+        bar: &[bar("quit", When::Always)],
     },
     Binding {
         keys: &[Key::Char(',')],
@@ -322,50 +326,45 @@ pub static BINDINGS: &[Binding] = &[
     },
 ];
 
-/// One footer hint: what it shows, and the key a click on it presses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One footer hint, shown as `<keys> to <desc>`: `keys` is written with
+/// `Key::label`, and `key` is the key a click on it presses.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hint {
-    pub keys: &'static str,
+    pub keys: String,
     pub desc: &'static str,
     pub key: Key,
 }
 
-const fn hint(keys: &'static str, desc: &'static str, key: Key) -> Hint {
-    Hint { keys, desc, key }
+fn hint(key: Key, desc: &'static str) -> Hint {
+    Hint { keys: key.label(), desc, key }
+}
+
+/// A hint for two keys that do the same thing; a click presses the first.
+fn hint2(key: Key, other: Key, desc: &'static str) -> Hint {
+    Hint { keys: labels(&[key, other]), desc, key }
 }
 
 /// The hints the footer shows for the focus.
 pub fn footer_hints(state: &State) -> Vec<Hint> {
     let (enter, esc) = (Key::Code(KeyCode::Enter), Key::Code(KeyCode::Esc));
+    let (j, k, tab) = (Key::Char('j'), Key::Char('k'), Key::Code(KeyCode::Tab));
     match &state.focus {
         Focus::Filter => {
-            let mut hints = vec![
-                hint("enter", "keep", enter),
-                hint("tab", "complete", Key::Code(KeyCode::Tab)),
-                hint("esc", "clear", esc),
-            ];
+            let mut hints = vec![hint(enter, "keep"), hint(tab, "complete"), hint(esc, "clear")];
             if !state.config.saved_filters.is_empty() {
-                hints.push(hint("↑↓", "saved filters", Key::Code(KeyCode::Down)));
+                hints.push(hint2(Key::Code(KeyCode::Down), Key::Code(KeyCode::Up), "pick a saved filter"));
             }
             hints
         }
-        Focus::Message { .. } => vec![hint("enter", "send", enter), hint("esc", "cancel", esc)],
-        Focus::Dialog(_) => vec![
-            hint("ctrl-s", "start", Key::Ctrl('s')),
-            hint("tab", "next field", Key::Code(KeyCode::Tab)),
-            hint("esc", "cancel", esc),
-        ],
-        Focus::Batch(_) => vec![
-            hint("ctrl-s", "start", Key::Ctrl('s')),
-            hint("space", "mode", Key::Char(' ')),
-            hint("esc", "cancel", esc),
-        ],
-        Focus::Settings(menu) if menu.edit.is_some() => vec![hint("enter", "save", enter), hint("esc", "cancel", esc)],
-        Focus::Settings(_) => {
-            vec![hint("j/k", "move", Key::Char('j')), hint("enter", "change", enter), hint("esc", "close", esc)]
+        Focus::Message { .. } => vec![hint(enter, "send"), hint(esc, "cancel")],
+        Focus::Dialog(_) => vec![hint(Key::Ctrl('s'), "start"), hint(tab, "go to next field"), hint(esc, "cancel")],
+        Focus::Batch(_) => {
+            vec![hint(Key::Ctrl('s'), "start"), hint(Key::Char(' '), "change mode"), hint(esc, "cancel")]
         }
+        Focus::Settings(menu) if menu.edit.is_some() => vec![hint(enter, "save"), hint(esc, "cancel")],
+        Focus::Settings(_) => vec![hint2(j, k, "move"), hint(enter, "change"), hint(esc, "close")],
         Focus::Keybinds { .. } | Focus::Summary { .. } | Focus::Diff { .. } => {
-            vec![hint("j/k", "scroll", Key::Char('j')), hint("esc", "close", esc)]
+            vec![hint2(j, k, "scroll"), hint(esc, "close")]
         }
         Focus::List => key_bar(state),
     }
@@ -411,7 +410,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
         .filter_map(|b| Some((b, *b.keys.first()?)))
         .flat_map(|(b, key)| b.bar.iter().map(move |e| (e, key)))
         .filter(|(e, _)| shown(e.when))
-        .map(|(e, key)| hint(e.keys, e.desc, key))
+        .map(|(e, key)| hint(key, e.desc))
         .collect()
 }
 

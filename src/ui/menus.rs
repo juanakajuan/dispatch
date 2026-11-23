@@ -18,7 +18,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 /// The keybinds menu lines, made from `BINDINGS` and grouped by `KeyGroup`.
 /// An entry line carries its binding's action; headings and blanks carry none.
 pub(super) fn keybinds_lines() -> Vec<(Line<'static>, Option<Action>)> {
-    let keys = |b: &app::keys::Binding| b.keys.iter().map(|k| k.label()).collect::<Vec<_>>().join(" / ");
+    let keys = |b: &app::keys::Binding| app::keys::labels(b.keys);
     let key_width = app::keys::BINDINGS.iter().map(|b| cells(&keys(b))).max().unwrap_or(0);
     let mut lines = Vec::new();
     for group in app::keys::KeyGroup::ALL {
@@ -66,7 +66,7 @@ pub(super) fn draw_settings(
     menu: &app::menus::SettingsMenu,
     hits: &mut HitMap,
 ) {
-    let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
+    let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 7);
     let inner = draw_box(frame, centered(screen, 76, height), " Settings ".to_string(), hits);
     let default = Config::default();
     let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
@@ -98,10 +98,6 @@ pub(super) fn draw_settings(
         Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
         None => menu.at.applies_note().map_or_else(|| Line::raw(""), |note| Line::from(span(note, palette::DIM))),
     });
-    lines.push(Line::from(span(
-        if menu.edit.is_some() { "enter save · esc cancel" } else { "j/k move · enter change · esc close" },
-        palette::DIM,
-    )));
     lines.push(Line::from(span("Saved to config.json", palette::DIM)));
     frame.render_widget(Paragraph::new(lines), inner);
 }

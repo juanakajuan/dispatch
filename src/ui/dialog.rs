@@ -180,7 +180,7 @@ pub(super) fn draw_mode_options(frame: &mut Frame, state: &State, current: Mode,
 const PLAN_FIRST: &str = "Plan first, then wait for approval";
 const IMPLEMENT: &str = "Implement directly";
 
-/// `[ Start ]` presses ctrl-s and `[ Cancel ]` presses esc.
+/// `[ Start ]` presses ctrl+s and `[ Cancel ]` presses esc.
 pub(super) fn draw_buttons(frame: &mut Frame, row: Rect, hits: &mut HitMap) {
     let (start, cancel) = ("[ Start ]", "[ Cancel ]");
     let start_w = u16::try_from(cells(start)).unwrap_or(0);

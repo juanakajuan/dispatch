@@ -345,10 +345,10 @@ fn up_and_down_in_the_prompt_cycle_the_saved_filters() {
     press(&mut state, key('/'));
     press(&mut state, code(KeyCode::Down));
     assert_eq!(state.filter(), "", "no saved filters: down does nothing");
-    assert!(!footer_hints(&state).iter().any(|h| h.keys == "↑↓"));
+    assert!(!footer_hints(&state).iter().any(|h| h.keys == "down/up"));
 
     state.config.saved_filters = strings(&["label:bug", "label:docs", "assignee:@me"]);
-    assert!(footer_hints(&state).iter().any(|h| (h.keys, h.desc) == ("↑↓", "saved filters")));
+    assert!(footer_hints(&state).iter().any(|h| (h.keys.as_str(), h.desc) == ("down/up", "pick a saved filter")));
     let mut down = || {
         press(&mut state, code(KeyCode::Down));
         state.filter().to_string()

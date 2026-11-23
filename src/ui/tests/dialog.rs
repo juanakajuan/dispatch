@@ -9,7 +9,7 @@ fn dialog_shows_fields_and_the_exact_commands() {
     send(&mut state, KeyCode::Char('j'));
     send(&mut state, KeyCode::Char('s'));
     let screen = text(&render(&state, 120, 30));
-    for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "ctrl-s to start"]
+    for want in ["Start session for #2 Docs", "Branch", "docs/2-docs", "Implement directly", "Runs", "ctrl+s to start"]
     {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }

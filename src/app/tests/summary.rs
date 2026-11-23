@@ -24,7 +24,7 @@ fn i_opens_the_summary_of_the_selected_session_and_esc_or_i_closes_it() {
     assert!(!key_bar(&state).iter().any(|h| h.keys == "i"), "the key bar hides i until Claude says something");
 
     said(&mut state, 3, "First line.\nSecond line.");
-    assert!(key_bar(&state).iter().any(|h| (h.keys, h.desc) == ("i", "read summary")));
+    assert!(key_bar(&state).iter().any(|h| (h.keys.as_str(), h.desc) == ("i", "read summary")));
     press(&mut state, key('i'));
     assert!(matches!(state.focus, Focus::Summary { key: SessionKey::Issue(IssueNumber(3)), scroll: 0 }));
     assert!(press(&mut state, key('q')).is_empty(), "list keys do not act while it is open");

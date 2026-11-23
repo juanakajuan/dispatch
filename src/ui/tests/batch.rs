@@ -29,7 +29,7 @@ fn the_batch_dialog_shows_the_title_the_issues_and_the_mode() {
         "Implement directly",
         "Each session uses its default branch and prompt.",
         "[ Start ]  [ Cancel ]",
-        "ctrl-s to start · space to mode · esc to cancel",
+        "ctrl+s to start · space to change mode · esc to cancel",
     ] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
