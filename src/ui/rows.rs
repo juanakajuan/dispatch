@@ -174,21 +174,16 @@ impl RowParts {
 /// What a session row shows of its issue or PR.
 struct Subject<'a> {
     title: &'a str,
-    updated_at: jiff::Timestamp,
     url: Option<&'a PageUrl>,
 }
 
 /// The issue or PR that session `key` is for, when the list has it.
 fn subject_of(state: &State, key: SessionKey) -> Option<Subject<'_>> {
     match key {
-        SessionKey::Issue(i) => {
-            issue_of(state, i).map(|i| Subject { title: &i.title, updated_at: i.updated_at, url: i.url.as_ref() })
+        SessionKey::Issue(i) => issue_of(state, i).map(|i| Subject { title: &i.title, url: i.url.as_ref() }),
+        SessionKey::Pr(p) => {
+            state.prs.items.iter().find(|r| r.number == p).map(|r| Subject { title: &r.title, url: r.url.as_ref() })
         }
-        SessionKey::Pr(p) => state.prs.items.iter().find(|r| r.number == p).map(|r| Subject {
-            title: &r.title,
-            updated_at: r.updated_at,
-            url: r.url.as_ref(),
-        }),
     }
 }
 
@@ -282,7 +277,7 @@ pub(super) fn row_parts(state: &State, key: RowKey, now: jiff::Timestamp, icons:
                 .or_else(|| session.and_then(|s| app::list::pr_for_session(state, s)).map(pr_summary))
                 .or_else(|| session.map(|s| vec![span(s.branch.as_str().to_string(), palette::DIM)]))
                 .unwrap_or_else(|| vec![span("creating worktree…", palette::STARTING)]);
-            let age = subject.map(|s| age(s.updated_at, now)).unwrap_or_default();
+            let age = state.transcripts.get(&n).map(|t| age(t.active_at, now)).unwrap_or_default();
             let work = state.work.get(&n).map(|w| work_spans(*w, icons)).unwrap_or_default();
             RowParts { work, ..RowParts::new(glyph, name, summary, age) }
         }
