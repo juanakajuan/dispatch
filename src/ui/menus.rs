@@ -66,7 +66,7 @@ pub(super) fn draw_settings(
     menu: &app::menus::SettingsMenu,
     hits: &mut HitMap,
 ) {
-    let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 7);
+    let height = screen.height.min(SETTINGS.len().try_into().unwrap_or(4) + 8);
     let inner = draw_box(frame, centered(screen, 76, height), " Settings ".to_string(), hits);
     let default = Config::default();
     let name_width = SETTINGS.iter().map(|s| s.key().len()).max().unwrap_or(0);
@@ -86,7 +86,10 @@ pub(super) fn draw_settings(
             spans.push(span(format!("{shown}▏"), palette::ACTIVE));
         } else {
             let default_note = format!("   default: {}", setting.show(&default));
-            let value = fit(&setting.show(&menu.pending), room.saturating_sub(cells(&default_note)).max(1));
+            // A choice shows `< value >`: the arrows say that left and right change it.
+            let (open, close) = if setting.is_typed() { ("", "") } else { ("< ", " >") };
+            let room = room.saturating_sub(cells(&default_note) + cells(open) + cells(close)).max(1);
+            let value = format!("{open}{}{close}", fit(&setting.show(&menu.pending), room));
             spans.push(span(value, if on { palette::ACTIVE } else { palette::PLAIN }));
             spans.push(span(default_note, palette::DIM));
         }
@@ -98,6 +101,10 @@ pub(super) fn draw_settings(
         Some(e) => Line::from(span(fit(e, usize::from(inner.width)), palette::ERROR)),
         None => menu.at.applies_note().map_or_else(|| Line::raw(""), |note| Line::from(span(note, palette::DIM))),
     });
+    lines.push(Line::from(span(
+        if menu.at.is_typed() { "Press enter to edit the command." } else { "Press ←/→ to change the value." },
+        palette::DIM,
+    )));
     lines.push(if settings::changed(&state.config, &menu.pending).is_empty() {
         Line::from(span("Changes save to config.json when you press enter.", palette::DIM))
     } else {
