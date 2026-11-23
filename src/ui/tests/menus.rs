@@ -16,7 +16,8 @@ fn the_settings_menu_shows_each_key_value_and_default() {
         "command          claude   default: claude",
         "remove_on_merge  off   default: off",
         "Applies to sessions you start or resume after this change.",
-        "Saved to config.json",
+        "Changes save to config.json when you press enter.",
+        "j/k to move · h/l to change · enter to save · esc to cancel",
     ] {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
@@ -97,7 +98,7 @@ fn settings_rows_and_the_close_control_are_clickable() {
         assert_clickable(&state, &screen, needle, HitTarget::Setting(setting));
     }
     assert_clickable(&state, &screen, "esc ✕", HitTarget::Key(Key::Code(KeyCode::Esc)));
-    let (x, y) = find(&screen, "Saved to config.json");
+    let (x, y) = find(&screen, "Changes save to config.json");
     assert_eq!(state.hits.at(x, y), None, "the notes under the rows are not targets");
 }
 
@@ -110,12 +111,34 @@ fn clicking_drawn_settings_selects_then_changes_and_the_close_control_closes() {
     click_at(&mut state, x, y);
     let Focus::Settings(m) = &state.focus else { panic!("settings open") };
     assert_eq!(m.at, Setting::Icons);
-    let before = state.config.icons;
     click_at(&mut state, x, y);
-    assert_ne!(state.config.icons, before);
+    let Focus::Settings(m) = &state.focus else { panic!("settings open") };
+    assert_ne!(m.pending.icons, state.config.icons, "the second click changes the pending value");
     let (x, y) = find(&screen, "esc ✕");
     click_at(&mut state, x, y);
     assert!(matches!(state.focus, Focus::List));
+    assert_eq!(state.config.icons, crate::glyphs::IconSet::Unicode, "closing drops the change");
+}
+
+#[test]
+fn the_settings_menu_shows_pending_values_and_says_they_are_not_saved() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char(','));
+    for _ in 0..3 {
+        send(&mut state, KeyCode::Char('j'));
+    }
+    send(&mut state, KeyCode::Right);
+    let screen = text(&render(&state, 100, 30));
+    for want in [
+        "harness          codex   default: claude",
+        "command          codex   default: claude",
+        "Not saved. Press enter to save to config.json.",
+    ] {
+        assert!(screen.contains(want), "missing {want:?} in\n{screen}");
+    }
+    send(&mut state, KeyCode::Char('j'));
+    let screen = text(&render(&state, 100, 30));
+    assert!(screen.contains("j/k to move · enter to edit · esc to cancel"), "the command row edits\n{screen}");
 }
 
 #[test]

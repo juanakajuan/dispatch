@@ -107,8 +107,8 @@ pub enum OpenWith {
 
 pub struct State {
     pub context: Context,
-    /// The live config. The settings menu edits it, and `WriteJob::SaveConfig`
-    /// writes the change to the file.
+    /// The live config. The settings menu edits a copy. `enter` puts the copy
+    /// here, and `WriteJob::SaveConfig` writes the changes to the file.
     pub config: Config,
     pub tab: Tab,
     pub issues: Feed<Issue>,

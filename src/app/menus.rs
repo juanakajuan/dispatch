@@ -2,13 +2,23 @@ use super::keys::{Key, key_of};
 use super::mouse::press_key;
 use super::msg::{Cmd, Job, WriteJob};
 use super::{Focus, State};
-use crate::config::settings::{Change, SETTINGS, Setting};
+use crate::config::Config;
+use crate::config::settings::{self, SETTINGS, Setting, Step};
 use crossterm::event::{KeyCode, KeyEvent};
 
 /// The settings overlay. Browsing has no `edit`; a typed value has one.
+/// `pending` is a copy of the config that the keys change. `enter` saves it,
+/// and `esc` drops it.
 pub struct SettingsMenu {
     pub at: Setting,
+    pub pending: Config,
     pub edit: Option<SettingEdit>,
+}
+
+impl SettingsMenu {
+    pub fn new(config: &Config) -> SettingsMenu {
+        SettingsMenu { at: SETTINGS[0], pending: config.clone(), edit: None }
+    }
 }
 
 /// A typed value being edited. The error belongs here, so a browsing menu
@@ -39,34 +49,25 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
         match key {
             Some(Key::Char('j') | Key::Code(KeyCode::Down)) => menu.at = SETTINGS[(at + 1).min(SETTINGS.len() - 1)],
             Some(Key::Char('k') | Key::Code(KeyCode::Up)) => menu.at = SETTINGS[at.saturating_sub(1)],
+            Some(Key::Char('h') | Key::Code(KeyCode::Left)) => step(menu, &state.config, Step::Back),
+            Some(Key::Char('l') | Key::Code(KeyCode::Right)) => step(menu, &state.config, Step::Forward),
             Some(Key::Code(KeyCode::Esc) | Key::Char(',')) => state.focus = Focus::List,
-            Some(Key::Code(KeyCode::Enter)) => {
-                let setting = menu.at;
-                match setting.change(&mut state.config) {
-                    Change::Applied => return changed(state, setting),
-                    Change::Edit(text) => {
-                        let mut input = tui_textarea::TextArea::new(vec![text]);
-                        input.move_cursor(tui_textarea::CursorMove::End);
-                        menu.edit = Some(SettingEdit { input, error: None });
-                    }
-                }
+            Some(Key::Code(KeyCode::Enter)) if menu.at.is_typed() => {
+                let mut input = tui_textarea::TextArea::new(vec![menu.at.show(&menu.pending)]);
+                input.move_cursor(tui_textarea::CursorMove::End);
+                menu.edit = Some(SettingEdit { input, error: None });
             }
+            Some(Key::Code(KeyCode::Enter)) => return save(state),
             _ => {}
         }
         return Vec::new();
     };
     match key {
         Some(Key::Code(KeyCode::Esc)) => menu.edit = None,
-        Some(Key::Code(KeyCode::Enter)) => {
-            let setting = menu.at;
-            match setting.set_text(&mut state.config, &edit.input.lines().join("")) {
-                Ok(()) => {
-                    menu.edit = None;
-                    return changed(state, setting);
-                }
-                Err(e) => edit.error = Some(e.to_string()),
-            }
-        }
+        Some(Key::Code(KeyCode::Enter)) => match menu.at.set_text(&mut menu.pending, &edit.input.lines().join("")) {
+            Ok(()) => return save(state),
+            Err(e) => edit.error = Some(e.to_string()),
+        },
         _ => {
             edit.input.input(*ev);
             edit.error = None;
@@ -75,21 +76,39 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     Vec::new()
 }
 
-/// `state.config` already holds the new value. Save it.
-pub(super) fn changed(state: &State, setting: Setting) -> Vec<Cmd> {
-    vec![Cmd::Job(Job::Write(WriteJob::SaveConfig { setting, config: state.config.clone() }))]
+/// `left`/`right` on the selected setting. A new harness clears the command
+/// override. Back on the saved harness, the saved override comes back, so
+/// going there and back changes nothing.
+fn step(menu: &mut SettingsMenu, saved: &Config, step: Step) {
+    menu.at.step(&mut menu.pending, step);
+    if menu.at == Setting::Harness && menu.pending.harness == saved.harness {
+        menu.pending.command.clone_from(&saved.command);
+    }
 }
 
-/// A click on a settings row selects it. A click on the selected row is
-/// enter, so a double click changes the setting.
+/// `enter`: the menu's pending config becomes the live one, the changed
+/// settings are saved in one write, and the menu closes.
+fn save(state: &mut State) -> Vec<Cmd> {
+    let Focus::Settings(menu) = std::mem::replace(&mut state.focus, Focus::List) else { return Vec::new() };
+    let settings = settings::changed(&state.config, &menu.pending);
+    state.config = menu.pending;
+    if settings.is_empty() {
+        return Vec::new();
+    }
+    vec![Cmd::Job(Job::Write(WriteJob::SaveConfig { settings, config: state.config.clone() }))]
+}
+
+/// A click on a settings row selects it. A click on the selected row selects
+/// its next value, or opens the editor of a typed value. It never saves.
 pub(super) fn click_setting(state: &mut State, setting: Setting) -> Vec<Cmd> {
     let Focus::Settings(menu) = &mut state.focus else { return Vec::new() };
     if menu.edit.is_some() {
         return Vec::new();
     }
-    if menu.at == setting {
-        return press_key(state, Key::Code(KeyCode::Enter));
+    if menu.at != setting {
+        menu.at = setting;
+        return Vec::new();
     }
-    menu.at = setting;
-    Vec::new()
+    let key = if setting.is_typed() { Key::Code(KeyCode::Enter) } else { Key::Char('l') };
+    press_key(state, key)
 }

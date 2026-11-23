@@ -75,7 +75,7 @@ fn moving_off_every_target_clears_the_tint() {
 fn overlay_targets_are_tinted() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char(','));
-    for needle in ["icons ", "esc ✕", "esc to close"] {
+    for needle in ["icons ", "esc ✕", "esc to cancel"] {
         assert_hover_tints(&mut state, 100, 30, needle);
     }
     let mut state = full_state();

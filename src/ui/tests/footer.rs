@@ -191,8 +191,9 @@ fn overlay_footers_are_clickable_and_the_base_screen_is_not() {
     let screen = draw_into(&mut state, 100, 30);
     for (needle, key) in [
         ("j/k to move", Key::Char('j')),
-        ("enter to change", Key::Code(KeyCode::Enter)),
-        ("esc to close", Key::Code(KeyCode::Esc)),
+        ("h/l to change", Key::Char('l')),
+        ("enter to save", Key::Code(KeyCode::Enter)),
+        ("esc to cancel", Key::Code(KeyCode::Esc)),
     ] {
         assert_clickable(&state, &screen, needle, HitTarget::Key(key));
     }

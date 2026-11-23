@@ -23,13 +23,11 @@ pub const SETTINGS: [Setting; 6] = [
     Setting::RemoveOnMerge,
 ];
 
-/// What `enter` does to a setting.
-#[derive(Debug, PartialEq, Eq)]
-pub enum Change {
-    /// The value changed in place.
-    Applied,
-    /// The value is typed: edit this text, then `Setting::set_text`.
-    Edit(String),
+/// Which way `left`/`right` move through a setting's values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    Back,
+    Forward,
 }
 
 impl Setting {
@@ -66,20 +64,30 @@ impl Setting {
         }
     }
 
-    /// `enter` in the menu.
-    pub fn change(self, config: &mut Config) -> Change {
+    /// A typed setting has no list of values: the menu edits its text, then
+    /// calls `Setting::set_text`.
+    pub fn is_typed(self) -> bool {
+        matches!(self, Setting::Command)
+    }
+
+    /// The previous or next value. An on/off setting toggles both ways. A
+    /// typed setting does not change.
+    pub fn step(self, config: &mut Config, step: Step) {
+        let back = step == Step::Back;
         match self {
             Setting::DetectWaiting => config.detect_waiting = !config.detect_waiting,
+            // Two values: the previous one is the next one.
             Setting::Icons => config.icons = config.icons.next(),
-            Setting::Multiplexer => config.multiplexer = config.multiplexer.next(),
+            Setting::Multiplexer => {
+                config.multiplexer = if back { config.multiplexer.prev() } else { config.multiplexer.next() };
+            }
             Setting::Harness => {
-                config.harness = config.harness.next();
+                config.harness = if back { config.harness.prev() } else { config.harness.next() };
                 config.command = None;
             }
-            Setting::Command => return Change::Edit(Setting::Command.show(config)),
+            Setting::Command => {}
             Setting::RemoveOnMerge => config.remove_on_merge = config.remove_on_merge.toggle(),
         }
-        Change::Applied
     }
 
     /// Typed text for a typed setting, checked like the file. `config` is
@@ -99,8 +107,8 @@ impl Setting {
         Ok(())
     }
 
-    /// The file fields this setting writes. Cycling the harness clears the
-    /// command override, so it writes both.
+    /// The file fields this setting writes. A new harness clears the command
+    /// override, and `changed` then lists `Command` too.
     fn fields(self, config: &Config) -> Vec<(&'static str, Value)> {
         let command = || {
             let argv = config.command.as_ref().map(|c| c.argv(&[]));
@@ -110,22 +118,28 @@ impl Setting {
             Setting::DetectWaiting => vec![("detect_waiting", json!(config.detect_waiting))],
             Setting::Icons => vec![("icons", json!(config.icons.label()))],
             Setting::Multiplexer => vec![("multiplexer", json!(config.multiplexer.label()))],
-            Setting::Harness => vec![("harness", json!(config.harness.label())), command()],
+            Setting::Harness => vec![("harness", json!(config.harness.label()))],
             Setting::Command => vec![command()],
             Setting::RemoveOnMerge => vec![("remove_on_merge", json!(config.remove_on_merge.as_bool()))],
         }
     }
 }
 
-/// Pure: the new file text after `setting` takes its value from `config`, or
-/// `None` when there is nothing to write. `text` is the file now, `None` for
+/// The settings whose file fields differ between `before` and `after`, in
+/// menu order.
+pub fn changed(before: &Config, after: &Config) -> Vec<Setting> {
+    SETTINGS.into_iter().filter(|s| s.fields(before) != s.fields(after)).collect()
+}
+
+/// Pure: the new file text after each of `settings` takes its value from
+/// `config`, or `None` when there is nothing to write. `text` is the file now, `None` for
 /// no file. A file that does not parse is an error, so dispatch never
 /// overwrites a file the user broke. Fields the user did not change stay,
 /// in their order. A value equal to the default removes its field.
 fn edit_file(
     text: Option<&str>,
     path: &Path,
-    setting: Setting,
+    settings: &[Setting],
     config: &Config,
 ) -> Result<Option<String>, ConfigError> {
     let json_error = |message: String| ConfigError::Json { path: path.to_path_buf(), message };
@@ -136,8 +150,8 @@ fn edit_file(
         }
         None => Map::new(),
     };
-    let fields = setting.fields(config);
-    let defaults = setting.fields(&Config::default());
+    let fields: Vec<_> = settings.iter().flat_map(|s| s.fields(config)).collect();
+    let defaults: Vec<_> = settings.iter().flat_map(|s| s.fields(&Config::default())).collect();
     if text.is_none() && fields == defaults {
         return Ok(None);
     }
@@ -148,7 +162,7 @@ fn edit_file(
             object.insert(key.to_string(), value);
         }
     }
-    if matches!(setting, Setting::Harness | Setting::Command) {
+    if settings.iter().any(|s| matches!(s, Setting::Harness | Setting::Command)) {
         object.shift_remove("claude_command");
     }
     let mut out = serde_json::to_string_pretty(&object).map_err(|e| json_error(e.to_string()))?;
@@ -156,12 +170,12 @@ fn edit_file(
     Ok(Some(out))
 }
 
-/// Writes `setting`'s value from `config` into the config file. The write goes
-/// to a temp file first and is renamed over the file, so a crash leaves the old
-/// file whole.
-pub fn save(setting: Setting, config: &Config) -> Result<(), ConfigError> {
+/// Writes the values of `settings` from `config` into the config file, in one
+/// write. The write goes to a temp file first and is renamed over the file, so
+/// a crash leaves the old file whole.
+pub fn save(settings: &[Setting], config: &Config) -> Result<(), ConfigError> {
     let path = env_path().ok_or(ConfigError::NoConfigDir)?;
-    let Some(out) = edit_file(read(&path)?.as_deref(), &path, setting, config)? else {
+    let Some(out) = edit_file(read(&path)?.as_deref(), &path, settings, config)? else {
         return Ok(());
     };
     let write = |source| ConfigError::Write { path: path.clone(), source };
@@ -184,7 +198,7 @@ mod tests {
     }
 
     fn edit(text: Option<&str>, setting: Setting, config: &Config) -> Result<Option<String>, ConfigError> {
-        edit_file(text, Path::new("config.json"), setting, config)
+        edit_file(text, Path::new("config.json"), &[setting], config)
     }
 
     #[test]
@@ -270,7 +284,7 @@ mod tests {
     fn cycling_the_harness_clears_the_command_override() {
         let mut config = Config::default();
         Setting::Command.set_text(&mut config, "my-claude --x").expect("valid");
-        assert_eq!(Setting::Harness.change(&mut config), Change::Applied);
+        Setting::Harness.step(&mut config, Step::Forward);
         assert_eq!(config.harness, Harness::Codex);
         assert_eq!(config.command, None);
         assert_eq!(Setting::Command.show(&config), "codex");
@@ -280,8 +294,12 @@ mod tests {
     fn saving_the_harness_also_drops_the_cleared_command_and_the_old_key() {
         let before = r#"{"claude_command":["my-claude"],"icons":"nerdfont"}"#;
         let mut config = parse_str(before).expect("valid");
-        Setting::Harness.change(&mut config);
-        let after = edit(Some(before), Setting::Harness, &config).expect("ok").expect("written");
+        let original = config.clone();
+        Setting::Harness.step(&mut config, Step::Forward);
+        let settings = changed(&original, &config);
+        assert_eq!(settings, [Setting::Harness, Setting::Command]);
+        let after =
+            edit_file(Some(before), Path::new("config.json"), &settings, &config).expect("ok").expect("written");
         let object: Map<String, Value> = serde_json::from_str(&after).expect("json");
         assert_eq!(object.get("harness"), Some(&json!("codex")));
         assert!(!object.contains_key("command") && !object.contains_key("claude_command"), "{after}");
@@ -298,6 +316,36 @@ mod tests {
         assert_eq!(object.get("command"), Some(&json!(["other-claude", "--y"])));
         assert!(!object.contains_key("claude_command"), "{after}");
         assert_eq!(parse_str(&after).expect("valid"), config);
+    }
+
+    #[test]
+    fn step_back_undoes_step_forward_for_every_setting() {
+        let start = Config { harness: Harness::OpenCode, multiplexer: Multiplexer::Herdr, ..Config::default() };
+        for setting in SETTINGS {
+            let mut config = start.clone();
+            setting.step(&mut config, Step::Forward);
+            assert_eq!(setting.is_typed(), config == start, "{setting:?}: only a typed setting has no next value");
+            setting.step(&mut config, Step::Back);
+            assert_eq!(config, start, "{setting:?}");
+        }
+        let mut config = start.clone();
+        Setting::Harness.step(&mut config, Step::Back);
+        assert_eq!(config.harness, Harness::Codex);
+        Setting::Multiplexer.step(&mut config, Step::Back);
+        assert_eq!(config.multiplexer, Multiplexer::Tmux);
+    }
+
+    #[test]
+    fn changed_lists_each_setting_that_differs_and_one_save_writes_them_all() {
+        let before = Config::default();
+        assert_eq!(changed(&before, &before), []);
+        let after = Config { icons: IconSet::NerdFont, remove_on_merge: RemoveOnMerge::On, ..before.clone() };
+        let settings = changed(&before, &after);
+        assert_eq!(settings, [Setting::Icons, Setting::RemoveOnMerge]);
+        let text = edit_file(Some(r#"{"split":30}"#), Path::new("config.json"), &settings, &after)
+            .expect("ok")
+            .expect("written");
+        assert_eq!(text, "{\n  \"split\": 30,\n  \"icons\": \"nerdfont\",\n  \"remove_on_merge\": true\n}\n");
     }
 
     #[test]

@@ -164,9 +164,9 @@ pub enum WriteJob {
         target: RemoveTarget,
     },
     Clean(Vec<RemoveTarget>),
-    /// Save one setting to the config file.
+    /// Save the changed settings to the config file, in one write.
     SaveConfig {
-        setting: Setting,
+        settings: Vec<Setting>,
         config: Config,
     },
     /// Type a line into the session's Claude prompt and submit it.
