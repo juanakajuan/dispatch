@@ -56,7 +56,7 @@ fn enter_sends_the_typed_line_to_the_session_and_closes_the_field() {
     let cmds = press(&mut state, code(KeyCode::Enter));
     assert_eq!(sends_of(&cmds), [(issue_key(3), SendKind::Message, "yes, use plan B")]);
     assert!(matches!(state.focus, Focus::List));
-    assert_eq!(toast(&state), "Sending to #3");
+    assert_eq!(toast(&state), "Sending to #3…");
 }
 
 #[test]
@@ -95,11 +95,11 @@ fn esc_cancels_without_a_send() {
 fn the_send_result_shows_a_toast() {
     let (mut state, _) = app();
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::Message, result: Ok(()) });
-    assert_eq!(toast(&state), "Sent your message to #3");
+    assert_eq!(toast(&state), "Sent your message to #3.");
     assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Info));
 
     let result = Err(SessionError::NotRunning(issue_key(3)));
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::Message, result });
-    assert_eq!(toast(&state), "Message to #3 failed: #3 has no running session");
+    assert_eq!(toast(&state), "Sending the message to #3 failed: #3 has no running session.");
     assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Error));
 }

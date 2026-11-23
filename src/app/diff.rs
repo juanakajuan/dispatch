@@ -46,7 +46,7 @@ pub(super) fn read_diff(state: &mut State, key: SessionKey, result: Result<Diff,
         Ok(diff) => state.focus = Focus::Diff { key, scroll: 0, body: DiffBody::Read(diff) },
         Err(e) => {
             state.focus = Focus::List;
-            toast::error(state, format!("Reading the diff of {key} failed: {e}"));
+            toast::error(state, toast::failed(format!("Reading the diff of {key}"), e));
         }
     }
     Vec::new()

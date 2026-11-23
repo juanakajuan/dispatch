@@ -237,7 +237,7 @@ fn a_failed_save_toasts_and_a_good_one_does_not() {
     press(&mut state, Msg::Saved(Err(crate::config::ConfigError::Write { path: "/c/dispatch.json".into(), source })));
     assert_eq!(
         state.toast.as_ref().map(Toast::text),
-        Some("Saving settings failed: cannot write /c/dispatch.json: disk full")
+        Some("Saving settings failed: cannot write /c/dispatch.json: disk full.")
     );
 }
 

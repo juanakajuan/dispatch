@@ -52,7 +52,7 @@ fn m_twice_starts_a_merge_job_for_the_session_pr() {
     press(&mut state, key('3'));
     assert!(shows(&state, "m", "merge"));
     assert!(press(&mut state, key('m')).is_empty(), "the first press only arms");
-    assert_eq!(toast(&state), "Press m again to merge PR #10");
+    assert_eq!(toast(&state), "Press m again to merge PR #10.");
     let cmds = press(&mut state, key('m'));
     assert_eq!(merges(&cmds), [ASK]);
     assert!(sends(&cmds).is_empty(), "no agent turn for the merge itself");
@@ -70,7 +70,7 @@ fn m_merges_without_a_session_from_the_pr_or_the_issue() {
     press(&mut state, key('2'));
     press(&mut state, key('j'));
     press(&mut state, key('m'));
-    assert_eq!(toast(&state), "Press m again to merge PR #11");
+    assert_eq!(toast(&state), "Press m again to merge PR #11.");
     assert_eq!(merges(&press(&mut state, key('m'))), [MergeAsk { pr: PrNumber(11), consent: Consent::MergeOnly }]);
 }
 
@@ -141,7 +141,7 @@ fn another_key_cancels_the_new_session() {
     press(&mut state, key('k'));
     let cmds = press(&mut state, key('m'));
     assert!(starts(&cmds).is_empty() && merges(&cmds).is_empty());
-    assert_eq!(toast(&state), "Press m again to merge PR #10", "the m arms a fresh merge");
+    assert_eq!(toast(&state), "Press m again to merge PR #10.", "the m arms a fresh merge");
 }
 
 #[test]
@@ -164,7 +164,7 @@ fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
     assert!(starts(&cmds).is_empty());
     assert_eq!(
         toast(&state),
-        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\": BadChar(' ')"
+        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\": BadChar(' ')."
     );
 }
 
@@ -239,7 +239,7 @@ fn a_direct_merge_shows_the_method_and_refreshes_the_prs() {
             })),
         },
     );
-    assert_eq!(toast(&state), "Merged PR #10 (squash)");
+    assert_eq!(toast(&state), "Merged PR #10 (squash).");
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     assert!(sends(&cmds).is_empty());
     assert!(stops(&cmds).is_empty(), "no session on the branch");
@@ -271,7 +271,7 @@ fn a_direct_merge_stops_the_live_session_on_the_pr_branch() {
         state.sessions.insert(issue_key(3), session(3, live));
         let cmds = press(&mut state, merged_squash());
         assert_eq!(stops(&cmds), [issue_key(3)]);
-        assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session");
+        assert_eq!(toast(&state), "Merged PR #10 (squash) and stopped #3's session.");
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
     }
 }
@@ -282,7 +282,7 @@ fn a_direct_merge_closes_the_window_of_an_exited_session_on_the_pr_branch() {
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     let cmds = press(&mut state, merged_squash());
     assert_eq!(stops(&cmds), [issue_key(3)]);
-    assert_eq!(toast(&state), "Merged PR #10 (squash) and closed #3's window");
+    assert_eq!(toast(&state), "Merged PR #10 (squash) and closed #3's window.");
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn a_direct_merge_leaves_a_session_on_another_branch_alone() {
     state.sessions.insert(issue_key(2), session(2, SessionState::Running));
     let cmds = press(&mut state, merged_squash());
     assert!(stops(&cmds).is_empty(), "#2 is on another branch");
-    assert_eq!(toast(&state), "Merged PR #10 (squash)");
+    assert_eq!(toast(&state), "Merged PR #10 (squash).");
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn a_problem_pr_sends_the_running_agent_a_prompt_with_the_problem_and_method() {
 fn a_queued_merge_says_so() {
     let (mut state, _) = app();
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Ok(MergeOutcome::Queued)) });
-    assert_eq!(toast(&state), "PR #10 is in the merge queue");
+    assert_eq!(toast(&state), "PR #10 is in the merge queue.");
     assert!(cmds.iter().any(|c| matches!(c, Cmd::Job(Job::Read(ReadJob::FetchPrs)))));
 }
 
@@ -330,7 +330,7 @@ fn a_refused_merge_shows_a_toast_and_refreshes_and_a_failed_one_only_the_toast()
     assert_eq!(toast(&state), "PR #10 has checks that are still running. Press m again when they finish.");
     let cmds = press(&mut state, Msg::Merged { ask: ASK, run: ran(Err(gh_failed("not allowed"))) });
     assert!(cmds.is_empty());
-    assert_eq!(toast(&state), "Merge PR #10 failed: gh failed with code 1: not allowed");
+    assert_eq!(toast(&state), "Merging PR #10 failed: gh failed with code 1: not allowed.");
 }
 
 const ASK_READY: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MarkReadyThenMerge };
@@ -362,7 +362,7 @@ fn a_merge_that_marked_the_pr_ready_but_did_not_merge_says_so_and_refreshes() {
             handoff_after_ready(),
             "PR #10 has a merge conflict with main. Press m again to start a session for #3 that fixes it. PR #10 is now ready for review.",
         ),
-        (Err(gh_failed("boom")), "Merge PR #10 failed: gh failed with code 1: boom PR #10 is now ready for review."),
+        (Err(gh_failed("boom")), "Merging PR #10 failed: gh failed with code 1: boom. PR #10 is now ready for review."),
     ];
     for (result, text) in outcomes {
         let (mut state, _) = app();
@@ -384,7 +384,7 @@ fn a_merge_after_marking_ready_has_no_ready_note() {
         })),
     };
     press(&mut state, msg);
-    assert_eq!(toast(&state), "Merged PR #10 (squash)");
+    assert_eq!(toast(&state), "Merged PR #10 (squash).");
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn each_reason_m_can_not_act_keeps_its_sentence() {
             CannotFix::EachIssueBusy(pr).to_string(),
             "Each issue that PR #10 closes already has a session on another branch.",
         ),
-        (unusable.to_string(), "PR #10 has the branch name \"a..b\": BadSequence(\"..\")"),
+        (unusable.to_string(), "PR #10 has the branch name \"a..b\": BadSequence(\"..\")."),
         (
             CannotFix::ForkDeniesEdits(pr).to_string(),
             "PR #10 is from a fork that does not let maintainers push to it, so a session can not push a fix.",

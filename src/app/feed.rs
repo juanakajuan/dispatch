@@ -128,7 +128,7 @@ pub(super) fn observed(state: &mut State, result: Result<Observation, SessionErr
             state.transcripts = transcripts;
             state.work = work;
         }
-        Err(e) => toast::error(state, format!("sessions: {e}")),
+        Err(e) => toast::error(state, toast::failed("Reading the sessions", e)),
     }
     Vec::new()
 }

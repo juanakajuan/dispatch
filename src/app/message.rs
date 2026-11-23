@@ -27,7 +27,7 @@ pub(super) fn message_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
                 return Vec::new();
             }
             state.focus = Focus::List;
-            toast::info(state, format!("Sending to {key}"));
+            toast::info(state, format!("Sending to {key}…"));
             return vec![Cmd::Job(Job::Write(WriteJob::Send { key, kind: SendKind::Message, text }))];
         }
         Some(Key::Code(KeyCode::Esc)) => state.focus = Focus::List,
@@ -43,10 +43,12 @@ pub(super) fn message_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
 
 pub(super) fn sent(state: &mut State, key: SessionKey, kind: SendKind, result: Result<(), SessionError>) -> Vec<Cmd> {
     match (kind, result) {
-        (SendKind::MergeFix, Ok(())) => toast::info(state, format!("Asked {key}'s agent to fix and merge its PR")),
-        (SendKind::MergeFix, Err(e)) => toast::error(state, format!("Merge request to {key} failed: {e}")),
-        (SendKind::Message, Ok(())) => toast::info(state, format!("Sent your message to {key}")),
-        (SendKind::Message, Err(e)) => toast::error(state, format!("Message to {key} failed: {e}")),
+        (SendKind::MergeFix, Ok(())) => toast::info(state, format!("Asked {key}'s agent to fix and merge its PR.")),
+        (SendKind::MergeFix, Err(e)) => {
+            toast::error(state, toast::failed(format!("Sending the merge request to {key}"), e));
+        }
+        (SendKind::Message, Ok(())) => toast::info(state, format!("Sent your message to {key}.")),
+        (SendKind::Message, Err(e)) => toast::error(state, toast::failed(format!("Sending the message to {key}"), e)),
     }
     Vec::new()
 }

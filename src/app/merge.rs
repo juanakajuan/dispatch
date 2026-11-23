@@ -84,7 +84,7 @@ impl fmt::Display for CannotFix {
             CannotFix::EachIssueBusy(n) => {
                 write!(f, "Each issue that PR {n} closes already has a session on another branch.")
             }
-            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why:?}"),
+            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why:?}."),
             CannotFix::ForkDeniesEdits(n) => write!(
                 f,
                 "PR {n} is from a fork that does not let maintainers push to it, so a session can not push a fix."
@@ -170,7 +170,9 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         }
         // A cached refusal still arms, because the list can be stale and the
         // job asks GitHub again.
-        (MergePlan::Direct | MergePlan::Refuse(_), _) => (Consent::MergeOnly, format!("Press m again to merge PR {n}")),
+        (MergePlan::Direct | MergePlan::Refuse(_), _) => {
+            (Consent::MergeOnly, format!("Press m again to merge PR {n}."))
+        }
         (MergePlan::MarkReady, _) => {
             (Consent::MarkReadyThenMerge, format!("PR {n} is a draft. Press m again to mark it ready and merge it."))
         }
@@ -181,7 +183,7 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
         toast::info(state, expect);
         return Vec::new();
     }
-    toast::info(state, format!("Checking PR {n}"));
+    toast::info(state, format!("Checking PR {n}…"));
     vec![Cmd::Job(Job::Write(WriteJob::Merge(ask)))]
 }
 
@@ -254,7 +256,7 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             cmds
         }
         Ok(MergeOutcome::Queued) => {
-            toast::info(state, format!("PR {} is in the merge queue", ask.pr));
+            toast::info(state, format!("PR {} is in the merge queue.", ask.pr));
             let mut cmds = Vec::new();
             refresh_github(state, &mut cmds);
             cmds
@@ -265,7 +267,7 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
             Vec::new()
         }
         Err(e) => {
-            toast::error(state, format!("Merge PR {} failed: {e}", ask.pr));
+            toast::error(state, toast::failed(format!("Merging PR {}", ask.pr), e));
             Vec::new()
         }
     }
@@ -275,16 +277,16 @@ pub(super) fn merge_result(state: &mut State, ask: MergeAsk, result: Result<Merg
 fn after_merge(state: &mut State, pr: PrNumber, method: MergeMethod, head_oid: CommitOid) -> Vec<Cmd> {
     match session_on_pr(state, pr) {
         Some((key, session)) if state.config.remove_on_merge == RemoveOnMerge::On => {
-            toast::info(state, format!("Merged PR {pr} ({method}), removing {key}"));
+            toast::info(state, format!("Merged PR {pr} ({method}). Removing {key}…"));
             let target = RemoveTarget { key, merged_head: Some(head_oid) };
             vec![Cmd::Job(Job::Write(WriteJob::RemoveAfterMerge { pr, method, session, target }))]
         }
         Some((key, session)) => {
-            toast::info(state, format!("Merged PR {pr} ({method}) and {}", closed_phrase(key, session)));
+            toast::info(state, format!("Merged PR {pr} ({method}) and {}.", closed_phrase(key, session)));
             vec![Cmd::Job(Job::Write(WriteJob::Stop(key)))]
         }
         None => {
-            toast::info(state, format!("Merged PR {pr} ({method})"));
+            toast::info(state, format!("Merged PR {pr} ({method})."));
             Vec::new()
         }
     }
@@ -321,7 +323,7 @@ pub(super) fn removed_after_merge(
 ) -> Vec<Cmd> {
     match result {
         Ok(RemoveOutcome::Removed) => {
-            toast::info(state, format!("Merged PR {pr} ({method}) and removed {key}'s worktree and branch"));
+            toast::info(state, format!("Merged PR {pr} ({method}) and removed {key}'s worktree and branch."));
         }
         Ok(RemoveOutcome::Refused(why)) => {
             toast::info(
@@ -334,7 +336,7 @@ pub(super) fn removed_after_merge(
             );
         }
         Err(e) => {
-            toast::error(state, format!("Merged PR {pr} ({method}), but removing {key} failed: {e}"));
+            toast::error(state, toast::failed(format!("Merged PR {pr} ({method}), but removing {key}"), e));
         }
     }
     observe_now(state)

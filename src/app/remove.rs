@@ -61,11 +61,11 @@ pub(super) fn remove_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     }
     if armed != Some(&Armed::Remove(key)) {
         state.armed = Some(Armed::Remove(key));
-        toast::info(state, format!("Press D again to remove {key}'s worktree and branch"));
+        toast::info(state, format!("Press D again to remove {key}'s worktree and branch."));
         return Vec::new();
     }
     let target = remove_target(state, session);
-    toast::info(state, format!("Removing {key}"));
+    toast::info(state, format!("Removing {key}…"));
     vec![Cmd::Job(Job::Write(WriteJob::Remove(target)))]
 }
 
@@ -79,10 +79,10 @@ pub(super) fn clean_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let label = merged_sessions_count(issues.len());
     if !matches!(armed, Some(Armed::Clean(a)) if *a == issues) {
         state.armed = Some(Armed::Clean(issues));
-        toast::info(state, format!("Press c again to remove {label}"));
+        toast::info(state, format!("Press c again to remove {label}."));
         return Vec::new();
     }
-    toast::info(state, format!("Removing {label}"));
+    toast::info(state, format!("Removing {label}…"));
     vec![Cmd::Job(Job::Write(WriteJob::Clean(targets)))]
 }
 
@@ -102,9 +102,9 @@ fn refusal_sentence(key: SessionKey, why: RemoveRefusal) -> String {
 
 pub(super) fn removed(state: &mut State, key: SessionKey, result: Result<RemoveOutcome, SessionError>) -> Vec<Cmd> {
     match result {
-        Ok(RemoveOutcome::Removed) => toast::info(state, format!("Removed {key}'s worktree and branch")),
+        Ok(RemoveOutcome::Removed) => toast::info(state, format!("Removed {key}'s worktree and branch.")),
         Ok(RemoveOutcome::Refused(why)) => toast::info(state, refusal_sentence(key, why)),
-        Err(e) => toast::error(state, format!("Remove {key} failed: {e}")),
+        Err(e) => toast::error(state, toast::failed(format!("Removing {key}"), e)),
     }
     observe_now(state)
 }
@@ -123,9 +123,9 @@ fn format_clean_report(report: &CleanReport) -> String {
     let failed_details = report.failed.iter().map(|(i, e)| format!("{i} ({e})")).collect::<Vec<_>>().join(", ");
     match (report.removed.len(), report.skipped.len(), report.failed.len()) {
         (0, 0, 0) => "No merged sessions to clean.".to_string(),
-        (r, 0, 0) => format!("Removed {}", merged_sessions_count(r)),
+        (r, 0, 0) => format!("Removed {}.", merged_sessions_count(r)),
         (0, s, 0) => format!("Skipped {}: {skipped_details}.", merged_sessions_count(s)),
-        (0, 0, f) => format!("Failed to remove {}: {failed_details}.", merged_sessions_count(f)),
+        (0, 0, f) => toast::failed(format!("Removing {}", merged_sessions_count(f)), failed_details),
         (r, s, f) => {
             let mut parts = Vec::new();
             if r > 0 {
@@ -135,7 +135,7 @@ fn format_clean_report(report: &CleanReport) -> String {
                 parts.push(format!("Skipped {s}: {skipped_details}"));
             }
             if f > 0 {
-                parts.push(format!("Failed {f}: {failed_details}"));
+                parts.push(format!("Removing {f} failed: {failed_details}"));
             }
             format!("{}.", parts.join(". "))
         }

@@ -25,7 +25,7 @@ fn a_attaches_a_live_session_and_resumes_an_exited_one() {
     state.transcripts.insert(issue_key(3), Transcript { said: None, active_at: jiff::Timestamp::UNIX_EPOCH });
     let cmds = press(&mut state, key('a'));
     assert!(matches!(cmds.as_slice(), [Cmd::Job(Job::Write(WriteJob::Resume(n, _)))] if *n == issue_key(3)));
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with claude --continue"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with claude --continue…"));
 }
 
 #[test]
@@ -40,7 +40,7 @@ fn a_resumes_a_codex_session_with_no_transcript_using_the_session_harness() {
     assert_eq!(*n, issue_key(3));
     assert_eq!(launch.harness, Harness::Codex);
     assert_eq!(launch.command.words(), "codex");
-    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with codex resume --last"));
+    assert_eq!(state.toast.as_ref().map(Toast::text), Some("Resuming #3 with codex resume --last…"));
 }
 
 #[test]
@@ -114,14 +114,14 @@ fn a_finished_start_shows_its_session_at_once_with_its_warning() {
     let toast = state.toast.as_ref().map(Toast::text);
     assert_eq!(
         toast,
-        Some("Started #3 (warning: fetch failed, using the local origin/main: git failed with code 128: no network)")
+        Some("Started #3 (warning: fetch failed, using the local origin/main: git failed with code 128: no network).")
     );
 }
 
 #[test]
 fn toast_is_stamped_then_expires() {
     let (mut state, now) = app();
-    info(&mut state, "hi".to_string());
+    info(&mut state, "Hi.".to_string());
     press(&mut state, Msg::Tick(now));
     assert!(state.toast.is_some());
     press(&mut state, Msg::Tick(now + TOAST_FOR));
@@ -132,10 +132,15 @@ fn toast_is_stamped_then_expires() {
 fn a_sent_result_shows_a_toast() {
     let (mut state, _) = app();
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::MergeFix, result: Ok(()) });
-    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Asked #3's agent to fix and merge its PR"));
+    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Asked #3's agent to fix and merge its PR."));
     let result = Err(SessionError::NotRunning(issue_key(3)));
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::MergeFix, result });
-    assert!(state.toast.as_ref().is_some_and(|t| t.text() == "Merge request to #3 failed: #3 has no running session"));
+    assert!(
+        state
+            .toast
+            .as_ref()
+            .is_some_and(|t| t.text() == "Sending the merge request to #3 failed: #3 has no running session.")
+    );
 }
 
 #[test]
@@ -155,8 +160,8 @@ fn an_attach_failure_keeps_its_text_and_a_shell_failure_says_so() {
     let (mut state, _) = app();
     let failed = || Err(AttachError::EmptyCommand);
     update(&mut state, Msg::Attached { key: issue_key(3), to: AttachTo::Claude, result: failed() });
-    assert_eq!(toast(&state), "attach failed: empty attach command");
+    assert_eq!(toast(&state), "Attaching to #3 failed: empty attach command.");
     update(&mut state, Msg::Attached { key: issue_key(3), to: AttachTo::Shell, result: failed() });
-    assert_eq!(toast(&state), "Opening a shell in #3 failed: empty attach command");
+    assert_eq!(toast(&state), "Opening a shell in #3 failed: empty attach command.");
     assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Error));
 }

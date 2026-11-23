@@ -33,7 +33,7 @@ pub(super) fn markable(state: &State) -> bool {
 pub(super) fn mark_key(state: &mut State) {
     let Some(RowKey::Issue(n)) = selected_row(state).filter(|_| state.tab == Tab::Issues) else { return };
     if has_session(state, n) {
-        toast::info(state, format!("{n} already has a session"));
+        toast::info(state, format!("{n} already has a session."));
     } else if !state.marked.remove(&n) {
         state.marked.insert(n);
     }
@@ -106,7 +106,7 @@ fn confirm_batch(state: &mut State) -> Vec<Cmd> {
     };
     goto_session(state, (*first).into());
     let list = started.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
-    toast::info(state, format!("Starting {list}"));
+    toast::info(state, format!("Starting {list}…"));
     cmds
 }
 
