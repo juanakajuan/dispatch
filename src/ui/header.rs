@@ -82,7 +82,6 @@ pub(super) fn draw_header(frame: &mut Frame, area: Rect, state: &State, icons: &
             span(name, if on { palette::ACTIVE } else { palette::DIM }),
             span(format!(" {count}"), if on { palette::PLAIN } else { palette::DIM }),
         ];
-        // The shown tab's filter is in the prompt. Another tab's filter is a `/` after its count.
         if !on && !state.tabs.filter(tab).is_empty() {
             label.push(span(" /", palette::ACCENT));
         }

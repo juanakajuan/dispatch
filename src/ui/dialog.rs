@@ -213,12 +213,11 @@ pub(super) fn draw_buttons(frame: &mut Frame, row: Rect, hits: &mut HitMap) {
 
 /// A click target for a text input drawn in `rect`.
 fn text_target(input: &tui_textarea::TextArea<'static>, field: DialogField, rect: Rect) -> (Rect, HitTarget) {
-    // `styled_input` draws a clone whose scroll starts at 0. tui-textarea then
-    // scrolls only as far as keeps the cursor in view, which is this formula.
+    // tui-textarea does not show its scroll, so this copies its rule: https://github.com/rhysd/tui-textarea/issues/82
     let (row, col) = input.cursor();
-    let scrolled = |cursor: usize, len: u16| {
+    let scroll_from_zero = |cursor: usize, len: u16| {
         let cursor = u16::try_from(cursor).unwrap_or(u16::MAX);
         cursor.saturating_sub(len.saturating_sub(1))
     };
-    (rect, HitTarget::Text { field, top: scrolled(row, rect.height), left: scrolled(col, rect.width) })
+    (rect, HitTarget::Text { field, top: scroll_from_zero(row, rect.height), left: scroll_from_zero(col, rect.width) })
 }

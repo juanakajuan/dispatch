@@ -341,7 +341,6 @@ pub(super) fn draw_rows(
             fit_spans(name.into_iter().map(|s| Span::styled(s.content, name_style.patch(s.style))).collect(), name_w);
         let name_pad = name_w.saturating_sub(spans_width(&name));
         let mut line = vec![marker, Span::raw(" "), glyph, Span::raw(" ")];
-        // A name cut short can cut the number too: link only what is drawn.
         let x = u16::try_from(spans_width(&line)).unwrap_or(u16::MAX);
         let drawn = u16::try_from(spans_width(&name)).unwrap_or(u16::MAX);
         let number = link.map(|l| NumberLink { x, width: l.width.min(drawn), url: l.url }).filter(|l| l.width > 0);
@@ -355,9 +354,7 @@ pub(super) fn draw_rows(
     }
     let height = usize::from(area.height);
     let at = lines.iter().position(|(row, _)| row.as_ref().is_some_and(|r| Some(r.key) == selected)).unwrap_or(0);
-    // Keep the selected line at the center, as `scrolloff=999` does in Neovim,
-    // but never scroll past the last line.
-    let top = at.saturating_sub(height / 2).min(lines.len().saturating_sub(height));
+    let top = centered_top(at, height, lines.len());
     for (i, (row, line)) in lines.into_iter().skip(top).take(height).enumerate() {
         let rect = Rect::new(area.x, area.y + u16::try_from(i).unwrap_or(0), area.width, 1);
         frame.render_widget(Paragraph::new(line), rect);
@@ -389,4 +386,8 @@ fn group_style(group: Group) -> Style {
         | Group::Pr(PrGroup::Merged | PrGroup::Closed)
         | Group::Session(SessionGroup::Exited | SessionGroup::Merged) => palette::DIM,
     }
+}
+
+fn centered_top(selected: usize, height: usize, len: usize) -> usize {
+    selected.saturating_sub(height / 2).min(len.saturating_sub(height))
 }

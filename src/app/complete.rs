@@ -26,13 +26,10 @@ pub(super) enum Step {
 /// Puts the next or previous choice in place of the word at the end of the
 /// filter. With no choice, the filter stays as it is.
 pub(super) fn complete(state: &mut State, step: Step) {
-    // A sole choice is not kept, so the next Tab goes on from it: `state:`
-    // then offers the state words.
-    let live = state
-        .completion
-        .take()
+    let previous = state.completion.take();
+    let still_cycling = previous
         .filter(|c| c.choices.len() > 1 && state.filter().get(c.start..) == c.choices.get(c.at).map(String::as_str));
-    let c = if let Some(mut c) = live {
+    let c = if let Some(mut c) = still_cycling {
         c.at = step.from(Some(c.at), c.choices.len());
         c
     } else {

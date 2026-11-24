@@ -156,7 +156,6 @@ fn a_burst_of_events_makes_one_fetch_and_an_event_during_a_fetch_makes_one_more(
     let at = now + GITHUB_COOLDOWN;
     assert_eq!(github_fetches(&press(&mut state, Msg::Tick(at))), 2);
 
-    // This fetch may have started before the change, so another one follows it.
     press(&mut state, Msg::FocusGained);
     let later = at + GITHUB_COOLDOWN;
     assert_eq!(github_fetches(&press(&mut state, Msg::Tick(later))), 0, "waits for the fetch in flight");

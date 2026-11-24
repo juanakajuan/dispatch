@@ -48,4 +48,17 @@ if grep -rnE 'toast\.text(\(\))?\.contains\(|text(\(\))?\.contains\("failed"\)' 
   echo "The view colours a toast by its words, so a warning that says \"failed\" turns red. Match on toast.level() instead."; fail=1
 fi
 
+# A run of full-line `//` comments passes when one of its lines has a link.
+# shellcheck disable=SC2016
+if ! find src -name '*.rs' | sort | xargs awk '
+  function flush() { if (run != "" && !linked) { printf "%s", run; bad = 1 } run = ""; linked = 0 }
+  FNR == 1 { flush() }
+  /^[[:space:]]*\/\/([^\/!]|$)/ { run = run FILENAME ":" FNR ": " $0 "\n"; if (/https:\/\//) linked = 1; next }
+  { flush() }
+  /[],;{})][[:space:]]+\/\/([^\/!]|$)/ && !/\/\/.*https:\/\// { print FILENAME ":" FNR ": " $0; bad = 1 }
+  /(^|[[:space:]])\/\*([^*!]|$)/ { print FILENAME ":" FNR ": " $0; bad = 1 }
+  END { flush(); exit bad }'; then
+  echo "A plain comment. Make the code say it: name a function, a constant, or a variable, or put the rule in a test. A comment about a tool that dispatch cannot change stays only with an https:// link to the issue or doc that forces it. Doc comments (/// and //!) are not affected."; fail=1
+fi
+
 exit "$fail"

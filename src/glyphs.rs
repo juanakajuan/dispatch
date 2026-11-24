@@ -62,27 +62,28 @@ pub const UNICODE: Icons = Icons {
     pushed: "✓",
 };
 
+// Look up each code point at https://www.nerdfonts.com/cheat-sheet
 pub const NERD_FONT: Icons = Icons {
-    running: "\u{f444}",       // nf-oct-dot_fill
-    needs_you: "\u{f421}",     // nf-oct-alert
-    exited: "\u{f4aa}",        // nf-oct-circle
-    starting: "\u{f4e3}",      // nf-oct-hourglass
-    check_pass: "\u{f42e}",    // nf-oct-check
-    check_fail: "\u{f467}",    // nf-oct-x
-    check_pending: "\u{f444}", // nf-oct-dot_fill
-    check_none: "\u{f48b}",    // nf-oct-dash
-    pr_open: "\u{f407}",       // nf-oct-git_pull_request
-    pr_draft: "\u{f4dd}",      // nf-oct-git_pull_request_draft
-    pr_merged: "\u{f419}",     // nf-oct-git_merge
-    pr_closed: "\u{f4dc}",     // nf-oct-git_pull_request_closed
-    idle: "\u{f48b}",          // nf-oct-dash
-    radio_on: "\u{f043e}",     // nf-md-radiobox_marked
-    radio_off: "\u{f043d}",    // nf-md-radiobox_blank
-    marked: "\u{f14a}",        // nf-fa-check_square
-    uncommitted: "\u{f459}",   // nf-oct-diff_modified
-    to_push: "\u{f431}",       // nf-oct-arrow_up
-    to_pull: "\u{f433}",       // nf-oct-arrow_down
-    pushed: "\u{f42e}",        // nf-oct-check
+    running: "\u{f444}",
+    needs_you: "\u{f421}",
+    exited: "\u{f4aa}",
+    starting: "\u{f4e3}",
+    check_pass: "\u{f42e}",
+    check_fail: "\u{f467}",
+    check_pending: "\u{f444}",
+    check_none: "\u{f48b}",
+    pr_open: "\u{f407}",
+    pr_draft: "\u{f4dd}",
+    pr_merged: "\u{f419}",
+    pr_closed: "\u{f4dc}",
+    idle: "\u{f48b}",
+    radio_on: "\u{f043e}",
+    radio_off: "\u{f043d}",
+    marked: "\u{f14a}",
+    uncommitted: "\u{f459}",
+    to_push: "\u{f431}",
+    to_pull: "\u{f433}",
+    pushed: "\u{f42e}",
 };
 
 impl IconSet {

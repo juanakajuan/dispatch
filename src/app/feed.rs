@@ -97,7 +97,6 @@ pub(super) fn tick(state: &mut State, now: Instant) -> Vec<Cmd> {
     let idle = !state.issues.poll.in_flight() && !state.prs.poll.in_flight();
     let soon = state.due.github_soon && idle && now >= state.due.github_sent + GITHUB_COOLDOWN;
     if soon || now >= state.due.github {
-        // A fetch already in flight may predate the event, so `soon` waits for it.
         if idle {
             state.due.github_soon = false;
         }

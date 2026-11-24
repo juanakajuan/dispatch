@@ -143,7 +143,6 @@ pub(super) const fn bar(desc: &'static str, when: When) -> BarEntry {
 
 /// The one table behind key handling, the key bar, and the keybinds menu.
 pub static BINDINGS: &[Binding] = &[
-    // First: the key bar keeps this order and a narrow terminal clips its end.
     Binding {
         keys: &[Key::Char('?')],
         action: Action::Keybinds,
@@ -301,7 +300,6 @@ pub static BINDINGS: &[Binding] = &[
         desc: "clear the filter",
         bar: &[],
     },
-    // Not in the key bar: the footer shows `S sort: <mode>`.
     Binding {
         keys: &[Key::Char('S')],
         action: Action::Sort,
@@ -365,7 +363,6 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
             vec![hint2(j, k, "move"), hint(enter, "edit"), hint(esc, "cancel")]
         }
         Focus::Settings(_) => {
-            // A click on `h/l` selects the next value, as `l` does.
             let change = Hint { keys: labels(&[Key::Char('h'), Key::Char('l')]), desc: "change", key: Key::Char('l') };
             vec![hint2(j, k, "move"), change, hint(enter, "save"), hint(esc, "cancel")]
         }
@@ -463,7 +460,6 @@ pub(super) fn act(state: &mut State, action: Action, armed: Option<&Armed>) -> V
         Action::Filter => state.focus = Focus::Filter,
         Action::ClearFilter => state.filter_mut().clear(),
         Action::Sort => {
-            // Pin the shown row first, so the first-row fallback can not move it.
             if let Some(key) = selected_row(state) {
                 select(state, key);
             }

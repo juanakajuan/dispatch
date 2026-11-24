@@ -76,7 +76,6 @@ impl Setting {
         let back = step == Step::Back;
         match self {
             Setting::DetectWaiting => config.detect_waiting = !config.detect_waiting,
-            // Two values: the previous one is the next one.
             Setting::Icons => config.icons = config.icons.next(),
             Setting::Multiplexer => {
                 config.multiplexer = if back { config.multiplexer.prev() } else { config.multiplexer.next() };

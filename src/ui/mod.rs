@@ -61,8 +61,8 @@ pub fn draw(frame: &mut Frame, state: &State) -> HitMap {
     frame.render_widget(rule(), rule1);
     frame.render_widget(rule(), rule2);
     draw_prompt(frame, prompt, state, &mut hits);
-    if !matches!(state.focus, Focus::List | Focus::Filter) {
-        // An overlay owns the mouse: only its own targets and the footer stay live.
+    let overlay_owns_mouse = !matches!(state.focus, Focus::List | Focus::Filter);
+    if overlay_owns_mouse {
         hits.targets.clear();
     }
     draw_footer(frame, footer, state, &mut hits);

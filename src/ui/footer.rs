@@ -53,7 +53,6 @@ pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &m
             spans.extend(filter_spans(state, palette::LABEL));
         }
         (Focus::List, true) => spans.push(span(app::keys::prompt_hint(state), palette::DIM)),
-        // Under a dialog or menu the list keys do not work, so it has no hint.
         (_, true) => {}
     }
     let used = spans_width(&spans);
@@ -122,7 +121,6 @@ fn fit_hints(mut hints: Vec<Hint>, room: usize) -> Vec<Hint> {
 /// target, and neither has a kept hint that `row_line` had to cut.
 pub(super) fn draw_footer(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
     let width = usize::from(area.width);
-    // `S` sorts only in the list, so a dialog, menu, or prompt hides the order.
     let mut sort = if matches!(state.focus, Focus::List) {
         vec![span("S", palette::ACCENT), span(format!(" sort: {}", state.tabs.sort_label(state.tab)), palette::DIM)]
     } else {

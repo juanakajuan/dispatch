@@ -40,6 +40,7 @@ A feature has one name. `src/app/<name>.rs` holds its state and flow, and `src/<
 | An error crosses a module as a `String` | `scripts/structure.sh` |
 | `app` or `ui` does I/O | `scripts/structure.sh` and clippy `disallowed-methods` |
 | Two bools where one enum fits | clippy `max-struct-bools`, `max-fn-params-bools` |
+| A plain `//` comment that explains code the code could say | `scripts/structure.sh` (a link to an outside issue or doc passes) |
 | A silenced lint | `#[allow]` is denied; `#[expect]` needs a reason |
 | The key bar cuts `? to keys` or `q to quit` | `ui/tests/footer.rs` |
 | The verify sandbox leaks your shell environment | `verify.sh doctor` |
