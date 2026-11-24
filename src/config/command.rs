@@ -77,7 +77,6 @@ impl AgentCommand {
                 (true, _, _) => arg.to_string(),
                 (false, false, _) => format!("'{arg}'"),
                 (false, true, false) => format!("\"{arg}\""),
-                // Both quotes: single-quote each run, and put each `'` between them in double quotes.
                 (false, true, true) => arg.split('\'').map(|run| format!("'{run}'")).collect::<Vec<_>>().join("\"'\""),
             }
         };

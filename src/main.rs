@@ -78,8 +78,6 @@ fn run() -> Result<(), RunError> {
     let ws = Workspace::discover(&cwd, config.multiplexer).map_err(RunError::Setup)?;
 
     let mut terminal = ratatui::init();
-    // A crashed earlier run can leave the alternate screen dirty, and the
-    // first draw only writes non-blank cells.
     terminal.clear().map_err(RunError::Terminal)?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -107,10 +105,7 @@ fn event_loop(terminal: &mut ratatui::DefaultTerminal, ws: &Workspace, config: c
     let context = Context { repo_name, open_with, start_preview: ws.start_preview() };
     let (mut state, mut cmds) = app::init(Instant::now(), config, context);
     let mut pending: Vec<Msg> = Vec::new();
-    // The links last written, and the size they were written at. ratatui
-    // writes a cell again only when it changes, and that drops its link, but
-    // then the bytes for that cell change too. A resize or an attach redraws
-    // every cell, so it writes the links again.
+    // ratatui cannot draw OSC 8 links, so dispatch writes them itself: https://github.com/ratatui/ratatui/issues/1028
     let mut shown_links: Option<(ratatui::layout::Rect, Vec<u8>)> = None;
     loop {
         for cmd in std::mem::take(&mut cmds) {

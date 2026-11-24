@@ -360,7 +360,6 @@ fn an_overlay_hides_the_list_hints_and_shows_its_own_hints_once() {
     ];
     for (name, keys) in overlays {
         let mut state = full_state();
-        // #3 has a session, so the batch dialog needs one more issue.
         state.issues.items.push(issue(1, "Add json output", &["feature"]));
         send(&mut state, KeyCode::Char('1'));
         state.tabs.issues.filter = "o".to_string();

@@ -42,8 +42,7 @@ pub(super) fn keybinds_lines() -> Vec<(Line<'static>, Option<Action>)> {
 pub(super) fn draw_keybinds(frame: &mut Frame, screen: Rect, scroll: u16, hits: &mut HitMap) -> u16 {
     let entries = keybinds_lines();
     let wanted: u16 = entries.len().try_into().unwrap_or(u16::MAX);
-    // The margin keeps the footer and its `esc to close` in view.
-    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let height = height_above_footer(screen, wanted);
     let inner = draw_box(frame, centered(screen, 64, height), " Keys ".to_string(), hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     let scroll = scroll.min(max_scroll);
@@ -86,7 +85,6 @@ pub(super) fn draw_settings(
             spans.push(span(format!("{shown}▏"), palette::ACTIVE));
         } else {
             let default_note = format!("   default: {}", setting.show(&default));
-            // A choice shows `< value >`: the arrows say that left and right change it.
             let (open, close) = if setting.is_typed() { ("", "") } else { ("< ", " >") };
             let room = room.saturating_sub(cells(&default_note) + cells(open) + cells(close)).max(1);
             let value = format!("{open}{}{close}", fit(&setting.show(&menu.pending), room));
@@ -132,8 +130,7 @@ pub(super) fn draw_summary(
     let text_width = usize::from(width.saturating_sub(6)).max(1);
     let lines = markdown::block(said.map_or("", |s| s.text.as_str()), text_width);
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
-    // The margin keeps the footer and its `esc to close` in view.
-    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let height = height_above_footer(screen, wanted);
     let inner = draw_box(frame, centered(screen, width, height), title, hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
@@ -153,7 +150,6 @@ pub(super) fn draw_diff(
 ) -> u16 {
     let width = screen.width.min(120);
     let text_width = usize::from(width.saturating_sub(6)).max(1);
-    // A terminal cell has no tab stop, so a tab would shift the rest of the line.
     let line = |text: &str, style: Style| Line::from(span(fit(&text.replace('\t', "    "), text_width), style));
     let lines: Vec<Line<'static>> = match body {
         DiffBody::Reading => vec![line("Reading the diff…", palette::DIM)],
@@ -165,8 +161,7 @@ pub(super) fn draw_diff(
             .collect(),
     };
     let wanted: u16 = lines.len().try_into().unwrap_or(u16::MAX);
-    // The margin keeps the footer and its `esc to close` in view.
-    let height = screen.height.saturating_sub(2).min(wanted.saturating_add(3));
+    let height = height_above_footer(screen, wanted);
     let inner = draw_box(frame, centered(screen, width, height), format!(" {key} diff "), hits);
     let max_scroll = wanted.saturating_sub(inner.height);
     frame.render_widget(Paragraph::new(lines).scroll((scroll.min(max_scroll), 0)), inner);
@@ -207,6 +202,13 @@ fn draw_box(frame: &mut Frame, area: Rect, title: String, hits: &mut HitMap) -> 
     frame.render_widget(block, area);
     draw_close(frame, area, hits);
     inner
+}
+
+const ROWS_LEFT_FOR_FOOTER: u16 = 2;
+const BORDER_AND_PADDING_ROWS: u16 = 3;
+
+fn height_above_footer(screen: Rect, lines: u16) -> u16 {
+    screen.height.saturating_sub(ROWS_LEFT_FOR_FOOTER).min(lines.saturating_add(BORDER_AND_PADDING_ROWS))
 }
 
 const CLOSE: &str = " esc ✕ ";

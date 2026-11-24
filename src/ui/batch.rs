@@ -12,12 +12,12 @@ use ratatui::widgets::{Block, BorderType, Clear, Padding, Paragraph};
 
 /// Rows that are not issue lines: label, blank, mode label and options, blank, note, blank, buttons.
 const FIXED_ROWS: u16 = 8;
+const BORDER_AND_PADDING_ROWS: u16 = 3;
 
 pub(super) fn draw_batch(frame: &mut Frame, screen: Rect, state: &State, batch: &BatchStart, hits: &mut HitMap) {
     let count = u16::try_from(batch.issues.len()).unwrap_or(u16::MAX);
     let width = screen.width.min(96);
-    // Borders and padding take 3 rows.
-    let height = count.saturating_add(FIXED_ROWS + 3).min(screen.height.min(28));
+    let height = count.saturating_add(FIXED_ROWS + BORDER_AND_PADDING_ROWS).min(screen.height.min(28));
     let area = Rect::new(
         screen.x + (screen.width - width) / 2,
         screen.y + screen.height.saturating_sub(height) / 2,

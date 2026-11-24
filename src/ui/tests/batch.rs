@@ -11,7 +11,6 @@ fn open_batch(state: &mut State) {
 #[test]
 fn the_batch_dialog_shows_the_title_the_issues_and_the_mode() {
     let mut state = full_state();
-    // #3 has a session in `full_state`, so mark #2 only and add one more issue.
     state.issues.items.push(issue(1, "Add json output", &["feature"]));
     send(&mut state, KeyCode::Char('j'));
     send(&mut state, KeyCode::Char(' '));

@@ -168,8 +168,6 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
                 }
             }
         }
-        // A cached refusal still arms, because the list can be stale and the
-        // job asks GitHub again.
         (MergePlan::Direct | MergePlan::Refuse(_), _) => {
             (Consent::MergeOnly, format!("Press m again to merge PR {n}."))
         }
@@ -228,11 +226,8 @@ pub(super) fn merged(state: &mut State, ask: MergeAsk, run: MergeRun) -> Vec<Cmd
         && !matches!(run.result, Ok(MergeOutcome::Merged { .. } | MergeOutcome::Queued));
     let refused = matches!(run.result, Ok(MergeOutcome::Refused(_)));
     let mut cmds = merge_result(state, ask, run.result);
-    if ended_ready {
-        // dispatch does not undo `gh pr ready`, so the toast must say it ran.
-        if let Some(toast) = &mut state.toast {
-            toast.append(&format!("PR {} is now ready for review.", ask.pr));
-        }
+    if ended_ready && let Some(toast) = &mut state.toast {
+        toast.append(&format!("PR {} is now ready for review.", ask.pr));
     }
     if ended_ready || refused {
         refresh_github(state, &mut cmds);
