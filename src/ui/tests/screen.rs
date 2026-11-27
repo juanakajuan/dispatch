@@ -57,7 +57,7 @@ fn issues_screen_shows_groups_rows_and_key_bar() {
         "PR #10 open",
         "Open 1",
         "· #2 Docs",
-        "s to start session",
+        "s to go to session",
         "a to attach",
         "x to stop",
         "S sort: attention",

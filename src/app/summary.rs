@@ -1,6 +1,7 @@
 use super::keys::{Key, key_of};
 use super::list::current_session;
 use super::msg::Cmd;
+use super::sessions::no_session;
 use super::toast;
 use super::{Focus, State};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -15,7 +16,7 @@ pub(super) fn has_transcript_summary(state: &State) -> bool {
 /// shows only its first line.
 pub(super) fn summary_key(state: &mut State) -> Vec<Cmd> {
     let Some((key, harness)) = current_session(state).map(|s| (s.key, s.harness)) else {
-        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        no_session(state);
         return Vec::new();
     };
     if !harness.has_transcript() {

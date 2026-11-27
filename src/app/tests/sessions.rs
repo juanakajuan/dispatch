@@ -176,3 +176,23 @@ fn an_attach_failure_keeps_its_text_and_a_shell_failure_says_so() {
     assert_eq!(toast(&state), "Opening a shell in #3 failed: empty attach command.");
     assert_eq!(state.toast.as_ref().map(Toast::level), Some(Level::Error));
 }
+
+#[test]
+fn s_on_an_issue_with_a_session_offers_to_go_to_it() {
+    let (mut state, _) = app();
+    state.sessions.insert(issue_key(3), session(3, SessionState::Running));
+    assert!(!shows(&state, "s", "start session"));
+    assert!(shows(&state, "s", "go to session"));
+    press(&mut state, key('s'));
+    assert_eq!(state.tab, Tab::Sessions);
+}
+
+#[test]
+fn x_on_an_exited_session_says_it_is_not_running() {
+    let (mut state, _) = app();
+    assert!(press(&mut state, key('x')).is_empty());
+    assert_eq!(toast(&state), "No session for this issue. Press s to start one.");
+    state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
+    assert!(press(&mut state, key('x')).is_empty());
+    assert_eq!(toast(&state), "#3 is not running. Press a to resume it.");
+}
