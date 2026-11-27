@@ -1,5 +1,6 @@
 use super::State;
 use super::filter::{Facets, Has, Is, Query};
+use super::text_field::TextField;
 use super::toast;
 use crate::domain::{GithubRef, Issue, IssueNumber, PrBranch, PrNumber, PrState, PullRequest, SessionKey};
 use crate::session::{Session, SessionState};
@@ -127,12 +128,12 @@ pub struct Tabs {
 pub struct TabState<K, S> {
     pub selected: Option<K>,
     pub sort: S,
-    pub filter: String,
+    pub filter: TextField,
 }
 
 impl<K, S: Default> Default for TabState<K, S> {
     fn default() -> Self {
-        TabState { selected: None, sort: S::default(), filter: String::new() }
+        TabState { selected: None, sort: S::default(), filter: TextField::default() }
     }
 }
 
@@ -155,6 +156,10 @@ impl Tabs {
     }
 
     pub fn filter(&self, tab: Tab) -> &str {
+        self.filter_field(tab).text()
+    }
+
+    pub fn filter_field(&self, tab: Tab) -> &TextField {
         match tab {
             Tab::Issues => &self.issues.filter,
             Tab::Prs => &self.prs.filter,
@@ -162,7 +167,7 @@ impl Tabs {
         }
     }
 
-    pub(super) fn filter_mut(&mut self, tab: Tab) -> &mut String {
+    pub(super) fn filter_mut(&mut self, tab: Tab) -> &mut TextField {
         match tab {
             Tab::Issues => &mut self.issues.filter,
             Tab::Prs => &mut self.prs.filter,

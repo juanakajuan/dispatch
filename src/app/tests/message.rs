@@ -45,7 +45,7 @@ fn enter_sends_the_typed_line_to_the_session_and_closes_the_field() {
     typed(&mut state, "yes, use plan Bx");
     press(&mut state, code(KeyCode::Backspace));
     assert!(
-        matches!(&state.focus, Focus::Message { key: SessionKey::Issue(IssueNumber(3)), text } if text == "yes, use plan B"),
+        matches!(&state.focus, Focus::Message { key: SessionKey::Issue(IssueNumber(3)), text } if text.text() == "yes, use plan B"),
         "list keys type into the field, and backspace deletes"
     );
     assert_eq!(

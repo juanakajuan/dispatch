@@ -48,6 +48,7 @@ mod remove;
 mod sessions;
 mod sort;
 mod summary;
+mod text_field;
 mod toast;
 
 pub(super) fn key(c: char) -> Msg {

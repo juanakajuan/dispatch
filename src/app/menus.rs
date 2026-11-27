@@ -1,6 +1,7 @@
 use super::keys::{Key, key_of};
 use super::mouse::press_key;
 use super::msg::{Cmd, Job, WriteJob};
+use super::text_field::TextField;
 use super::{Focus, State};
 use crate::config::Config;
 use crate::config::settings::{self, SETTINGS, Setting, Step};
@@ -24,7 +25,7 @@ impl SettingsMenu {
 /// A typed value being edited. The error belongs here, so a browsing menu
 /// can not show one.
 pub struct SettingEdit {
-    pub input: tui_textarea::TextArea<'static>,
+    pub input: TextField,
     pub error: Option<String>,
 }
 
@@ -53,8 +54,7 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
             Some(Key::Char('l') | Key::Code(KeyCode::Right)) => step(menu, &state.config, Step::Forward),
             Some(Key::Code(KeyCode::Esc) | Key::Char(',')) => state.focus = Focus::List,
             Some(Key::Code(KeyCode::Enter)) if menu.at.is_typed() => {
-                let mut input = tui_textarea::TextArea::new(vec![menu.at.show(&menu.pending)]);
-                input.move_cursor(tui_textarea::CursorMove::End);
+                let input = TextField::new(&menu.at.show(&menu.pending));
                 menu.edit = Some(SettingEdit { input, error: None });
             }
             Some(Key::Code(KeyCode::Enter)) => return save(state),
@@ -64,12 +64,12 @@ pub(super) fn settings_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
     };
     match key {
         Some(Key::Code(KeyCode::Esc)) => menu.edit = None,
-        Some(Key::Code(KeyCode::Enter)) => match menu.at.set_text(&mut menu.pending, &edit.input.lines().join("")) {
+        Some(Key::Code(KeyCode::Enter)) => match menu.at.set_text(&mut menu.pending, edit.input.text()) {
             Ok(()) => return save(state),
             Err(e) => edit.error = Some(e.to_string()),
         },
         _ => {
-            edit.input.input(*ev);
+            edit.input.edit(ev);
             edit.error = None;
         }
     }

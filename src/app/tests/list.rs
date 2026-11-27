@@ -154,12 +154,12 @@ fn clicking_the_filter_prompt_opens_the_filter_and_clicking_clear_removes_it() {
     assert!(matches!(state.focus, Focus::Filter));
 
     let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
-    *state.filter_mut() = "json".to_string();
+    state.filter_mut().set("json");
     press(&mut state, click(0, 0, now));
     assert!(state.filter().is_empty());
 
     let (mut state, now) = with_target(HitTarget::Key(Key::Code(KeyCode::Esc)));
-    *state.filter_mut() = "json".to_string();
+    state.filter_mut().set("json");
     state.focus = Focus::Filter;
     press(&mut state, click(0, 0, now));
     assert!(state.filter().is_empty() && matches!(state.focus, Focus::List), "in the filter, clear also closes it");
