@@ -44,6 +44,20 @@ fn a_resumes_a_codex_session_with_no_transcript_using_the_session_harness() {
 }
 
 #[test]
+fn a_resume_of_a_plan_first_session_says_it_keeps_plan_mode() {
+    let (mut state, _) = app();
+    let mut exited = session(3, SessionState::Exited);
+    exited.harness = Harness::Codex;
+    exited.mode = crate::domain::Mode::PlanFirst;
+    state.sessions.insert(issue_key(3), exited);
+    press(&mut state, key('a'));
+    assert_eq!(
+        state.toast.as_ref().map(Toast::text),
+        Some("Resuming #3 with codex resume --last --sandbox read-only…")
+    );
+}
+
+#[test]
 fn a_resume_keeps_a_claude_session_on_claude_when_the_config_changes() {
     let (mut state, _) = app();
     state.config.harness = Harness::Codex;

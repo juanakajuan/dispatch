@@ -51,6 +51,7 @@ impl World {
                 &self.worktrees,
                 &self.markers,
                 &markers::Harnesses::new(),
+                &markers::Modes::new(),
                 &self.windows,
             )),
             worktrees: self.worktrees.clone(),
@@ -108,7 +109,7 @@ fn origin(remote_ref: &str) -> OriginRef {
 }
 
 fn mark(branch: &str) -> Step {
-    Step::Mark { branch: br(branch), key: issue_key(142), harness: Harness::Claude }
+    Step::Mark { branch: br(branch), key: issue_key(142), harness: Harness::Claude, mode: Mode::Implement }
 }
 
 fn steps(plan: Result<StartPlan, StartConflict>) -> Vec<Step> {
@@ -307,7 +308,7 @@ fn pr_step_add(from: Option<&str>) -> Step {
 }
 
 fn pr_mark() -> Step {
-    Step::Mark { branch: br("chore/dep"), key: pr_key(7), harness: Harness::Claude }
+    Step::Mark { branch: br("chore/dep"), key: pr_key(7), harness: Harness::Claude, mode: Mode::Implement }
 }
 
 fn pr_open() -> Step {
@@ -331,7 +332,7 @@ fn plan_for_a_fork_pr_key_fetches_the_fork_branch_and_marks_it_for_the_pr() {
         branch: br("fork/pr-7"),
     };
     let add = Step::AddWorktree { dir: PathBuf::from(PR_TARGET), branch: br("fork/pr-7"), from: None };
-    let mark = Step::Mark { branch: br("fork/pr-7"), key: pr_key(7), harness: Harness::Claude };
+    let mark = Step::Mark { branch: br("fork/pr-7"), key: pr_key(7), harness: Harness::Claude, mode: Mode::Implement };
     assert_eq!(got, [fetch_fork, add, mark, pr_open()]);
 }
 
@@ -373,7 +374,9 @@ fn plan_marks_and_launches_the_chosen_harness() {
     let mut r = req();
     r.mode = Mode::PlanFirst;
     let got = steps(plan_start(&World::empty().obs(), &r, &l));
-    assert!(got.contains(&Step::Mark { branch: br("fix/142-x"), key: issue_key(142), harness: Harness::Codex }));
+    let mark =
+        Step::Mark { branch: br("fix/142-x"), key: issue_key(142), harness: Harness::Codex, mode: Mode::PlanFirst };
+    assert!(got.contains(&mark), "the mode is marked, so a resume keeps it");
     let Some(Step::OpenWindow { argv, .. }) = got.last() else { panic!("no OpenWindow") };
     assert_eq!(argv, &["codex", "--sandbox", "read-only", "p"]);
 }

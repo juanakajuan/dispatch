@@ -1,8 +1,9 @@
 //! Session truth lives in git and the multiplexer, never in a dispatch file:
 //!
 //! - `git worktree list`: which worktrees exist, and their branch
-//! - `git config branch.<b>.dispatch-issue` and `dispatch-harness`: which
-//!   branches dispatch made, for which issue, and which agent runs on them
+//! - `git config branch.<b>.dispatch-issue`, `dispatch-harness`, and
+//!   `dispatch-mode`: which branches dispatch made, for which issue, which
+//!   agent runs on them, and whether it plans first
 //! - tmux window option `@dispatch-worktree` (and `@dispatch-waiting`): which
 //!   window runs the agent in which worktree
 //!
@@ -37,7 +38,7 @@ pub use start_argv::StartPreview;
 pub use work::{Push, Work, Works};
 
 use crate::config::{Harness, Multiplexer};
-use crate::domain::{BranchName, CommitOid, OriginRef, SessionKey, WorktreePath};
+use crate::domain::{BranchName, CommitOid, Mode, OriginRef, SessionKey, WorktreePath};
 use error::{SessionError, SetupError, StartWarning};
 use mux::{Backend, MuxEnv, Repo, detect_mux, each_backend};
 use request::{Launch, StartRequest};
@@ -55,6 +56,9 @@ pub struct Session {
     pub worktree: WorktreePath,
     /// From `dispatch-harness`. Claude when the branch has none.
     pub harness: Harness,
+    /// From `dispatch-mode`. A resume keeps it. Implement when the branch
+    /// has none.
+    pub mode: Mode,
     pub state: SessionState,
 }
 
@@ -200,7 +204,7 @@ impl Workspace {
         each_backend!(&self.mux, mux => ops::start(self, mux, req, launch))
     }
 
-    /// Runs `claude --continue` for an exited session: in the dead window
+    /// Runs `claude --continue`, in the session's mode, for an exited session: in the dead window
     /// when it is still there, else in a new window as in `start`. No-op if
     /// the window is alive.
     pub fn resume(&self, key: SessionKey, launch: &Launch) -> Result<(), SessionError> {

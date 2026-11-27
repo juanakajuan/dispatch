@@ -105,6 +105,7 @@ fn hc_start_adds_the_worktree_with_git_and_runs_claude_with_the_labels() {
             format!("git worktree add {} -b fix/142-x origin/main", dir.display()),
             "git config branch.fix/142-x.dispatch-issue 142".to_string(),
             "git config branch.fix/142-x.dispatch-harness claude".to_string(),
+            "git config branch.fix/142-x.dispatch-mode implement".to_string(),
             hc_run(&base, "claude line one\nit's \"line\" two;"),
         ]
     );

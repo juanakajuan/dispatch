@@ -71,16 +71,17 @@ fn start_runs_the_steps_in_order_and_a_second_start_runs_none() {
     let dir = base.join("orbit/.claude/worktrees/142");
     let calls = fake::calls();
     let ran = mutating(&calls);
-    assert_eq!(ran.len(), 6, "{ran:?}");
+    assert_eq!(ran.len(), 7, "{ran:?}");
     assert_eq!(ran[0], "git fetch origin main");
     assert_eq!(ran[1], format!("git worktree add {} -b fix/142-x origin/main", dir.display()));
     assert_eq!(ran[2], "git config branch.fix/142-x.dispatch-issue 142");
     assert_eq!(ran[3], "git config branch.fix/142-x.dispatch-harness claude");
-    assert!(ran[4].starts_with(&format!(
+    assert_eq!(ran[4], "git config branch.fix/142-x.dispatch-mode implement");
+    assert!(ran[5].starts_with(&format!(
         "tmux new-window -d -t $1: -P -F #{{window_id}} -c {} -n #142 -- claude p",
         dir.display()
     )));
-    assert!(ran[5].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
+    assert!(ran[6].starts_with("tmux set-option -w -t @4 @dispatch-worktree"));
     let exclude = base.join("orbit/.git/info/exclude");
     assert_eq!(std::fs::read_to_string(&exclude).expect("exclude written"), ".claude/worktrees/\n");
 
@@ -101,7 +102,7 @@ fn start_after_a_crash_between_steps_runs_only_the_rest() {
     assert_eq!(out.session.branch, br("fix/142-x"));
     let calls = fake::calls();
     let ran = mutating(&calls);
-    assert_eq!(ran.len(), 4, "{ran:?}");
+    assert_eq!(ran.len(), 5, "{ran:?}");
     assert!(ran[0].starts_with("git config branch.fix/142-x.dispatch-issue"));
     assert!(ran.iter().all(|c| !c.starts_with("git worktree add") && !c.starts_with("git fetch")));
 }
@@ -202,6 +203,33 @@ fn resume_respawns_a_dead_pane_in_an_old_sibling_worktree() {
     ws.resume(issue_key(142), &launch()).expect("resume");
     let last = fake::calls().pop().expect("a call");
     assert_eq!(last, format!("tmux respawn-window -k -t @4 -c {} -- claude --continue", dir.display()));
+}
+
+#[test]
+fn resume_of_a_plan_first_session_keeps_plan_mode() {
+    let base = temp_dir("resume-plan");
+    let ws = workspace(&base);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let listed = format!("@4\t1\t{}\t\n", dir.display());
+    let wt_text = format!("worktree {}\nbranch refs/heads/fix/142-x\n\n", dir.display());
+    fake::install(move |call| {
+        if call.starts_with("git worktree list") {
+            Ok(wt_text.clone())
+        } else if call.starts_with("git config --get-regexp") {
+            Ok("branch.fix/142-x.dispatch-issue 142\nbranch.fix/142-x.dispatch-mode plan\n".to_string())
+        } else if call.starts_with("tmux list-windows") {
+            Ok(listed.clone())
+        } else {
+            Ok(String::new())
+        }
+    });
+    ws.resume(issue_key(142), &launch()).expect("resume");
+    let last = fake::calls().pop().expect("a call");
+    assert_eq!(
+        last,
+        format!("tmux respawn-window -k -t @4 -c {} -- claude --continue --permission-mode plan", dir.display())
+    );
 }
 
 #[test]
