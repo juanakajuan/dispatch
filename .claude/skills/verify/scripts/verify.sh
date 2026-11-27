@@ -159,12 +159,12 @@ while IFS= read -r line; do
   hook Stop; echo "FAKE-CLAUDE waiting for input"
 done
 EOF
-  # Stand-in for the codex, opencode, and agy CLIs (the other harnesses). One script, three names
+  # Stand-in for the codex, opencode, agy, and pi CLIs (the other harnesses). One script, four names
   # on PATH: the harness's default program resolves to it. Logs argv to the same log as fake-claude,
   # takes no hooks, and echoes input. Type `exit` to make it exit.
   cat >"$RUN/bin/fake-agent" <<EOF
 #!/usr/bin/env bash
-# Verification scaffolding from verify.sh up. Stands in for the codex, opencode, and agy CLIs.
+# Verification scaffolding from verify.sh up. Stands in for the codex, opencode, agy, and pi CLIs.
 name="\$(basename "\$0")"
 echo "\$(date -Is) cwd=\$PWD pane=\${TMUX_PANE:-} agent=\$name argv:\$(printf ' %q' "\$@")" >>"$RUN/evidence/claude-calls.log"
 echo "FAKE-AGENT \$name started in \$PWD"
@@ -174,7 +174,7 @@ while IFS= read -r line; do
 done
 EOF
   chmod +x "$RUN/bin/fake-agent"
-  for agent in codex opencode agy; do ln -s fake-agent "$RUN/bin/$agent"; done
+  for agent in codex opencode agy pi; do ln -s fake-agent "$RUN/bin/$agent"; done
   chmod +x "$RUN/bin/"{gh,browser,fake-claude}
 
   jq -n --arg c "$RUN/bin/fake-claude" '{command: [$c], detect_waiting: true, multiplexer: "tmux"}' >"$RUN/xdg/dispatch/config.json"
