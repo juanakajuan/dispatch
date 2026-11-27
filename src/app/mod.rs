@@ -202,23 +202,26 @@ impl State {
 pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Key(ev) if ev.kind == KeyEventKind::Release => Vec::new(),
-        Msg::Key(ev) => match &state.focus {
-            Focus::Dialog(_) => dialog_key(state, &ev),
-            Focus::Batch(_) => batch_key(state, &ev),
-            Focus::Filter => filter_key(state, &ev),
-            Focus::Message { .. } => message_key(state, &ev),
-            Focus::Settings(_) => settings_key(state, &ev),
-            Focus::Keybinds { .. } => keybinds_key(state, &ev),
-            Focus::Summary { .. } => summary_overlay_key(state, &ev),
-            Focus::Diff { .. } => diff_overlay_key(state, &ev),
-            Focus::List => {
-                let armed = state.armed.take();
-                match action_for(&ev) {
-                    Some(action) => act(state, action, armed.as_ref()),
-                    None => Vec::new(),
+        Msg::Key(ev) => {
+            toast::dismiss_error(state);
+            match &state.focus {
+                Focus::Dialog(_) => dialog_key(state, &ev),
+                Focus::Batch(_) => batch_key(state, &ev),
+                Focus::Filter => filter_key(state, &ev),
+                Focus::Message { .. } => message_key(state, &ev),
+                Focus::Settings(_) => settings_key(state, &ev),
+                Focus::Keybinds { .. } => keybinds_key(state, &ev),
+                Focus::Summary { .. } => summary_overlay_key(state, &ev),
+                Focus::Diff { .. } => diff_overlay_key(state, &ev),
+                Focus::List => {
+                    let armed = state.armed.take();
+                    match action_for(&ev) {
+                        Some(action) => act(state, action, armed.as_ref()),
+                        None => Vec::new(),
+                    }
                 }
             }
-        },
+        }
         Msg::Mouse(ev, now) => on_mouse(state, ev, now),
         Msg::Tick(now) => tick(state, now),
         Msg::Issues { result, at } => {

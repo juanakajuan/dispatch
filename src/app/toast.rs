@@ -15,7 +15,8 @@ use std::fmt::Display;
 use std::time::Instant;
 
 /// A message for the key bar. `update` has no clock for key presses, so the
-/// next tick stamps `shown_at`, and a later tick removes the toast.
+/// next tick stamps `shown_at`, and a later tick removes an `Info` toast. An
+/// `Error` toast stays until the next key, so the user can read its cause.
 pub struct Toast {
     level: Level,
     text: String,
@@ -70,12 +71,19 @@ pub(super) fn error(state: &mut State, text: String) {
     state.toast = Some(Toast { level: Level::Error, text, shown_at: None });
 }
 
-/// Stamps a new toast, and removes one shown for `TOAST_FOR`.
+/// Stamps a new toast, and removes an `Info` toast shown for `TOAST_FOR`.
 pub(super) fn expire(state: &mut State, now: Instant) {
     let Some(toast) = &mut state.toast else { return };
-    match toast.shown_at {
-        None => toast.shown_at = Some(now),
-        Some(at) if now.duration_since(at) >= TOAST_FOR => state.toast = None,
-        Some(_) => {}
+    match (toast.level, toast.shown_at) {
+        (_, None) => toast.shown_at = Some(now),
+        (Level::Info, Some(at)) if now.duration_since(at) >= TOAST_FOR => state.toast = None,
+        (_, Some(_)) => {}
+    }
+}
+
+/// A key press removes an `Error` toast that is on screen.
+pub(super) fn dismiss_error(state: &mut State) {
+    if state.toast.as_ref().is_some_and(|t| t.level == Level::Error) {
+        state.toast = None;
     }
 }

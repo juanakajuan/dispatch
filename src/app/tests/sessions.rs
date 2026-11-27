@@ -129,6 +129,17 @@ fn toast_is_stamped_then_expires() {
 }
 
 #[test]
+fn an_error_toast_stays_until_the_next_key() {
+    let (mut state, now) = app();
+    error(&mut state, "Starting #3 failed: git failed with code 128.".to_string());
+    press(&mut state, Msg::Tick(now));
+    press(&mut state, Msg::Tick(now + TOAST_FOR * 10));
+    assert!(state.toast.is_some(), "time does not remove an error");
+    press(&mut state, key('j'));
+    assert!(state.toast.is_none(), "a key removes it");
+}
+
+#[test]
 fn a_sent_result_shows_a_toast() {
     let (mut state, _) = app();
     press(&mut state, Msg::Sent { key: issue_key(3), kind: SendKind::MergeFix, result: Ok(()) });
