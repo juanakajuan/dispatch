@@ -81,7 +81,8 @@ const PLAN_FIRST_LINE: &str = "Plan first. Do not change any files until I appro
 /// The argv that starts `harness` on a prompt. Built as argv, never as a
 /// shell string, so the prompt needs no quoting (tmux execs multi-arg
 /// commands directly, without `sh -c`). Only a harness that takes the
-/// waiting hooks gets them.
+/// waiting hooks gets them. pi gets `--` before the prompt, because it
+/// reads a prompt that starts with `-` as an option.
 pub(super) fn agent_argv(
     command: &AgentCommand,
     harness: Harness,
@@ -122,6 +123,10 @@ pub(super) fn agent_argv(
             tail.extend(["--prompt-interactive".to_string(), prompt.to_string()]);
             tail
         }
+        Harness::Pi => {
+            let prompt = if plan { format!("{PLAN_FIRST_LINE}\n\n{prompt}") } else { prompt.to_string() };
+            vec!["--".to_string(), prompt]
+        }
     };
     command.argv(&tail)
 }
@@ -145,7 +150,7 @@ pub(super) fn resume_argv(command: &AgentCommand, harness: Harness, hooks: Optio
             tail
         }
         Harness::Codex => ["resume", "--last"].map(String::from).to_vec(),
-        Harness::OpenCode | Harness::Antigravity => vec!["--continue".to_string()],
+        Harness::OpenCode | Harness::Antigravity | Harness::Pi => vec!["--continue".to_string()],
     };
     command.argv(&tail)
 }

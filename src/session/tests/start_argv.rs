@@ -60,6 +60,15 @@ fn antigravity_start_argv_ignores_hooks() {
 }
 
 #[test]
+fn pi_start_argv_ignores_hooks_ends_options_and_plans_in_the_prompt() {
+    let planned = format!("{PLAN_LINE}\n\n{PROMPT}");
+    for hooks in [None, Some("{}")] {
+        assert_eq!(start(Harness::Pi, Mode::Implement, hooks), words(&["pi", "--", PROMPT]));
+        assert_eq!(start(Harness::Pi, Mode::PlanFirst, hooks), words(&["pi", "--", &planned]));
+    }
+}
+
+#[test]
 fn a_command_override_leads_the_argv() {
     let command = AgentCommand::from_words("my-codex --x").expect("valid");
     assert_eq!(agent_argv(&command, Harness::Codex, None, Mode::Implement, "p"), words(&["my-codex", "--x", "p"]));
@@ -74,6 +83,7 @@ fn resume_argv_per_harness() {
     assert_eq!(resume(Harness::Codex, Some("{}")), words(&["codex", "resume", "--last"]));
     assert_eq!(resume(Harness::OpenCode, Some("{}")), words(&["opencode", "--continue"]));
     assert_eq!(resume(Harness::Antigravity, Some("{}")), words(&["agy", "--continue"]));
+    assert_eq!(resume(Harness::Pi, Some("{}")), words(&["pi", "--continue"]));
 }
 
 fn preview(mux: &StartPreview, key: SessionKey, branch: &str, from: &StartFrom) -> Vec<String> {

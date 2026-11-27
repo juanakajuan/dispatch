@@ -51,6 +51,7 @@ fn i_on_a_session_with_no_transcript_says_so_by_name() {
         (Harness::Codex, "Codex does not report what it said."),
         (Harness::OpenCode, "OpenCode does not report what it said."),
         (Harness::Antigravity, "Antigravity does not report what it said."),
+        (Harness::Pi, "Pi does not report what it said."),
     ] {
         let (mut state, _) = app();
         let mut running = session(3, SessionState::Running);
