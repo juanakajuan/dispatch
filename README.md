@@ -18,7 +18,7 @@ Run dispatch inside a git checkout that has a GitHub remote called `origin`. The
 cargo install --path .
 ```
 
-Then run `dispatch` in the checkout.
+Then run `dispatch` in the checkout. It takes no arguments. `dispatch --help` (or `-h`) prints the usage and the config file path, and `dispatch --version` (or `-V`) prints the version. Both work outside a git checkout. Any other argument is an error, and dispatch exits with code 2.
 
 ## Use
 
