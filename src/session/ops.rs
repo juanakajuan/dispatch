@@ -106,6 +106,7 @@ fn run_steps<M: Mux>(
             }
             Step::FetchFork { repo, head, branch } => git::fetch_fork(&ws.repo_root, &repo, &head, &branch)?,
             Step::AddWorktree { dir, branch, from } => {
+                clear_stale(ws, mux, &dir)?;
                 if let Err(e) = git::ensure_excluded(&ws.git_common_dir, WORKTREES_EXCLUDE) {
                     warnings.push(StartWarning::NotExcluded(e));
                 }
@@ -119,6 +120,19 @@ fn run_steps<M: Mux>(
         }
     }
     Ok(warnings)
+}
+
+/// The plan adds a worktree only where none is listed and the dir is free,
+/// so a git registration or a window for `dir` is left from a worktree that
+/// the user deleted by hand. Both go first: git refuses to add a worktree
+/// over a stale registration, and the old agent must not keep running
+/// next to the new one.
+fn clear_stale<M: Mux>(ws: &Workspace, mux: &M, dir: &std::path::Path) -> Result<(), SessionError> {
+    git::prune_worktrees(&ws.repo_root).map_err(SessionError::Git)?;
+    for stale in mux.list(ws.repo())?.iter().filter(|o| o.worktree.as_path() == dir) {
+        mux.stop(&stale.window)?;
+    }
+    Ok(())
 }
 
 pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, launch: &Launch) -> Result<(), SessionError> {

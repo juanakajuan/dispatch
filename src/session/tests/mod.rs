@@ -80,12 +80,15 @@ struct GitWorld {
     added: bool,
     marked: bool,
     branch_exists: bool,
+    /// The worktree dir was deleted by hand: git lists it as prunable and
+    /// refuses to add a worktree there until a prune.
+    stale: bool,
 }
 
 impl GitWorld {
     /// A worktree for issue 142 that carries its marker.
     fn started() -> GitWorld {
-        GitWorld { added: true, marked: true, branch_exists: false }
+        GitWorld { added: true, marked: true, ..GitWorld::default() }
     }
 
     fn answer(&mut self, call: &str, base: &Path) -> Option<Result<String, ProcError>> {
@@ -95,6 +98,12 @@ impl GitWorld {
             if self.added {
                 t = format!("{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\n\n", dir.display());
             }
+            if self.stale {
+                t = format!(
+                    "{t}worktree {}\nHEAD x\nbranch refs/heads/fix/142-x\nprunable gitdir file points to non-existent location\n\n",
+                    dir.display()
+                );
+            }
             Ok(t)
         } else if call.starts_with("git config --get-regexp") {
             if self.marked {
@@ -103,7 +112,16 @@ impl GitWorld {
                 Err(fake::fail("git", 1, ""))
             }
         } else if call.starts_with("git show-ref") {
-            if self.added || self.branch_exists { Ok(String::new()) } else { Err(fake::fail("git", 1, "")) }
+            if self.added || self.branch_exists || self.stale {
+                Ok(String::new())
+            } else {
+                Err(fake::fail("git", 1, ""))
+            }
+        } else if call.starts_with("git worktree prune") {
+            self.stale = false;
+            Ok(String::new())
+        } else if call.starts_with("git worktree add") && self.stale {
+            Err(fake::fail("git", 128, "fatal: is a missing but already registered worktree"))
         } else if call.starts_with("git worktree add") {
             std::fs::create_dir_all(&dir).expect("mkdir");
             self.added = true;

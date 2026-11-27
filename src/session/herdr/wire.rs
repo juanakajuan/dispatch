@@ -102,7 +102,7 @@ pub(super) fn window_obs(workspaces: &WorkspaceList, panes: &PaneList) -> Vec<Ob
         .iter()
         .filter_map(|ws| {
             let checkout = ws.worktree.as_ref()?.checkout_path.as_deref()?;
-            let worktree = WorktreePath::from_observed(checkout)?;
+            let worktree = WorktreePath::from_tag(checkout)?;
             let own: Vec<&PaneRow> = panes.panes.iter().filter(|p| p.workspace_id == ws.workspace_id).collect();
             let pane = own.iter().find(|p| p.agent.is_some()).or(own.first())?;
             let liveness = match &pane.agent {
