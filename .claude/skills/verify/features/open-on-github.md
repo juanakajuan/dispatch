@@ -35,7 +35,7 @@ Preconditions:
 
 ## Gotchas
 
-- `browser.log` gets a line only when gh calls the browser. If the toast shows `Open … failed:`, the gh error is in the same toast.
+- `browser.log` gets a line only when gh calls the browser. If the toast shows `Opening issue #N failed:` or `Opening PR #P failed:`, the gh error is in the same toast.
 - The `Opening …` toast is the only sign on the screen, and it goes after 5 s. Wait for it right after the key.
 - `j` and `k` move from the current row. A row that an earlier step selected stays selected, so press `k` until the top row first if you need to go up.
 - `up` removes `SSH_CONNECTION` and `SSH_TTY`, so a run from an SSH shell still tests the browser path. A plain `SSH_CONNECTION=… $V up` does not reach dispatch. Use `--over-ssh`.

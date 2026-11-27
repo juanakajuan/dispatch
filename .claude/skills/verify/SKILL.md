@@ -46,10 +46,12 @@ Options: `--size COLSxROWS` (default `160x45`), `--allow-merge` (lets `gh pr mer
 
 The default repo is the `origin` of this checkout. The journeys need live GitHub data (an open issue, an open PR). If the default repo has none, use `--repo` with a public repo that has some. The guard keeps it read-only.
 
-Pick a repo with fewer than about 50 PRs in total (open and closed). dispatch asks for 100 PRs with their checks and merge state in one GraphQL call, and on a larger repo GitHub stops it after about 10 s with `HTTP 502` or `HTTP 504`. The PR tab then stays `No pull requests.` with `refresh failed`. This happens on `ratatui/ratatui`, for example. Repos that worked on 2026-11-14:
+Pick a repo with fewer than about 50 PRs in total (open and closed). dispatch asks for 100 PRs with their checks and merge state in one GraphQL call, and on a larger repo GitHub stops it after about 10 s with `HTTP 502` or `HTTP 504`. The PR tab then stays `No pull requests.` with `refresh failed`. This happens on `ratatui/ratatui`, for example. Repos that worked on 2026-11-27:
 
-- `viur-framework/vi-shoelace`: open issues, merged PRs, and open PRs with failing checks that close an issue (merge new session and handoff).
-- `serkanyersen/dotstate`: an open `CLEAN` PR (direct merge, blocked by the guard).
+- `serkanyersen/dotstate` (41 PRs): open issues, an open `CLEAN` PR (direct merge, blocked by the guard), open PRs with failing checks that close no issue (PR-keyed new session and handoff), and fork PRs that allow maintainer edits and close an issue (fork new session).
+- `viur-framework/vi-shoelace` worked on 2026-11-14, but on 2026-11-27 it had no open PR.
+
+This checkout's own `origin` had no open PR on 2026-11-27, so pass `--repo`.
 
 Data changes. Check a repo before you use it, with the command in [features/README.md](features/README.md).
 
