@@ -118,12 +118,14 @@ mod tests {
         let text = "branch.fix/1-a.dispatch-issue 1\n\
                     branch.fix/1-a.dispatch-harness codex\n\
                     branch.feat/2-x.dispatch-harness gemini\n\
-                    branch.feat/3.dispatch-harness opencode\n";
+                    branch.feat/3.dispatch-harness opencode\n\
+                    branch.feat/4.dispatch-harness pi\n";
         let marked = parse_markers(text);
         assert_eq!(marked.sessions.len(), 1);
-        assert_eq!(marked.harnesses.len(), 2);
+        assert_eq!(marked.harnesses.len(), 3);
         assert_eq!(marked.harnesses[&branch("fix/1-a")], Harness::Codex);
         assert_eq!(marked.harnesses[&branch("feat/3")], Harness::OpenCode);
+        assert_eq!(marked.harnesses[&branch("feat/4")], Harness::Pi);
     }
 
     #[test]
@@ -137,7 +139,11 @@ mod tests {
     fn set_harness_writes_the_label() {
         fake::install(|_| Ok(String::new()));
         set_harness(Path::new("/"), &branch("fix/1-a"), Harness::Antigravity).expect("ok");
-        assert_eq!(fake::calls(), ["git config branch.fix/1-a.dispatch-harness antigravity"]);
+        set_harness(Path::new("/"), &branch("fix/2-b"), Harness::Pi).expect("ok");
+        assert_eq!(
+            fake::calls(),
+            ["git config branch.fix/1-a.dispatch-harness antigravity", "git config branch.fix/2-b.dispatch-harness pi"]
+        );
     }
 
     #[test]

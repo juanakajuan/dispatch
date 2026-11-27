@@ -1,13 +1,13 @@
 # dispatch
 
-dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start an agent session for it. The agent is Claude Code by default. Codex CLI, OpenCode, and Antigravity CLI also work (see [Config](#config)). Each session gets its own git worktree and its own tmux window.
+dispatch is a terminal app for one GitHub project. It lists the open issues and the pull requests. You pick an issue and start an agent session for it. The agent is Claude Code by default. Codex CLI, OpenCode, Antigravity CLI, and pi also work (see [Config](#config)). Each session gets its own git worktree and its own tmux window.
 
 ## Requirements
 
 - `git`
 - `tmux`
 - `gh`, logged in (`gh auth status`)
-- `claude`, the Claude Code CLI, or the program of the harness you choose: `codex`, `opencode`, or `agy`
+- `claude`, the Claude Code CLI, or the program of the harness you choose: `codex`, `opencode`, `agy`, or `pi`
 - A Rust toolchain to build it
 
 Run dispatch inside a git checkout that has a GitHub remote called `origin`. The remote must have a default branch ref. If `git symbolic-ref refs/remotes/origin/HEAD` fails, run `git remote set-head origin --auto`.
@@ -222,7 +222,7 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 ```
 
 - `detect_waiting` is on by default. dispatch passes `--settings` with five hooks to `claude`. They set a flag on the tmux window when Claude waits for you. A new window has the flag until Claude starts. Set it to `false` if the hooks conflict with yours.
-- `harness` is the agent that new sessions run: `"claude"` (the default), `"codex"`, `"opencode"`, or `"antigravity"`. dispatch writes the harness of each session to `branch.<name>.dispatch-harness`, and a resume uses that value, so a change here never resumes a Claude session with Codex. A session with no value is a Claude session.
+- `harness` is the agent that new sessions run: `"claude"` (the default), `"codex"`, `"opencode"`, `"antigravity"`, or `"pi"`. dispatch writes the harness of each session to `branch.<name>.dispatch-harness`, and a resume uses that value, so a change here never resumes a Claude session with Codex. A session with no value is a Claude session.
 - `command` is the program and its leading arguments for `harness`. dispatch appends its own arguments. The default is the program of the harness. The old key `claude_command` still loads, as `"harness": "claude"` with that command. A file with both `claude_command` and `command`, or with `claude_command` and another harness, is an error.
 
   | `harness` | Program | Start | Plan first | Resume |
@@ -231,8 +231,9 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
   | `codex` | `codex` | `[--sandbox read-only] "<prompt>"` | `--sandbox read-only` | `resume --last` |
   | `opencode` | `opencode` | `--prompt "<prompt>"` | no flag, so the prompt starts with `Plan first. Do not change any files until I approve the plan.` | `--continue` |
   | `antigravity` | `agy` | `[--mode plan] --prompt-interactive "<prompt>"` | `--mode plan` | `--continue` |
+  | `pi` | `pi` | `-- "<prompt>"` | no flag, so the prompt starts with `Plan first. Do not change any files until I approve the plan.` | `--continue` |
 
-  Only Claude has these features. `detect_waiting` hooks: the other harnesses show a running session as `running`, never `needs you`, on tmux. Summaries (`i` and the text on a row): they come from a Claude transcript. With herdr and the herdr app, the app reads the agent status itself, so every harness works. Session worktrees stay in `.claude/worktrees/<issue>` for every harness. It is only a folder name, and a move would orphan the sessions you already have.
+  Only Claude has these features. `detect_waiting` hooks: the other harnesses show a running session as `running`, never `needs you`, on tmux. Summaries (`i` and the text on a row): they come from a Claude transcript. With herdr and the herdr app, the app reads the agent status itself, so every harness works. pi asks whether to trust the project's own files the first time it runs in a worktree. dispatch does not pass `--approve`, because those files can run code and a PR from a fork can bring them. Attach with `a` to answer, as with Claude's trust question. Session worktrees stay in `.claude/worktrees/<issue>` for every harness. It is only a folder name, and a move would orphan the sessions you already have.
 - `icons` selects the symbols that mark states. `"unicode"` is the default. `"nerdfont"` uses Nerd Font icons. It needs a Nerd Font in your terminal. If the terminal has no Nerd Font, each icon shows as a box.
 
 - `multiplexer` selects where sessions run. `"auto"` is the default: herdr when dispatch runs inside herdr (`HERDR_ENV=1`), the herdr app when it runs inside the app (`HC_TERMINAL_SOCKET` is set), else tmux. `"tmux"` always uses tmux. `"herdr"` always uses herdr. `"herdr-app"` uses the herdr desktop app (herdr-core, the `hc` CLI). Outside herdr it keeps the sessions in a workspace named `dispatch-<repo>`, starts the herdr server when none runs, and attach opens herdr on that workspace. dispatch reads this setting at start, so a change applies the next time you start dispatch.

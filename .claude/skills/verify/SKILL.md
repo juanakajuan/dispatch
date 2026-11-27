@@ -125,7 +125,7 @@ Proof standards:
 - Drive the real user path: keys in the dispatch pane. Do not call `git worktree add` or `tmux new-window` yourself to make a state.
 - Capture the action and the result: a `shot` before the key and after it.
 - Check side effects with `state` and the logs, not only the screen. A start is proven by the worktree, the `branch.<b>.dispatch-issue` (or `dispatch-pr`) and `dispatch-harness` markers, the tagged window, and the argv in `claude-calls.log`.
-- The fake claude is the one mock. It stands at the `command` boundary that the config already exposes. `codex`, `opencode`, and `agy` stand-ins (`fake-agent`) sit on `PATH` for the other harnesses. The hooks it runs are dispatch's real hooks.
+- The fake claude is the one mock. It stands at the `command` boundary that the config already exposes. `codex`, `opencode`, `agy`, and `pi` stand-ins (`fake-agent`) sit on `PATH` for the other harnesses. The hooks it runs are dispatch's real hooks.
 - The gh guard does not fake answers. It passes reads to GitHub and refuses writes. A blocked merge proves the exact argv dispatch would run (in `gh-blocked.log`). It does not prove that GitHub accepts the merge.
 
 ## Cleanup

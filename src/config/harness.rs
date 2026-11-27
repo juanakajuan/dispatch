@@ -12,26 +12,29 @@ pub enum Harness {
     #[serde(rename = "opencode")]
     OpenCode,
     Antigravity,
+    Pi,
 }
 
 impl Harness {
-    const ALL: [Harness; 4] = [Harness::Claude, Harness::Codex, Harness::OpenCode, Harness::Antigravity];
+    const ALL: [Harness; 5] = [Harness::Claude, Harness::Codex, Harness::OpenCode, Harness::Antigravity, Harness::Pi];
 
     pub fn next(self) -> Harness {
         match self {
             Harness::Claude => Harness::Codex,
             Harness::Codex => Harness::OpenCode,
             Harness::OpenCode => Harness::Antigravity,
-            Harness::Antigravity => Harness::Claude,
+            Harness::Antigravity => Harness::Pi,
+            Harness::Pi => Harness::Claude,
         }
     }
 
     pub fn prev(self) -> Harness {
         match self {
-            Harness::Claude => Harness::Antigravity,
+            Harness::Claude => Harness::Pi,
             Harness::Codex => Harness::Claude,
             Harness::OpenCode => Harness::Codex,
             Harness::Antigravity => Harness::OpenCode,
+            Harness::Pi => Harness::Antigravity,
         }
     }
 
@@ -42,6 +45,7 @@ impl Harness {
             Harness::Codex => "codex",
             Harness::OpenCode => "opencode",
             Harness::Antigravity => "antigravity",
+            Harness::Pi => "pi",
         }
     }
 
@@ -57,6 +61,7 @@ impl Harness {
             Harness::Codex => "Codex",
             Harness::OpenCode => "OpenCode",
             Harness::Antigravity => "Antigravity",
+            Harness::Pi => "Pi",
         }
     }
 
@@ -67,6 +72,7 @@ impl Harness {
             Harness::Codex => "codex",
             Harness::OpenCode => "opencode",
             Harness::Antigravity => "agy",
+            Harness::Pi => "pi",
         }
     }
 
@@ -74,7 +80,7 @@ impl Harness {
     pub fn takes_waiting_hooks(self) -> bool {
         match self {
             Harness::Claude => true,
-            Harness::Codex | Harness::OpenCode | Harness::Antigravity => false,
+            Harness::Codex | Harness::OpenCode | Harness::Antigravity | Harness::Pi => false,
         }
     }
 
@@ -82,7 +88,7 @@ impl Harness {
     pub fn has_transcript(self) -> bool {
         match self {
             Harness::Claude => true,
-            Harness::Codex | Harness::OpenCode | Harness::Antigravity => false,
+            Harness::Codex | Harness::OpenCode | Harness::Antigravity | Harness::Pi => false,
         }
     }
 }
@@ -97,7 +103,7 @@ mod tests {
             let parsed: Harness = serde_json::from_str(&format!("\"{}\"", harness.label())).expect("parses");
             assert_eq!(parsed, harness);
             assert_eq!(Harness::from_label(harness.label()), Some(harness));
-            assert_eq!(harness.next().next().next().next(), harness);
+            assert_eq!(harness.next().next().next().next().next(), harness);
             assert_eq!(harness.next().prev(), harness);
         }
         assert_eq!(Harness::from_label("gemini"), None);

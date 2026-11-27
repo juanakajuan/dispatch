@@ -20,8 +20,8 @@
 //! }
 //! ```
 //!
-//! `harness` is `claude`, `codex`, `opencode`, or `antigravity`. `command` is
-//! the program and leading args for that harness, and its default is the
+//! `harness` is `claude`, `codex`, `opencode`, `antigravity`, or `pi`.
+//! `command` is the program and leading args for that harness, and its default is the
 //! harness's own program. The old `claude_command` key still loads, as
 //! `"harness": "claude"` with that command.
 
@@ -347,6 +347,9 @@ mod tests {
         assert_eq!(c.harness, Harness::Codex);
         assert_eq!(c.agent_command(Harness::Codex).argv(&[]), ["my-codex", "--x"]);
         assert_eq!(parse_str(r#"{"harness":"opencode"}"#).expect("loads").command, None);
+        let pi = parse_str(r#"{"harness":"pi"}"#).expect("loads");
+        assert_eq!(pi.harness, Harness::Pi);
+        assert_eq!(pi.agent_command(Harness::Pi).argv(&[]), ["pi"]);
     }
 
     #[test]
