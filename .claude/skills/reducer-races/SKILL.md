@@ -29,7 +29,7 @@ A sequence that reaches a state seen before is dropped. `Run::fingerprint` lists
 cargo test --release races -- --ignored --nocapture
 ```
 
-The test is `#[ignore]` so that `scripts/check.sh` stays fast. It takes about 15 to 60 seconds in release mode, plus the release build the first time. A debug build is 10 times slower. A pass prints `checked N states, every sequence of up to 9 events`. A failure prints the shortest counterexample, one line per event, and then the broken promise.
+The test is `#[ignore]` so that `scripts/check.sh` stays fast. It takes about 60 seconds in release mode, plus the release build the first time. A debug build is 10 times slower. A pass prints `checked N states, every sequence of up to 9 events`. A failure prints the shortest counterexample, one line per event, and then the broken promise.
 
 ## When to run it
 
@@ -43,20 +43,18 @@ The failure is a modeling error only when a step can not happen in the real app.
 
 A new key, `Msg`, or job that the explorer does not model panics with "model it before adding that key". Add it to `Event` and `World`, and keep each result true to the job in `src/jobs.rs`.
 
-## Known findings (open, at the sync commit)
+## Fixed findings
 
-The check fails on the current code. It shows only the shortest counterexample, so the second finding appears only after the first is fixed.
+The first run found two races. Both had one root cause: a start decided earlier was sent without checking `starting` and `sessions` again at send time. Each has a regression test.
 
-1. **A stale armed fix starts a second session.** The user presses `m` and `m` on #3 (PR #10), then `s`, so the start dialog for #3 opens. The merge job finds a conflict, and `handoff` arms `Armed::Fix` for #3, because the dialog has not started #3 yet. The user confirms the dialog, so #3 starts on `fix/3-retry-queue-drops-jobs`. A click on the Issues tab does not clear `armed`. The next `m` reaches `merge_key`, which calls `start_fix` for #3 on `fix/3-x` with no check of `starting`. (8 events.)
-2. **The start dialog starts a key that a fix session took.** PR #10 shows a conflict in the list, so `m` `m` asks with `Consent::StartFixSession`. The user opens the dialog for #3 with `s`. The merge job's `handoff` starts a fix session for #3, because `fixer` saw #3 free. The user confirms the dialog. `confirm` in `src/app/dialog.rs` calls `begin_start` for #3 with no check of `starting`. (8 events.)
+1. **A stale armed fix started a second session.** `merge_key` now ignores an `Armed::Fix` whose key has a session or a start in flight. Test: `an_armed_fix_for_an_issue_that_started_meanwhile_starts_nothing` in `src/app/tests/merge.rs`.
+2. **The start dialog started a key that a fix session took.** `confirm` in `src/app/dialog.rs` now starts nothing, goes to the session, and says `#N is already starting.` or `#N already has a session.` Test: `confirm_after_a_fix_session_took_the_issue_starts_nothing_and_goes_to_it` in `src/app/tests/dialog.rs`.
 
-Both have one root cause: a start decided earlier is sent without checking `starting` and `sessions` again at send time. A check in `start_fix` and in `confirm` closes both. With those two checks as a scratch change, the run passed on 36974 states.
-
-When a finding is fixed, remove it from this list in the same commit.
+A new failure is a new finding. List it here until it is fixed.
 
 ## Shown to fail
 
-With both scratch checks in place, the explorer caught this break in 9 events: `fixer` in `src/app/merge.rs` no longer skips keys in `state.starting`. A new property or a new event needs its own such break, run once and reverted.
+With both fixes in place, the explorer caught this break in 9 events: `fixer` in `src/app/merge.rs` no longer skips keys in `state.starting`. A new property or a new event needs its own such break, run once and reverted.
 
 ## Scope and limits
 

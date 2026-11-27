@@ -147,6 +147,8 @@ pub(super) fn merge_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let n = pr.number;
     if let Some(Armed::Fix { pr, method, req }) = armed
         && *pr == n
+        && !state.sessions.contains_key(&req.key)
+        && !state.starting.contains(&req.key)
     {
         state.handed_off.insert(n, *method);
         return start_fix(state, req.clone());
