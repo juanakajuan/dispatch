@@ -29,7 +29,7 @@ fn confirm_with_an_invalid_branch_keeps_the_dialog_open_with_an_error() {
     d.branch.insert_str(" bad name");
     let cmds = press(&mut state, ctrl('s'));
     assert!(cmds.is_empty());
-    assert!(dialog(&state).error.is_some());
+    assert_eq!(dialog(&state).error.as_deref(), Some("The branch name can not have a space."));
     assert!(state.starting.is_empty());
 }
 
