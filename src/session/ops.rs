@@ -170,6 +170,7 @@ fn remove_one<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> Result<
     if let Some((window, _)) = &row.window {
         mux.stop(window)?;
     }
+    mux.close_shells(&row.worktree)?;
     git::remove_worktree(&ws.repo_root, row.worktree.as_path()).map_err(git_err)?;
     git::delete_branch(&ws.repo_root, &row.branch).map_err(git_err)?;
     git::remove_fork_remote(&ws.repo_root, &row.branch).map_err(git_err)?;

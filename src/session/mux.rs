@@ -55,6 +55,12 @@ pub(super) trait Mux {
         window: Option<&Self::Window>,
     ) -> Result<AttachPlan, MuxError>;
 
+    /// Closes every shell that `shell` opened on `dir`, before a remove
+    /// deletes it. A backend whose `stop` already closes them keeps this.
+    fn close_shells(&self, _dir: &WorktreePath) -> Result<(), MuxError> {
+        Ok(())
+    }
+
     /// The Claude hooks that set the waiting flag, for a backend that cannot
     /// read the agent status itself.
     fn waiting_hooks(&self) -> Option<&'static str> {

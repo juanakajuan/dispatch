@@ -108,10 +108,13 @@ impl Mux for Hc {
     /// so ending only Claude's terminal would leave the space open, and any
     /// terminal the user opened there with it.
     fn stop(&self, window: &Pane) -> Result<(), MuxError> {
-        let label = format!("herdr.space={}", window.space);
-        let text = hc(["ls", "--all", "--json", "--label", label.as_str()])?;
-        let list: TerminalList = serde_json::from_str(&text).map_err(|e| unexpected_json(&e))?;
-        list.terminals.iter().try_for_each(|row| stop(&row.address))
+        close_space(&window.space)
+    }
+
+    /// A shell joins the space by its label, so it outlives a Claude
+    /// terminal that `rm` took away.
+    fn close_shells(&self, dir: &WorktreePath) -> Result<(), MuxError> {
+        close_space(&space_id(dir.as_path()))
     }
 
     /// `--force` types even when Claude waits on a dialog.
@@ -303,6 +306,13 @@ fn remove(address: &Address) -> Result<(), MuxError> {
         Err(e) if classify(&e) == Some(Gone::NotFound) => Ok(()),
         Err(e) => Err(e.into()),
     }
+}
+
+fn close_space(space: &Space) -> Result<(), MuxError> {
+    let label = format!("herdr.space={space}");
+    let text = hc(["ls", "--all", "--json", "--label", label.as_str()])?;
+    let list: TerminalList = serde_json::from_str(&text).map_err(|e| unexpected_json(&e))?;
+    list.terminals.iter().try_for_each(|row| stop(&row.address))
 }
 
 fn stop(address: &Address) -> Result<(), MuxError> {

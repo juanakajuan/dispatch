@@ -363,3 +363,18 @@ fn a_pr_terminal_carries_the_pr_label_not_the_issue_label() {
     let run = fake::calls().pop().expect("a call");
     assert!(run.contains("--label dispatch.pr=7") && !run.contains("dispatch.issue"), "{run}");
 }
+
+#[test]
+fn hc_close_shells_ends_the_space_without_a_claude_terminal() {
+    use crate::session::mux::Mux;
+    let base = temp_dir("hc-close-shells");
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), space_mates: vec!["t7"], ..HcSim::default() };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let dir = crate::domain::WorktreePath::from_observed(dir.to_str().expect("utf8")).expect("dir");
+    hc::Hc { place: hc::Place::Outside, path: None }.close_shells(&dir).expect("closed");
+    let space = hc::space_id(dir.as_path());
+    assert!(fake::calls().iter().any(|c| c == &format!("hc ls --all --json --label herdr.space={space}")));
+    assert_eq!(hc_calls(), ["hc kill t7", "hc rm t7"]);
+}
