@@ -109,7 +109,7 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     let branch = match BranchName::parse(&dialog.branch.lines().join("")) {
         Ok(b) => b,
         Err(e) => {
-            dialog.error = Some(format!("Branch name: {e:?}"));
+            dialog.error = Some(e.to_string());
             dialog.field = DialogField::Branch;
             return Vec::new();
         }

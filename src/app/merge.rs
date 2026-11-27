@@ -84,7 +84,7 @@ impl fmt::Display for CannotFix {
             CannotFix::EachIssueBusy(n) => {
                 write!(f, "Each issue that PR {n} closes already has a session on another branch.")
             }
-            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}: {why:?}."),
+            CannotFix::UnusableHead { pr, raw, why } => write!(f, "PR {pr} has the branch name {raw:?}. {why}"),
             CannotFix::ForkDeniesEdits(n) => write!(
                 f,
                 "PR {n} is from a fork that does not let maintainers push to it, so a session can not push a fix."

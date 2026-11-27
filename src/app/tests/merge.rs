@@ -164,7 +164,7 @@ fn a_problem_pr_whose_head_branch_name_is_unusable_only_explains() {
     assert!(starts(&cmds).is_empty());
     assert_eq!(
         toast(&state),
-        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\": BadChar(' ')."
+        "PR #10 has a merge conflict with main. PR #10 has the branch name \"fix 3\". The branch name can not have a space."
     );
 }
 
@@ -429,7 +429,11 @@ fn m_explains_why_it_can_not_merge() {
 #[test]
 fn each_reason_m_can_not_act_keeps_its_sentence() {
     let (pr, issue) = (PrNumber(10), IssueNumber(3));
-    let unusable = CannotFix::UnusableHead { pr, raw: "a..b".to_string(), why: BranchNameError::BadSequence("..") };
+    let unusable = CannotFix::UnusableHead {
+        pr,
+        raw: "a..b".to_string(),
+        why: BranchNameError::BadSequence("can not have \"..\""),
+    };
     let cases = [
         (NoTarget::NothingSelected.to_string(), "Nothing is selected."),
         (NoTarget::NotListed(pr).to_string(), "PR #10 is not in the list."),
@@ -440,7 +444,7 @@ fn each_reason_m_can_not_act_keeps_its_sentence() {
             CannotFix::EachIssueBusy(pr).to_string(),
             "Each issue that PR #10 closes already has a session on another branch.",
         ),
-        (unusable.to_string(), "PR #10 has the branch name \"a..b\": BadSequence(\"..\")."),
+        (unusable.to_string(), "PR #10 has the branch name \"a..b\". The branch name can not have \"..\"."),
         (
             CannotFix::ForkDeniesEdits(pr).to_string(),
             "PR #10 is from a fork that does not let maintainers push to it, so a session can not push a fix.",
