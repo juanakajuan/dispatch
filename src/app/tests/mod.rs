@@ -43,6 +43,7 @@ mod merge;
 mod message;
 mod open;
 mod pr_session;
+mod races;
 mod refresh;
 mod remove;
 mod sessions;
