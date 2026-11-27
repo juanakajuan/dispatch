@@ -242,7 +242,7 @@ fn window_obs(list: &TerminalList) -> Vec<Observed<Pane>> {
         .iter()
         .rev()
         .filter_map(|row| {
-            let worktree = WorktreePath::from_observed(&row.cwd)?;
+            let worktree = WorktreePath::from_tag(&row.cwd)?;
             let liveness = match row.state {
                 TerminalState::Other => Liveness::Dead,
                 TerminalState::Live if row.runs_a_shell() => Liveness::Dead,

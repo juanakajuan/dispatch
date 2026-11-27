@@ -173,7 +173,8 @@ fn classify(e: &ProcError) -> Option<Gone> {
 
 /// Rows with an empty `@dispatch-worktree` are not ours and are skipped.
 /// Rows with a wrong field count are skipped, not fatal: one odd window must
-/// not hide every session. A tag whose directory is gone is skipped too.
+/// not hide every session. A tag whose directory and its parent are gone is
+/// skipped too.
 fn parse_windows(text: &str) -> Vec<Observed<WindowId>> {
     text.lines()
         .filter_map(|line| {
@@ -184,7 +185,7 @@ fn parse_windows(text: &str) -> Vec<Observed<WindowId>> {
             }
             Some(Observed {
                 window: WindowId::parse(id).ok()?,
-                worktree: WorktreePath::from_observed(worktree)?,
+                worktree: WorktreePath::from_tag(worktree)?,
                 liveness: match (*dead, *waiting) {
                     ("1", _) => Liveness::Dead,
                     (_, "1") => Liveness::Waiting,
@@ -322,17 +323,20 @@ mod tests {
         std::fs::create_dir(&spaced).expect("mkdir");
         std::fs::create_dir(&plain).expect("mkdir");
         let text = format!(
-            "@1\t0\t\t\n@2\t0\t{}\t\n@3\t1\t{}\t1\n@4\t0\n@5\t0\t{}\t\n@x\t0\t{}\t\n",
+            "@1\t0\t\t\n@2\t0\t{}\t\n@3\t1\t{}\t1\n@4\t0\n@5\t0\t{}\t\n@6\t0\t{}\t\n@x\t0\t{}\t\n",
             spaced.display(),
             plain.display(),
             base.join("gone").display(),
+            base.join("gone/too").display(),
             plain.display(),
         );
         let got = parse_windows(&text);
-        assert_eq!(got.len(), 2);
+        assert_eq!(got.len(), 3);
         assert_eq!((got[0].window.as_str(), got[0].liveness), ("@2", Liveness::Working));
         assert!(got[0].worktree.as_path().ends_with("my repo-1"));
         assert_eq!((got[1].window.as_str(), got[1].liveness), ("@3", Liveness::Dead));
+        assert_eq!(got[2].window.as_str(), "@5", "a deleted dir keeps its window, so a start can close it");
+        assert!(got[2].worktree.as_path().ends_with("gone"));
     }
 
     #[test]

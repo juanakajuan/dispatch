@@ -275,6 +275,17 @@ impl WorktreePath {
         std::fs::canonicalize(raw).ok().map(WorktreePath)
     }
 
+    /// For a window's tag, which outlives a dir that the user deleted by
+    /// hand. A gone dir keeps its canonical parent, so a start still finds
+    /// the window and closes it. `None` when the parent is gone too.
+    pub fn from_tag(raw: &str) -> Option<WorktreePath> {
+        let path = std::path::Path::new(raw);
+        WorktreePath::from_observed(raw).or_else(|| {
+            let parent = WorktreePath::from_observed(path.parent()?.to_str()?)?;
+            Some(WorktreePath(parent.0.join(path.file_name()?)))
+        })
+    }
+
     /// For a dir that a start plan will create. The caller builds `path` from
     /// an already canonical parent, so it is canonical without touching the
     /// filesystem and the planner stays pure.

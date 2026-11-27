@@ -37,6 +37,10 @@ fn install_world(base: PathBuf, sim: Rc<RefCell<Sim>>) {
         } else if call.starts_with("tmux set-option") {
             s.tagged = true;
             Ok(String::new())
+        } else if call.starts_with("tmux kill-window") {
+            s.window = false;
+            s.tagged = false;
+            Ok(String::new())
         } else {
             Ok(String::new())
         }
@@ -100,6 +104,31 @@ fn start_after_a_crash_between_steps_runs_only_the_rest() {
     assert_eq!(ran.len(), 4, "{ran:?}");
     assert!(ran[0].starts_with("git config branch.fix/142-x.dispatch-issue"));
     assert!(ran.iter().all(|c| !c.starts_with("git worktree add") && !c.starts_with("git fetch")));
+}
+
+#[test]
+fn start_after_the_worktree_was_deleted_by_hand_prunes_it_and_replaces_the_old_window() {
+    let base = temp_dir("deleted");
+    let ws = workspace(&base);
+    std::fs::create_dir_all(base.join("orbit/.claude/worktrees")).expect("mkdir");
+    let git = GitWorld { marked: true, stale: true, ..GitWorld::default() };
+    install_world(base.clone(), Rc::new(RefCell::new(Sim { git, window: true, tagged: true, ..Sim::default() })));
+    assert!(ws.observe().expect("observe").is_empty(), "a deleted worktree is no session");
+    let out = ws.start(&req(), &launch()).expect("start");
+    assert_eq!(out.session.state, SessionState::Running);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    let calls = fake::calls();
+    let ran: Vec<&str> = calls
+        .iter()
+        .map(String::as_str)
+        .filter(|c| ["git worktree", "tmux kill-window", "tmux new-window"].iter().any(|p| c.starts_with(p)))
+        .filter(|c| !c.starts_with("git worktree list"))
+        .collect();
+    assert_eq!(ran.len(), 4, "{ran:?}");
+    assert_eq!(ran[0], "git worktree prune");
+    assert_eq!(ran[1], "tmux kill-window -t @4");
+    assert_eq!(ran[2], format!("git worktree add {} fix/142-x", dir.display()));
+    assert!(ran[3].starts_with("tmux new-window"), "{}", ran[3]);
 }
 
 #[test]
