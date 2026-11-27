@@ -402,3 +402,46 @@ fn the_key_bar_and_the_keys_menu_write_keys_the_same_way() {
         assert!(screen.contains(want), "missing {want:?} in\n{screen}");
     }
 }
+
+/// The message rows above the first prompt rule, trimmed.
+fn message_on_screen(state: &State, w: u16) -> Vec<String> {
+    let screen = text(&render(state, w, 24));
+    let lines: Vec<&str> = screen.lines().collect();
+    let rule = lines.iter().position(|l| l.trim_start().starts_with('─')).expect("prompt rule");
+    let mut rows: Vec<String> =
+        lines[..rule].iter().rev().take_while(|l| !l.trim().is_empty()).map(|l| l.trim().to_string()).collect();
+    rows.reverse();
+    rows
+}
+
+fn open_failed(state: &mut State, stderr: &str) -> String {
+    let error = crate::github::GhError::Run(crate::proc::fake::fail("gh", 1, stderr));
+    let target = crate::domain::GithubRef::Issue(IssueNumber(2));
+    let _ = app::update(state, Msg::Opened { target, result: Err(error) });
+    super::footer::message(state).expect("toast").0
+}
+
+#[test]
+fn a_toast_wider_than_the_screen_wraps_onto_more_rows_and_keeps_its_end() {
+    let mut state = full_state();
+    let toast = open_failed(&mut state, "fatal: '/tmp/dispatch-verify/20261124-17/worktrees/15' already exists");
+    let rows = message_on_screen(&state, MIN_WIDTH);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows.join(" "), toast, "the whole toast is on screen");
+
+    let short = open_failed(&mut state, "no browser");
+    assert_eq!(message_on_screen(&state, MIN_WIDTH), [short], "a short toast takes one row");
+}
+
+#[test]
+fn a_toast_longer_than_the_message_rows_ends_in_an_ellipsis() {
+    let mut state = full_state();
+    let toast = open_failed(&mut state, &"word ".repeat(200));
+    let rows = message_on_screen(&state, MIN_WIDTH);
+    assert_eq!(rows.len(), crate::ui::footer::MESSAGE_ROWS, "{rows:?}");
+    let last = rows.last().expect("rows");
+    assert!(last.ends_with('…'), "{last:?}");
+    assert!(toast.starts_with(&rows[0]), "the toast starts on the first row");
+    let width = usize::from(MIN_WIDTH) - 4;
+    assert!(rows.iter().all(|r| cells(r) < width), "every row has a margin inside the screen: {rows:?}");
+}

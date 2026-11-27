@@ -1,6 +1,6 @@
 use super::header::feed_failure;
 use super::palette;
-use super::text::{cells, one_line, row_line, span, spans_width};
+use super::text::{cells, fit, one_line, row_line, span, spans_width, wrap};
 use crate::app::filter::{Term, TokenKind, Viewer, Who, tokens};
 use crate::app::keys::{Hint, Key};
 use crate::app::list::Tab;
@@ -31,6 +31,21 @@ pub(super) fn message(state: &State) -> Option<(String, Style)> {
         Tab::Sessions => None,
     };
     failure.map(|text| (text, palette::ERROR))
+}
+
+/// The most rows a message takes. A message longer than this ends in `…`.
+pub(super) const MESSAGE_ROWS: usize = 4;
+
+/// `text` word-wrapped to `width` cells, each row after a one-cell margin,
+/// in at most `MESSAGE_ROWS` rows.
+pub(super) fn message_rows(text: &str, width: usize) -> Vec<String> {
+    let room = width.saturating_sub(1);
+    let mut rows = wrap(text, room);
+    if rows.len() > MESSAGE_ROWS {
+        let rest = rows.split_off(MESSAGE_ROWS - 1).join(" ");
+        rows.push(fit(&rest, room));
+    }
+    rows.into_iter().map(|row| format!(" {row}")).collect()
 }
 
 const CLEAR_FILTER: &str = "esc to clear";

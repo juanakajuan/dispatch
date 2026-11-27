@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::text::fit;
 
 fn ts(secs: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(secs).expect("valid timestamp")
