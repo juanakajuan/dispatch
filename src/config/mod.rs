@@ -263,7 +263,7 @@ pub fn path(xdg_config_home: Option<&str>, home: Option<&str>) -> Option<PathBuf
     clippy::disallowed_methods,
     reason = "boundary: the config file location comes from XDG_CONFIG_HOME and HOME; `path` is the pure part"
 )]
-pub(super) fn env_path() -> Option<PathBuf> {
+pub(crate) fn env_path() -> Option<PathBuf> {
     let xdg = std::env::var("XDG_CONFIG_HOME").ok();
     let home = std::env::var("HOME").ok();
     path(xdg.as_deref(), home.as_deref())

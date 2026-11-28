@@ -132,25 +132,44 @@ pub(super) fn agent_argv(
 }
 
 impl Launch {
-    /// What a resume runs, as one line for a toast. The waiting hooks JSON is
-    /// left out.
-    pub fn resume_words(&self) -> String {
-        resume_argv(&self.command, self.harness, None).join(" ")
+    /// What a resume in `mode` runs, as one line for a toast. The waiting
+    /// hooks JSON is left out.
+    pub fn resume_words(&self, mode: Mode) -> String {
+        resume_argv(&self.command, self.harness, None, mode).join(" ")
     }
 }
 
-/// The argv that continues the last conversation in the worktree.
-pub(super) fn resume_argv(command: &AgentCommand, harness: Harness, hooks: Option<&str>) -> Vec<String> {
+/// The argv that continues the last conversation in the worktree, with the
+/// plan flag of the start when the session plans first. A harness with no
+/// plan flag gets none: its conversation already starts with the plan line.
+pub(super) fn resume_argv(command: &AgentCommand, harness: Harness, hooks: Option<&str>, mode: Mode) -> Vec<String> {
+    let plan = mode == Mode::PlanFirst;
     let tail: Vec<String> = match harness {
         Harness::Claude => {
             let mut tail = vec!["--continue".to_string()];
+            if plan {
+                tail.extend(["--permission-mode", "plan"].map(String::from));
+            }
             if let Some(json) = hooks {
                 tail.extend(["--settings".to_string(), json.to_string()]);
             }
             tail
         }
-        Harness::Codex => ["resume", "--last"].map(String::from).to_vec(),
-        Harness::OpenCode | Harness::Antigravity | Harness::Pi => vec!["--continue".to_string()],
+        Harness::Codex => {
+            let mut tail = ["resume", "--last"].map(String::from).to_vec();
+            if plan {
+                tail.extend(["--sandbox", "read-only"].map(String::from));
+            }
+            tail
+        }
+        Harness::Antigravity => {
+            let mut tail = vec!["--continue".to_string()];
+            if plan {
+                tail.extend(["--mode", "plan"].map(String::from));
+            }
+            tail
+        }
+        Harness::OpenCode | Harness::Pi => vec!["--continue".to_string()],
     };
     command.argv(&tail)
 }

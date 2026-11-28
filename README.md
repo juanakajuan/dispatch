@@ -18,7 +18,7 @@ Run dispatch inside a git checkout that has a GitHub remote called `origin`. The
 cargo install --path .
 ```
 
-Then run `dispatch` in the checkout.
+Then run `dispatch` in the checkout. It takes no arguments. `dispatch --help` (or `-h`) prints the usage and the config file path, and `dispatch --version` (or `-V`) prints the version. Both work outside a git checkout. Any other argument is an error, and dispatch exits with code 2.
 
 ## Use
 
@@ -222,15 +222,15 @@ The file is optional. Its path is `$XDG_CONFIG_HOME/dispatch/config.json`, or `~
 ```
 
 - `detect_waiting` is on by default. dispatch passes `--settings` with five hooks to `claude`. They set a flag on the tmux window when Claude waits for you. A new window has the flag until Claude starts. Set it to `false` if the hooks conflict with yours.
-- `harness` is the agent that new sessions run: `"claude"` (the default), `"codex"`, `"opencode"`, `"antigravity"`, or `"pi"`. dispatch writes the harness of each session to `branch.<name>.dispatch-harness`, and a resume uses that value, so a change here never resumes a Claude session with Codex. A session with no value is a Claude session.
+- `harness` is the agent that new sessions run: `"claude"` (the default), `"codex"`, `"opencode"`, `"antigravity"`, or `"pi"`. dispatch writes the harness of each session to `branch.<name>.dispatch-harness`, and a resume uses that value, so a change here never resumes a Claude session with Codex. A session with no value is a Claude session. dispatch also writes the mode to `branch.<name>.dispatch-mode` (`plan` or `implement`), so a resume of a plan-first session keeps the plan flag. A session with no value resumes without it.
 - `command` is the program and its leading arguments for `harness`. dispatch appends its own arguments. The default is the program of the harness. The old key `claude_command` still loads, as `"harness": "claude"` with that command. A file with both `claude_command` and `command`, or with `claude_command` and another harness, is an error.
 
   | `harness` | Program | Start | Plan first | Resume |
   |---|---|---|---|---|
-  | `claude` | `claude` | `[--permission-mode plan] [--settings <hooks>] "<prompt>"` | `--permission-mode plan` | `--continue [--settings <hooks>]` |
-  | `codex` | `codex` | `[--sandbox read-only] "<prompt>"` | `--sandbox read-only` | `resume --last` |
+  | `claude` | `claude` | `[--permission-mode plan] [--settings <hooks>] "<prompt>"` | `--permission-mode plan` | `--continue [--permission-mode plan] [--settings <hooks>]` |
+  | `codex` | `codex` | `[--sandbox read-only] "<prompt>"` | `--sandbox read-only` | `resume --last [--sandbox read-only]` |
   | `opencode` | `opencode` | `--prompt "<prompt>"` | no flag, so the prompt starts with `Plan first. Do not change any files until I approve the plan.` | `--continue` |
-  | `antigravity` | `agy` | `[--mode plan] --prompt-interactive "<prompt>"` | `--mode plan` | `--continue` |
+  | `antigravity` | `agy` | `[--mode plan] --prompt-interactive "<prompt>"` | `--mode plan` | `--continue [--mode plan]` |
   | `pi` | `pi` | `-- "<prompt>"` | no flag, so the prompt starts with `Plan first. Do not change any files until I approve the plan.` | `--continue` |
 
   Only Claude has these features. `detect_waiting` hooks: the other harnesses show a running session as `running`, never `needs you`, on tmux. Summaries (`i` and the text on a row): they come from a Claude transcript. With herdr and the herdr app, the app reads the agent status itself, so every harness works. pi asks whether to trust the project's own files the first time it runs in a worktree. dispatch does not pass `--approve`, because those files can run code and a PR from a fork can bring them. Attach with `a` to answer, as with Claude's trust question. Session worktrees stay in `.claude/worktrees/<issue>` for every harness. It is only a folder name, and a move would orphan the sessions you already have.

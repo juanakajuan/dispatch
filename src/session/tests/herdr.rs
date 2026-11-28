@@ -95,6 +95,7 @@ fn herdr_start_of_a_new_branch_creates_the_worktree_through_herdr_and_types_clau
             ),
             "git config branch.fix/142-x.dispatch-issue 142".to_string(),
             "git config branch.fix/142-x.dispatch-harness claude".to_string(),
+            "git config branch.fix/142-x.dispatch-mode implement".to_string(),
             format!("herdr pane run w5:p1 '{}'", base.join("orbit/.git/dispatch/launch/142.sh").display()),
         ],
         "the workspace that create opened is reused, and git does not add the worktree"

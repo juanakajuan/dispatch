@@ -5,7 +5,7 @@ use super::start_argv::agent_argv;
 use super::worktree::worktree_dir_for;
 use super::{Session, Sessions, git};
 use crate::config::{AgentCommand, Harness};
-use crate::domain::{BranchName, OriginRef, RepoSlug, SessionKey, WorktreePath};
+use crate::domain::{BranchName, Mode, OriginRef, RepoSlug, SessionKey, WorktreePath};
 use std::path::PathBuf;
 
 /// Everything `plan_start` needs. Gathered by `observe_for_start`.
@@ -59,9 +59,10 @@ pub(super) enum Step {
     /// `git worktree add <dir> <branch>` when it exists (`from` is `None`).
     AddWorktree { dir: PathBuf, branch: BranchName, from: Option<OriginRef> },
     /// `git config branch.<b>.dispatch-issue N` (or `dispatch-pr N`) and
-    /// `git config branch.<b>.dispatch-harness <harness>`.
+    /// `git config branch.<b>.dispatch-harness <harness>`, and
+    /// `git config branch.<b>.dispatch-mode <mode>`.
     /// Overwrites, so running it twice is harmless.
-    Mark { branch: BranchName, key: SessionKey, harness: Harness },
+    Mark { branch: BranchName, key: SessionKey, harness: Harness, mode: Mode },
     /// `Mux::open` with the harness's argv.
     OpenWindow { dir: WorktreePath, argv: Vec<String> },
 }
@@ -96,7 +97,7 @@ pub(super) fn plan_start(
         dir,
         argv: agent_argv(&layout.command, layout.harness, layout.hooks, req.mode, &req.prompt),
     };
-    let mark = |branch: BranchName| Step::Mark { branch, key: req.key, harness: layout.harness };
+    let mark = |branch: BranchName| Step::Mark { branch, key: req.key, harness: layout.harness, mode: req.mode };
     let add = |branch: BranchName, from: Option<OriginRef>| Step::AddWorktree { dir: target.clone(), branch, from };
     let planned = WorktreePath::planned(target.clone());
 

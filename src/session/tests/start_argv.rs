@@ -72,18 +72,34 @@ fn pi_start_argv_ignores_hooks_ends_options_and_plans_in_the_prompt() {
 fn a_command_override_leads_the_argv() {
     let command = AgentCommand::from_words("my-codex --x").expect("valid");
     assert_eq!(agent_argv(&command, Harness::Codex, None, Mode::Implement, "p"), words(&["my-codex", "--x", "p"]));
-    assert_eq!(resume_argv(&command, Harness::Codex, None), words(&["my-codex", "--x", "resume", "--last"]));
+    assert_eq!(
+        resume_argv(&command, Harness::Codex, None, Mode::Implement),
+        words(&["my-codex", "--x", "resume", "--last"])
+    );
 }
 
 #[test]
 fn resume_argv_per_harness() {
-    let resume = |harness, hooks| resume_argv(&AgentCommand::default_for(harness), harness, hooks);
+    let resume = |harness, hooks| resume_argv(&AgentCommand::default_for(harness), harness, hooks, Mode::Implement);
     assert_eq!(resume(Harness::Claude, None), words(&["claude", "--continue"]));
     assert_eq!(resume(Harness::Claude, Some("{}")), words(&["claude", "--continue", "--settings", "{}"]));
     assert_eq!(resume(Harness::Codex, Some("{}")), words(&["codex", "resume", "--last"]));
     assert_eq!(resume(Harness::OpenCode, Some("{}")), words(&["opencode", "--continue"]));
     assert_eq!(resume(Harness::Antigravity, Some("{}")), words(&["agy", "--continue"]));
     assert_eq!(resume(Harness::Pi, Some("{}")), words(&["pi", "--continue"]));
+}
+
+#[test]
+fn a_plan_first_resume_keeps_the_plan_flag_of_the_start() {
+    let resume = |harness, hooks| resume_argv(&AgentCommand::default_for(harness), harness, hooks, Mode::PlanFirst);
+    assert_eq!(
+        resume(Harness::Claude, Some("{}")),
+        words(&["claude", "--continue", "--permission-mode", "plan", "--settings", "{}"])
+    );
+    assert_eq!(resume(Harness::Codex, None), words(&["codex", "resume", "--last", "--sandbox", "read-only"]));
+    assert_eq!(resume(Harness::Antigravity, None), words(&["agy", "--continue", "--mode", "plan"]));
+    assert_eq!(resume(Harness::OpenCode, None), words(&["opencode", "--continue"]), "the plan line is in the prompt");
+    assert_eq!(resume(Harness::Pi, None), words(&["pi", "--continue"]), "the plan line is in the prompt");
 }
 
 fn preview(mux: &StartPreview, key: SessionKey, branch: &str, from: &StartFrom) -> Vec<String> {

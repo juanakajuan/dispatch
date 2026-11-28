@@ -453,6 +453,7 @@ fn a_pr_session_row_shows_pr_number_and_the_pr_title_and_its_pr_state() {
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-pr-11")),
             state: SessionState::Running,
             harness: crate::config::Harness::Claude,
+            mode: crate::domain::Mode::Implement,
         },
     );
     send(&mut state, KeyCode::Char('3'));
