@@ -13,6 +13,7 @@
 //!   update, draw. gh latency never blocks a frame.
 
 mod app;
+mod cli;
 mod clipboard;
 mod config;
 mod domain;
@@ -43,6 +44,21 @@ use std::time::{Duration, Instant};
 const POLL: Duration = Duration::from_millis(100);
 
 fn main() -> ExitCode {
+    match cli::parse(std::env::args_os().skip(1)) {
+        Ok(cli::Invocation::Help) => {
+            print!("{}", cli::help(config::env_path().as_deref()));
+            return ExitCode::SUCCESS;
+        }
+        Ok(cli::Invocation::Version) => {
+            println!("{}", cli::version());
+            return ExitCode::SUCCESS;
+        }
+        Ok(cli::Invocation::Run) => {}
+        Err(e) => {
+            eprintln!("dispatch: {e}");
+            return ExitCode::from(2);
+        }
+    }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
