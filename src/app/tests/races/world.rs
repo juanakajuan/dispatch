@@ -148,6 +148,7 @@ fn started(req: &StartRequest) -> Session {
         checkout: crate::session::Checkout::SessionBranch,
         worktree: WorktreePath::planned(PathBuf::from(format!("/w/{}", req.key))),
         harness: crate::config::Harness::Claude,
+        mode: req.mode,
         state: SessionState::Running,
     }
 }

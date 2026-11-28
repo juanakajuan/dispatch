@@ -27,6 +27,7 @@ use open::{copied, opened, page_url};
 use remove::{cleaned, removed};
 use sessions::{attached, resumed, started, stopped};
 use summary::summary_overlay_key;
+use text_field::TextField;
 use toast::Toast;
 
 pub mod batch;
@@ -48,6 +49,7 @@ pub mod sessions;
 pub mod summary;
 #[cfg(test)]
 mod tests;
+pub mod text_field;
 pub mod toast;
 
 /// Where keys go. One enum, so "dialog open while typing a filter" can not
@@ -62,7 +64,7 @@ pub enum Focus {
     /// The one-line message field for a running session, from `t`.
     Message {
         key: SessionKey,
-        text: String,
+        text: Box<TextField>,
     },
     /// The keybinds overlay, scrolled down by `scroll` lines.
     Keybinds {
@@ -193,7 +195,7 @@ impl State {
         self.tabs.filter(self.tab)
     }
 
-    fn filter_mut(&mut self) -> &mut String {
+    fn filter_mut(&mut self) -> &mut TextField {
         self.tabs.filter_mut(self.tab)
     }
 }

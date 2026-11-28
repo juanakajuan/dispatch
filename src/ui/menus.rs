@@ -1,6 +1,6 @@
 use super::markdown;
 use super::palette;
-use super::text::{cells, fit, span};
+use super::text::{cells, field_spans, fit, span};
 use crate::app::keys::{Action, Key};
 use crate::app::mouse::{HitMap, HitTarget};
 use crate::app::{self, DiffBody, State};
@@ -80,9 +80,8 @@ pub(super) fn draw_settings(
             span(format!("{:name_width$}  ", setting.key()), if on { palette::ACCENT } else { palette::PLAIN }),
         ];
         if let (Some(edit), true) = (&menu.edit, on) {
-            let text: Vec<char> = edit.input.lines().join("").chars().collect();
-            let shown: String = text[text.len().saturating_sub(room.saturating_sub(2))..].iter().collect();
-            spans.push(span(format!("{shown}▏"), palette::ACTIVE));
+            let text = [span(edit.input.text().to_string(), palette::ACTIVE)];
+            spans.extend(field_spans(&text, edit.input.cursor(), room, palette::ACTIVE));
         } else {
             let default_note = format!("   default: {}", setting.show(&default));
             let (open, close) = if setting.is_typed() { ("", "") } else { ("< ", " >") };

@@ -81,7 +81,7 @@ fn a_label_term_and_text_filter_the_issues_tab() {
     state.issues.items.push(issue(4, "Retry docs", &["docs"]));
     type_filter(&mut state, "label:bug");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(3))]);
-    *state.filter_mut() = "retry label:docs".to_string();
+    state.filter_mut().set("retry label:docs");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(4))]);
 }
 
@@ -96,7 +96,7 @@ fn the_pr_tab_filters_by_its_own_labels_assignees_and_milestone() {
     };
     press(&mut state, key('2'));
     for raw in ["label:bug", "assignee:octo", "milestone:v1", "#11 label:bug"] {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         assert_eq!(visible_rows(&state), [RowKey::Pr(PrNumber(11))], "{raw}");
     }
 }
@@ -108,7 +108,7 @@ fn the_session_tab_filters_by_the_fields_of_the_sessions_issue() {
     state.sessions.insert(issue_key(2), session(2, SessionState::Running));
     state.sessions.insert(issue_key(9), session(9, SessionState::Running));
     press(&mut state, key('3'));
-    *state.filter_mut() = "label:docs".to_string();
+    state.filter_mut().set("label:docs");
     assert_eq!(visible_rows(&state), [RowKey::Session(issue_key(2))], "#9 has no issue, so it has no labels");
 }
 
@@ -163,7 +163,7 @@ fn a_value_outside_a_fixed_set_is_invalid_and_matches_no_row() {
     }
     let (mut state, _) = app();
     for raw in ["state:bogus", "-state:bogus", "retry has:x"] {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         assert_eq!(visible_rows(&state), [], "{raw}");
     }
 }
@@ -172,13 +172,13 @@ fn a_value_outside_a_fixed_set_is_invalid_and_matches_no_row() {
 fn a_minus_keeps_the_rows_that_the_term_does_not_match() {
     let (mut state, _) = app();
     state.issues.items[1].labels.push("wontfix".to_string());
-    *state.filter_mut() = "-label:docs".to_string();
+    state.filter_mut().set("-label:docs");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(3)), RowKey::Issue(IssueNumber(1))]);
-    *state.filter_mut() = "-label:docs -label:bug".to_string();
+    state.filter_mut().set("-label:docs -label:bug");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(1))]);
-    *state.filter_mut() = "-label:docs -retry".to_string();
+    state.filter_mut().set("-label:docs -retry");
     assert_eq!(visible_rows(&state), [], "a minus before free text is part of the text");
-    *state.filter_mut() = "-label:".to_string();
+    state.filter_mut().set("-label:");
     assert_eq!(visible_rows(&state).len(), 3, "a term with no value hides nothing");
 }
 
@@ -186,16 +186,16 @@ fn a_minus_keeps_the_rows_that_the_term_does_not_match() {
 fn author_matches_the_login_and_at_me() {
     let (mut state, _) = app();
     state.issues.items[0].author = "hubot".to_string();
-    *state.filter_mut() = "author:hubot".to_string();
+    state.filter_mut().set("author:hubot");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(3))]);
-    *state.filter_mut() = "-author:@HUBOT".to_string();
+    state.filter_mut().set("-author:@HUBOT");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(2)), RowKey::Issue(IssueNumber(1))]);
-    *state.filter_mut() = "author:@me".to_string();
+    state.filter_mut().set("author:@me");
     assert_eq!(visible_rows(&state), [], "the login is not known yet");
     press(&mut state, Msg::Viewer(Ok("octo".to_string())));
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(2)), RowKey::Issue(IssueNumber(1))]);
     press(&mut state, key('2'));
-    *state.filter_mut() = "author:@me".to_string();
+    state.filter_mut().set("author:@me");
     state.prs.items[1].author = "hubot".to_string();
     assert_eq!(visible_rows(&state), [RowKey::Pr(PrNumber(10))], "the PR tab reads the PR author");
 }
@@ -208,7 +208,7 @@ fn state_checks_and_has_filter_the_pr_tab() {
     state.prs.items[1].checks = Checks::Pass;
     press(&mut state, key('2'));
     let rows = |state: &mut State, raw: &str| {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         visible_rows(state)
     };
     assert_eq!(rows(&mut state, "state:open"), [RowKey::Pr(PrNumber(10))]);
@@ -228,12 +228,12 @@ fn state_checks_and_has_filter_the_pr_tab() {
 fn is_fork_matches_a_fork_pr_and_the_issue_it_closes() {
     let (mut state, _) = app();
     state.prs.items[0].head = PrBranch::fork(PrNumber(10), "feature".to_string(), ForkPush::Denied);
-    *state.filter_mut() = "is:fork".to_string();
+    state.filter_mut().set("is:fork");
     assert_eq!(visible_rows(&state), [RowKey::Issue(IssueNumber(3))]);
     press(&mut state, key('2'));
-    *state.filter_mut() = "is:fork".to_string();
+    state.filter_mut().set("is:fork");
     assert_eq!(visible_rows(&state), [RowKey::Pr(PrNumber(10))]);
-    *state.filter_mut() = "-is:fork".to_string();
+    state.filter_mut().set("-is:fork");
     assert_eq!(visible_rows(&state), [RowKey::Pr(PrNumber(11))]);
 }
 
@@ -242,7 +242,7 @@ fn the_issue_tab_filters_by_state_checks_pr_session_and_marks() {
     let (mut state, _) = app();
     state.prs.items[0].checks = Checks::Pending;
     let rows = |state: &mut State, raw: &str| {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         visible_rows(state)
     };
     assert_eq!(rows(&mut state, "state:in-review"), [RowKey::Issue(IssueNumber(3))], "#3 has an open PR");
@@ -271,7 +271,7 @@ fn the_session_tab_filters_by_state_pr_and_marks() {
     state.marked.insert(IssueNumber(2));
     press(&mut state, key('3'));
     let rows = |state: &mut State, raw: &str| {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         visible_rows(state)
     };
     assert_eq!(rows(&mut state, "state:working"), [RowKey::Session(issue_key(3))]);

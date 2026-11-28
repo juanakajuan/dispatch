@@ -188,7 +188,7 @@ fn the_pr_tab_completes_from_pr_data_and_the_session_tab_from_its_issues() {
 fn tab_changes_nothing_when_there_is_no_choice() {
     let mut state = state_with_data();
     for raw in ["label:zzz", "color:", "retry"] {
-        *state.filter_mut() = raw.to_string();
+        state.filter_mut().set(raw);
         state.completion = None;
         tab(&mut state);
         back_tab(&mut state);
