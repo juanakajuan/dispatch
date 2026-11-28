@@ -1,10 +1,11 @@
 //! `git config branch.<b>.dispatch-*`: what dispatch keeps on a branch.
 //! `dispatch-issue <n>` marks an issue session, `dispatch-pr <n>` a PR
-//! session, and `dispatch-harness <label>` the harness the session runs.
+//! session, `dispatch-harness <label>` the harness the session runs, and
+//! `dispatch-mode plan` a session that started as plan first.
 
 use super::git::git;
 use crate::config::Harness;
-use crate::domain::{BranchName, IssueNumber, PrNumber, SessionKey};
+use crate::domain::{BranchName, IssueNumber, Mode, PrNumber, SessionKey};
 use crate::proc::ProcError;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,15 +17,32 @@ pub(super) type Markers = BTreeMap<BranchName, SessionKey>;
 /// a branch without one runs Claude.
 pub(super) type Harnesses = BTreeMap<BranchName, Harness>;
 
+/// branch -> mode, from `dispatch-mode`. Only values dispatch knows; a
+/// branch without one implements.
+pub(super) type Modes = BTreeMap<BranchName, Mode>;
+
 /// Everything dispatch keeps on a branch in `.git/config`.
 #[derive(Debug, Default)]
 pub(super) struct Marked {
     pub sessions: Markers,
     pub harnesses: Harnesses,
+    pub modes: Modes,
+}
+
+/// The `dispatch-mode` value.
+fn mode_label(mode: Mode) -> &'static str {
+    match mode {
+        Mode::PlanFirst => "plan",
+        Mode::Implement => "implement",
+    }
+}
+
+fn mode_from_label(label: &str) -> Option<Mode> {
+    [Mode::PlanFirst, Mode::Implement].into_iter().find(|m| mode_label(*m) == label)
 }
 
 pub(super) fn list_markers(root: &Path) -> Result<Marked, ProcError> {
-    match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-(issue|pr|harness)$"]) {
+    match git(root, ["config", "--get-regexp", r"^branch\..*\.dispatch-(issue|pr|harness|mode)$"]) {
         Ok(t) => Ok(parse_markers(&t)),
         Err(e) if e.exit_code() == Some(1) => Ok(Marked::default()),
         Err(e) => Err(e),
@@ -33,7 +51,8 @@ pub(super) fn list_markers(root: &Path) -> Result<Marked, ProcError> {
 
 /// Lines like `branch.fix/142-retry-queue.dispatch-issue 142`,
 /// `branch.fix/dep-bump.dispatch-pr 7`, or
-/// `branch.fix/142-retry-queue.dispatch-harness codex`. The branch is
+/// `branch.fix/142-retry-queue.dispatch-harness codex`, or
+/// `branch.fix/142-retry-queue.dispatch-mode plan`. The branch is
 /// everything between `branch.` and the marker suffix; the value is
 /// everything after the first space. A branch with both session markers is an
 /// issue session: the legacy marker wins, whatever the line order.
@@ -46,6 +65,12 @@ fn parse_markers(text: &str) -> Marked {
         if let Some(b) = rest.strip_suffix(".dispatch-harness") {
             if let (Ok(branch), Some(harness)) = (BranchName::parse(b), Harness::from_label(value)) {
                 marked.harnesses.insert(branch, harness);
+            }
+            continue;
+        }
+        if let Some(b) = rest.strip_suffix(".dispatch-mode") {
+            if let (Ok(branch), Some(mode)) = (BranchName::parse(b), mode_from_label(value)) {
+                marked.modes.insert(branch, mode);
             }
             continue;
         }
@@ -75,6 +100,11 @@ pub(super) fn set_marker(root: &Path, branch: &BranchName, key: SessionKey) -> R
 pub(super) fn set_harness(root: &Path, branch: &BranchName, harness: Harness) -> Result<(), ProcError> {
     let key = format!("branch.{}.dispatch-harness", branch.as_str());
     git(root, ["config".to_string(), key, harness.label().to_string()]).map(|_| ())
+}
+
+pub(super) fn set_mode(root: &Path, branch: &BranchName, mode: Mode) -> Result<(), ProcError> {
+    let key = format!("branch.{}.dispatch-mode", branch.as_str());
+    git(root, ["config".to_string(), key, mode_label(mode).to_string()]).map(|_| ())
 }
 
 #[cfg(test)]
@@ -129,6 +159,29 @@ mod tests {
     }
 
     #[test]
+    fn mode_markers_parse_and_unknown_values_are_dropped() {
+        let text = "branch.fix/1-a.dispatch-mode plan\n\
+                    branch.fix/2-b.dispatch-mode implement\n\
+                    branch.fix/3-c.dispatch-mode yolo\n";
+        let marked = parse_markers(text);
+        assert!(marked.sessions.is_empty());
+        assert_eq!(marked.modes.len(), 2);
+        assert_eq!(marked.modes[&branch("fix/1-a")], Mode::PlanFirst);
+        assert_eq!(marked.modes[&branch("fix/2-b")], Mode::Implement);
+    }
+
+    #[test]
+    fn set_mode_writes_the_label() {
+        fake::install(|_| Ok(String::new()));
+        set_mode(Path::new("/"), &branch("fix/1-a"), Mode::PlanFirst).expect("ok");
+        set_mode(Path::new("/"), &branch("fix/2-b"), Mode::Implement).expect("ok");
+        assert_eq!(
+            fake::calls(),
+            ["git config branch.fix/1-a.dispatch-mode plan", "git config branch.fix/2-b.dispatch-mode implement"]
+        );
+    }
+
+    #[test]
     fn set_marker_writes_the_issue_or_pr_key() {
         fake::install(|_| Ok(String::new()));
         set_marker(Path::new("/"), &branch("fix/1-a"), SessionKey::Pr(PrNumber(7))).expect("ok");
@@ -150,6 +203,6 @@ mod tests {
     fn marker_list_exit_one_is_empty() {
         fake::install(|_| Err(fake::fail("git", 1, "")));
         let marked = list_markers(Path::new("/")).expect("ok");
-        assert!(marked.sessions.is_empty() && marked.harnesses.is_empty());
+        assert!(marked.sessions.is_empty() && marked.harnesses.is_empty() && marked.modes.is_empty());
     }
 }

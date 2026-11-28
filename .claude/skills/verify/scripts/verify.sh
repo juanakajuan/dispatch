@@ -300,7 +300,7 @@ cmd_state() {
   out="$RUN/evidence/$n-$label.state.txt"
   {
     echo "## git worktree list"; git -C "$CLONE" worktree list
-    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-(issue|pr|harness)$' || echo "(none)"
+    echo "## dispatch markers"; git -C "$CLONE" config --get-regexp '^branch\..*\.dispatch-(issue|pr|harness|mode)$' || echo "(none)"
     echo "## tmux windows (id name dead tag waiting)"
     t list-windows -a -F '#{window_id} #{window_name} dead=#{pane_dead} tag=#{@dispatch-worktree} waiting=#{@dispatch-waiting}'
   } >"$out"
