@@ -115,7 +115,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         toast::info(state, "No session for this issue. Press s to start one.".to_string());
         return Vec::new();
     };
-    let (key, harness) = (session.key, session.harness);
+    let (key, harness, mode) = (session.key, session.harness, session.mode);
     if session.state.is_live() {
         vec![Cmd::Attach { key, to: AttachTo::Claude }]
     } else if harness.has_transcript() && !state.transcripts.contains_key(&key) {
@@ -123,7 +123,7 @@ pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
         Vec::new()
     } else {
         let launch = Launch::for_session(&state.config, harness);
-        toast::info(state, format!("Resuming {key} with {}…", launch.resume_words()));
+        toast::info(state, format!("Resuming {key} with {}…", launch.resume_words(mode)));
         vec![Cmd::Job(Job::Write(WriteJob::Resume(key, launch)))]
     }
 }

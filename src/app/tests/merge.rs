@@ -15,7 +15,7 @@ pub(super) fn merges(cmds: &[Cmd]) -> Vec<MergeAsk> {
 }
 
 pub(super) const ASK: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::MergeOnly };
-const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::StartFixSession };
+pub(super) const ASK_FIX: MergeAsk = MergeAsk { pr: PrNumber(10), consent: Consent::StartFixSession };
 
 pub(super) fn gh_failed(stderr: &str) -> MergeError {
     MergeError::Gh(gh_error(stderr))
@@ -142,6 +142,21 @@ fn another_key_cancels_the_new_session() {
     let cmds = press(&mut state, key('m'));
     assert!(starts(&cmds).is_empty() && merges(&cmds).is_empty());
     assert_eq!(toast(&state), "Press m again to merge PR #10.", "the m arms a fresh merge");
+}
+
+#[test]
+fn an_armed_fix_for_an_issue_that_started_meanwhile_starts_nothing() {
+    let (mut state, now) = app();
+    state.hits.targets = vec![(Rect::new(0, 0, 10, 1), HitTarget::Tab(Tab::Issues))];
+    press(&mut state, key('m'));
+    press(&mut state, key('m'));
+    press(&mut state, key('s'));
+    press(&mut state, handoff(MergeProblem::Conflict));
+    assert_eq!(starts(&press(&mut state, ctrl('s'))).len(), 1, "the dialog starts #3");
+    press(&mut state, click(5, 0, now));
+    let cmds = press(&mut state, key('m'));
+    assert!(starts(&cmds).is_empty());
+    assert_eq!(state.handed_off.get(&PrNumber(10)), None);
 }
 
 #[test]

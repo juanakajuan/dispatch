@@ -108,9 +108,10 @@ impl Mux for Place {
         plan(select.into_iter().chain([";", verb, "-t", session.as_str()].map(String::from)).collect())
     }
 
-    /// The window carries no tag, so observe skips it. It turns
-    /// `remain-on-exit` off, which a global setting can turn on, so it closes
-    /// when the shell exits.
+    /// A shell that is open on `dir` is reused. A new window carries
+    /// `@dispatch-shell`, not `@dispatch-worktree`, so observe skips it and a
+    /// remove can find it. It turns `remain-on-exit` off, which a global
+    /// setting can turn on, so it closes when the shell exits.
     fn shell(
         &self,
         _repo: Repo<'_>,
@@ -118,9 +119,21 @@ impl Mux for Place {
         key: SessionKey,
         _window: Option<&WindowId>,
     ) -> Result<AttachPlan, MuxError> {
+        if let Some(open) = shell_windows(dir)?.first() {
+            return Ok(self.attach(open));
+        }
         let id = new_window(self, dir, &format!("{key} shell"), &[])?;
-        tmux(["set-option", "-w", "-t", id.as_str(), "remain-on-exit", "off"])?;
+        let dir_text = dir.as_path().to_string_lossy().into_owned();
+        let set = |option: &str, value: &str| ["set-option", "-w", "-t", id.as_str(), option, value].map(String::from);
+        let mut args = set("remain-on-exit", "off").to_vec();
+        args.push(";".to_string());
+        args.extend(set(SHELL_TAG, &dir_text));
+        tmux(&args)?;
         Ok(self.attach(&id))
+    }
+
+    fn close_shells(&self, dir: &WorktreePath) -> Result<(), MuxError> {
+        shell_windows(dir)?.iter().try_for_each(kill_window)
     }
 
     fn waiting_hooks(&self) -> Option<&'static str> {
@@ -151,6 +164,28 @@ fn list_windows() -> Result<Vec<Observed<WindowId>>, MuxError> {
         Err(e) if classify(&e) == Some(Gone::Server) => Ok(Vec::new()),
         Err(e) => Err(e.into()),
     }
+}
+
+/// The window option that marks a `!` shell with its worktree.
+const SHELL_TAG: &str = "@dispatch-shell";
+
+/// The `!` shells open on `dir`, oldest first. No server is none.
+fn shell_windows(dir: &WorktreePath) -> Result<Vec<WindowId>, MuxError> {
+    match tmux(["list-windows", "-a", "-F", &format!("#{{window_id}}\t#{{{SHELL_TAG}}}")]) {
+        Ok(text) => Ok(parse_shells(&text, dir)),
+        Err(e) if classify(&e) == Some(Gone::Server) => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn parse_shells(text: &str, dir: &WorktreePath) -> Vec<WindowId> {
+    let want = dir.as_path().to_string_lossy();
+    text.lines()
+        .filter_map(|line| match line.split('\t').collect::<Vec<_>>().as_slice() {
+            [id, tag] if *tag == want => WindowId::parse(id).ok(),
+            _ => None,
+        })
+        .collect()
 }
 
 /// What a failed call says is missing, read once from tmux's stderr.

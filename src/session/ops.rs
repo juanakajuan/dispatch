@@ -19,12 +19,13 @@ struct World<W> {
     worktrees: Vec<git::Worktree>,
     markers: markers::Markers,
     harnesses: markers::Harnesses,
+    modes: markers::Modes,
     windows: Vec<Observed<W>>,
 }
 
 impl<W: Clone> World<W> {
     fn join(&self) -> Joined<W> {
-        join(&self.root, &self.worktrees, &self.markers, &self.harnesses, &self.windows)
+        join(&self.root, &self.worktrees, &self.markers, &self.harnesses, &self.modes, &self.windows)
     }
 }
 
@@ -32,7 +33,14 @@ fn read_world<M: Mux>(ws: &Workspace, mux: &M) -> Result<World<M::Window>, Sessi
     let windows = mux.list(ws.repo())?;
     let worktrees = git::list_worktrees(&ws.repo_root).map_err(SessionError::Git)?;
     let marked = markers::list_markers(&ws.repo_root).map_err(SessionError::Git)?;
-    Ok(World { root: ws.repo_root.clone(), worktrees, markers: marked.sessions, harnesses: marked.harnesses, windows })
+    Ok(World {
+        root: ws.repo_root.clone(),
+        worktrees,
+        markers: marked.sessions,
+        harnesses: marked.harnesses,
+        modes: marked.modes,
+        windows,
+    })
 }
 
 /// A fresh observation of one key, so a stale row can not aim at a window
@@ -112,9 +120,10 @@ fn run_steps<M: Mux>(
                 }
                 mux.add_worktree(ws.repo(), &dir, &branch, from.as_ref(), key)?;
             }
-            Step::Mark { branch, key, harness } => {
+            Step::Mark { branch, key, harness, mode } => {
                 markers::set_marker(&ws.repo_root, &branch, key).map_err(SessionError::Git)?;
                 markers::set_harness(&ws.repo_root, &branch, harness).map_err(SessionError::Git)?;
+                markers::set_mode(&ws.repo_root, &branch, mode).map_err(SessionError::Git)?;
             }
             Step::OpenWindow { dir, argv } => mux.open(ws.repo(), &dir, key, &argv)?,
         }
@@ -139,7 +148,7 @@ pub(super) fn resume<M: Mux>(ws: &Workspace, mux: &M, key: SessionKey, launch: &
     let Some(row) = row(ws, mux, key)? else {
         return Err(SessionError::NoSession(key));
     };
-    let argv = start_argv::resume_argv(&launch.command, launch.harness, hooks(mux, launch));
+    let argv = start_argv::resume_argv(&launch.command, launch.harness, hooks(mux, launch), row.mode);
     match &row.window {
         Some((_, liveness)) if liveness.is_live() => Ok(()),
         Some((window, _)) => Ok(mux.relaunch(ws.repo(), window, &row.worktree, key, &argv)?),
@@ -170,6 +179,7 @@ fn remove_one<M: Mux>(ws: &Workspace, mux: &M, target: &RemoveTarget) -> Result<
     if let Some((window, _)) = &row.window {
         mux.stop(window)?;
     }
+    mux.close_shells(&row.worktree)?;
     git::remove_worktree(&ws.repo_root, row.worktree.as_path()).map_err(git_err)?;
     git::delete_branch(&ws.repo_root, &row.branch).map_err(git_err)?;
     git::remove_fork_remote(&ws.repo_root, &row.branch).map_err(git_err)?;

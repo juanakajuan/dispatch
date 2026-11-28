@@ -105,6 +105,7 @@ fn hc_start_adds_the_worktree_with_git_and_runs_claude_with_the_labels() {
             format!("git worktree add {} -b fix/142-x origin/main", dir.display()),
             "git config branch.fix/142-x.dispatch-issue 142".to_string(),
             "git config branch.fix/142-x.dispatch-harness claude".to_string(),
+            "git config branch.fix/142-x.dispatch-mode implement".to_string(),
             hc_run(&base, "claude line one\nit's \"line\" two;"),
         ]
     );
@@ -362,4 +363,19 @@ fn a_pr_terminal_carries_the_pr_label_not_the_issue_label() {
     let _ = hc::Hc { place: hc::Place::Outside, path: None }.open(repo, &dir, pr_key(7), &["claude".to_string()]);
     let run = fake::calls().pop().expect("a call");
     assert!(run.contains("--label dispatch.pr=7") && !run.contains("dispatch.issue"), "{run}");
+}
+
+#[test]
+fn hc_close_shells_ends_the_space_without_a_claude_terminal() {
+    use crate::session::mux::Mux;
+    let base = temp_dir("hc-close-shells");
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let sim = HcSim { git: GitWorld::started(), space_mates: vec!["t7"], ..HcSim::default() };
+    install_hc_world(base.clone(), Rc::new(RefCell::new(sim)));
+    let dir = crate::domain::WorktreePath::from_observed(dir.to_str().expect("utf8")).expect("dir");
+    hc::Hc { place: hc::Place::Outside, path: None }.close_shells(&dir).expect("closed");
+    let space = hc::space_id(dir.as_path());
+    assert!(fake::calls().iter().any(|c| c == &format!("hc ls --all --json --label herdr.space={space}")));
+    assert_eq!(hc_calls(), ["hc kill t7", "hc rm t7"]);
 }

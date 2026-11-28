@@ -122,6 +122,19 @@ pub(super) fn confirm_dialog(state: &mut State) -> Vec<Cmd> {
     }
     let req = StartRequest { key: dialog.key, branch, mode: dialog.mode, prompt, from: dialog.from.clone() };
     let n = req.key;
+    let busy = if state.sessions.contains_key(&n) {
+        Some(format!("{n} already has a session."))
+    } else if state.starting.contains(&n) {
+        Some(format!("{n} is already starting."))
+    } else {
+        None
+    };
+    if let Some(why) = busy {
+        state.focus = Focus::List;
+        goto_session(state, n);
+        toast::info(state, why);
+        return Vec::new();
+    }
     let cmd = begin_start(state, req);
     state.focus = Focus::List;
     goto_session(state, n);

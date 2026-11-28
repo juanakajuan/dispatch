@@ -43,6 +43,7 @@ mod merge;
 mod message;
 mod open;
 mod pr_session;
+mod races;
 mod refresh;
 mod remove;
 mod sessions;
@@ -77,6 +78,7 @@ pub(super) fn session(n: u32, state: SessionState) -> Session {
         checkout: crate::session::Checkout::SessionBranch,
         worktree: WorktreePath::planned(PathBuf::from(format!("/w/orbit-{n}"))),
         harness: crate::config::Harness::Claude,
+        mode: crate::domain::Mode::Implement,
         state,
     }
 }

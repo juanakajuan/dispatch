@@ -3,7 +3,7 @@ use super::mux::{Liveness, Observed};
 use super::worktree::worktree_dir_for;
 use super::{Checkout, Session, SessionState, Sessions, git};
 use crate::config::Harness;
-use crate::domain::{BranchName, SessionKey, WorktreePath};
+use crate::domain::{BranchName, Mode, SessionKey, WorktreePath};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -13,6 +13,7 @@ pub(super) struct Row<W> {
     pub(super) checkout: Checkout,
     pub(super) worktree: WorktreePath,
     pub(super) harness: Harness,
+    pub(super) mode: Mode,
     pub(super) window: Option<(W, Liveness)>,
 }
 
@@ -37,6 +38,7 @@ pub(super) fn sessions<W>(joined: &Joined<W>) -> Sessions {
         checkout: row.checkout.clone(),
         worktree: row.worktree.clone(),
         harness: row.harness,
+        mode: row.mode,
         state: row.state(),
     };
     joined.iter().map(|entry| (*entry.0, session(entry))).collect()
@@ -51,6 +53,7 @@ pub(super) fn sessions<W>(joined: &Joined<W>) -> Sessions {
 ///   by path, and one worktree is at most one session.
 /// - A marker with an unparseable value is ignored (boundary rule).
 /// - A branch with no known `dispatch-harness` runs Claude.
+/// - A branch with no known `dispatch-mode` implements.
 /// - Two worktrees marked with one key: the first by path wins, so the map
 ///   invariant holds even after manual meddling.
 /// - A tagged window whose worktree is gone is ignored; it is not a session.
@@ -60,6 +63,7 @@ pub(super) fn join<W: Clone>(
     worktrees: &[git::Worktree],
     markers: &markers::Markers,
     harnesses: &markers::Harnesses,
+    modes: &markers::Modes,
     windows: &[Observed<W>],
 ) -> Joined<W> {
     let mut by_path: Vec<&git::Worktree> = worktrees.iter().collect();
@@ -72,6 +76,7 @@ pub(super) fn join<W: Clone>(
             .map(|o| (o.window.clone(), o.liveness))
     };
     let harness_of = |branch: &BranchName| harnesses.get(branch).copied().unwrap_or_default();
+    let mode_of = |branch: &BranchName| modes.get(branch).copied().unwrap_or_default();
     let mut joined = Joined::new();
     let mut unmatched = Vec::new();
     for w in by_path {
@@ -82,6 +87,7 @@ pub(super) fn join<W: Clone>(
                     checkout: Checkout::SessionBranch,
                     worktree: w.path.clone(),
                     harness: harness_of(branch),
+                    mode: mode_of(branch),
                     window: window_of(w),
                 });
             }
@@ -97,6 +103,7 @@ pub(super) fn join<W: Clone>(
             checkout,
             worktree: w.path.clone(),
             harness: harness_of(branch),
+            mode: mode_of(branch),
             window: window_of(w),
         });
     }

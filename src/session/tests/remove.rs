@@ -33,7 +33,8 @@ fn merged_target(issue: u32, sha: &str) -> RemoveTarget {
 }
 
 /// A started session for issue 142 with a window, `dirty` or clean, with
-/// `unpushed` commits on no remote.
+/// `unpushed` commits on no remote. Two `!` shells are open in its worktree,
+/// and one in another.
 fn install_world(base: &Path, tree: Tree, unpushed: u32, window: Window) {
     let base = base.to_path_buf();
     let mut git = GitWorld::started();
@@ -42,6 +43,8 @@ fn install_world(base: &Path, tree: Tree, unpushed: u32, window: Window) {
     fake::install(move |call| {
         if let Some(answer) = git.answer(call, &base) {
             answer
+        } else if call.starts_with("tmux list-windows") && call.contains("@dispatch-shell") {
+            Ok(format!("@4\t\n@7\t{0}\n@8\t{0}\n@9\t{0}-other\n", dir.display()))
         } else if call.starts_with("tmux list-windows") {
             Ok(if open { format!("@4\t0\t{}\t\n", dir.display()) } else { String::new() })
         } else if call.starts_with("tmux kill-window") {
@@ -100,6 +103,8 @@ fn a_clean_pushed_session_closes_its_window_then_removes_the_worktree_then_the_b
         changed(&calls),
         [
             "tmux kill-window -t @4",
+            "tmux kill-window -t @7",
+            "tmux kill-window -t @8",
             &format!("git worktree remove {}", dir.display()),
             "git branch -D fix/142-x",
             "git worktree prune",
@@ -108,10 +113,12 @@ fn a_clean_pushed_session_closes_its_window_then_removes_the_worktree_then_the_b
 }
 
 #[test]
-fn without_a_window_nothing_is_closed() {
+fn without_a_window_only_the_shells_are_closed() {
     let (ws, _) = started("remove-no-window", Tree::Clean, 0, Window::Gone);
     assert_eq!(ws.remove(&target(142)).expect("removed"), RemoveOutcome::Removed);
-    assert!(!fake::calls().iter().any(|c| c.starts_with("tmux kill-window")));
+    let calls = fake::calls();
+    let kills: Vec<&String> = calls.iter().filter(|c| c.starts_with("tmux kill-window")).collect();
+    assert_eq!(kills, ["tmux kill-window -t @7", "tmux kill-window -t @8"], "the shells, not the other worktree's");
 }
 
 #[test]
@@ -192,6 +199,8 @@ fn squash_merged_session_at_merged_head_is_removed_and_pruned() {
         changed(&calls),
         [
             "tmux kill-window -t @4",
+            "tmux kill-window -t @7",
+            "tmux kill-window -t @8",
             &format!("git worktree remove {}", dir.display()),
             "git branch -D fix/142-x",
             "git worktree prune",
@@ -354,6 +363,8 @@ fn stop_and_remove_stops_window_and_removes_clean_squash_merged_session() {
         changed(&fake::calls()),
         [
             "tmux kill-window -t @4",
+            "tmux kill-window -t @7",
+            "tmux kill-window -t @8",
             &format!("git worktree remove {}", dir.display()),
             "git branch -D fix/142-x",
             "git worktree prune",

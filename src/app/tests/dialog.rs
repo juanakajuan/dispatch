@@ -1,3 +1,4 @@
+use super::merge::{ASK_FIX, handoff, with_ask};
 use super::*;
 
 #[test]
@@ -180,4 +181,17 @@ fn the_wheel_does_not_move_the_list_behind_the_dialog() {
     press(&mut state, wheel(MouseEventKind::ScrollDown, now));
     assert_eq!(selected_row(&state), Some(RowKey::Issue(IssueNumber(3))));
     assert!(matches!(state.focus, Focus::Dialog(_)));
+}
+
+#[test]
+fn confirm_after_a_fix_session_took_the_issue_starts_nothing_and_goes_to_it() {
+    let (mut state, _) = app();
+    press(&mut state, key('s'));
+    press(&mut state, with_ask(handoff(MergeProblem::Conflict), ASK_FIX));
+    assert!(state.starting.contains(&issue_key(3)), "the fix session is starting");
+    let cmds = press(&mut state, ctrl('s'));
+    assert!(starts(&cmds).is_empty());
+    assert!(matches!(state.focus, Focus::List));
+    assert_eq!(selected_row(&state), Some(RowKey::Session(issue_key(3))));
+    assert_eq!(toast(&state), "#3 is already starting.");
 }

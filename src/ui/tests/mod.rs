@@ -62,6 +62,7 @@ pub(super) fn full_state() -> State {
             checkout: crate::session::Checkout::SessionBranch,
             worktree: WorktreePath::planned(PathBuf::from("/w/orbit-3")),
             harness: crate::config::Harness::Claude,
+            mode: crate::domain::Mode::Implement,
             state: SessionState::NeedsYou,
         },
     );
