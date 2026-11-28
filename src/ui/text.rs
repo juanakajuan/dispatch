@@ -108,6 +108,51 @@ pub(super) fn fit_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'st
     out
 }
 
+/// The cursor mark of a one-line field.
+pub(super) const CURSOR_MARK: &str = "▏";
+
+/// A one-line field: `spans` hold its text, and `mark` goes before the char
+/// at `cursor`. When the text and the mark are wider than `room` cells, the
+/// view keeps as much text before the cursor as fits, then fills the rest
+/// with text after it, so the cursor always shows.
+pub(super) fn field_spans(spans: &[Span<'static>], cursor: usize, room: usize, mark: Style) -> Vec<Span<'static>> {
+    let chars: Vec<(char, Style)> = spans.iter().flat_map(|s| s.content.chars().map(|c| (c, s.style))).collect();
+    let (before, after) = chars.split_at(cursor.min(chars.len()));
+    let mut used = cells(CURSOR_MARK);
+    let mut start = before.len();
+    while let Some((c, _)) = start.checked_sub(1).and_then(|i| before.get(i)) {
+        if used + char_cells(*c) > room {
+            break;
+        }
+        used += char_cells(*c);
+        start -= 1;
+    }
+    let mut end = 0;
+    while let Some((c, _)) = after.get(end) {
+        if used + char_cells(*c) > room {
+            break;
+        }
+        used += char_cells(*c);
+        end += 1;
+    }
+    let mut out = runs(&before[start..]);
+    out.push(span(CURSOR_MARK, mark));
+    out.extend(runs(&after[..end]));
+    out
+}
+
+/// One span for each run of chars with the same style.
+fn runs(chars: &[(char, Style)]) -> Vec<Span<'static>> {
+    let mut out: Vec<Span<'static>> = Vec::new();
+    for (c, style) in chars {
+        match out.last_mut() {
+            Some(last) if last.style == *style => last.content.to_mut().push(*c),
+            _ => out.push(span(c.to_string(), *style)),
+        }
+    }
+    out
+}
+
 /// Pads `spans` on the left so they sit in the middle of `width` cells. A
 /// line wider than `width` stays at the left edge and is cut at the right.
 pub(super) fn centered(spans: Vec<Span<'static>>, width: u16) -> Line<'static> {

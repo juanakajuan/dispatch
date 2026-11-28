@@ -150,11 +150,11 @@ fn empty_tabs_show_only_keys_and_quit() {
     assert_eq!(bar_pairs(&state), only_global, "empty pull requests tab");
 
     let (mut state, _) = app();
-    *state.filter_mut() = "zzz-no-match".to_string();
+    state.filter_mut().set("zzz-no-match");
     assert_eq!(bar_pairs(&state), only_global, "filtered empty issues tab");
 
     press(&mut state, key('2'));
-    *state.filter_mut() = "zzz-no-match".to_string();
+    state.filter_mut().set("zzz-no-match");
     assert_eq!(bar_pairs(&state), only_global, "filtered empty pull requests tab");
 }
 

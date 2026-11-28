@@ -180,8 +180,8 @@ fn tab_keys_look_like_key_hints_and_counts_like_counts() {
 #[test]
 fn another_tab_with_a_filter_shows_a_slash_after_its_count() {
     let mut state = full_state();
-    state.tabs.issues.filter = "retry".to_string();
-    state.tabs.prs.filter = "fix".to_string();
+    state.tabs.issues.filter.set("retry");
+    state.tabs.prs.filter.set("fix");
     let buf = frame(&mut state, 120, 20);
     let row = text(&buf).lines().nth(1).expect("tab row").to_string();
     assert!(row.contains(" 1  Issues 2 "), "the shown tab's filter is in the prompt, not the tab\n{row}");
@@ -277,7 +277,7 @@ fn empty_and_loading_lists_say_so() {
 fn the_sessions_tab_says_when_the_filter_matches_no_session() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char('3'));
-    state.tabs.sessions.filter = "zzz".to_string();
+    state.tabs.sessions.filter.set("zzz");
     let screen = text(&render(&state, 80, 10));
     assert!(screen.contains("No sessions match the filter."), "{screen}");
 

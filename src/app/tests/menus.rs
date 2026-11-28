@@ -285,7 +285,7 @@ fn keys_in_the_editor_do_not_move_or_close_the_menu() {
     press(&mut state, code(KeyCode::Enter));
     type_text(&mut state, "j,q");
     assert_eq!(menu(&state).at, Setting::Command);
-    assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.lines().join("")), Some("claudej,q".to_string()));
+    assert_eq!(menu(&state).edit.as_ref().map(|e| e.input.text()), Some("claudej,q"));
 }
 
 #[test]

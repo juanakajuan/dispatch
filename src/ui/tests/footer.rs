@@ -150,7 +150,7 @@ fn the_prompt_opens_the_filter_and_the_clear_control_clears_it() {
     assert_clickable(&state, &screen, "/ to filter issues", HitTarget::Key(Key::Char('/')));
     assert!(!screen.contains("esc to clear"), "nothing to clear yet\n{screen}");
 
-    state.tabs.issues.filter = "retry".to_string();
+    state.tabs.issues.filter.set("retry");
     let screen = draw_into(&mut state, 100, 24);
     assert_clickable(&state, &screen, "esc to clear", HitTarget::Key(Key::Code(KeyCode::Esc)));
     let (x, y) = find(&screen, "/retry");
@@ -221,7 +221,7 @@ fn the_filter_footer_is_clickable() {
 #[test]
 fn the_prompt_shows_negated_invalid_and_incomplete_terms_by_kind() {
     let mut state = full_state();
-    state.tabs.issues.filter = "-label:bug -author:@me state:bogus -has: is:fork".to_string();
+    state.tabs.issues.filter.set("-label:bug -author:@me state:bogus -has: is:fork");
     let fg = |state: &mut State, needle: &str| {
         let screen = draw_into(state, 120, 24);
         let (x, y) = find(&screen, needle);
@@ -240,7 +240,7 @@ fn the_prompt_shows_negated_invalid_and_incomplete_terms_by_kind() {
 #[test]
 fn the_prompt_shows_each_filter_term_in_the_accent_colour() {
     let mut state = full_state();
-    state.tabs.issues.filter = "retry label:bug assignee:@me milestone:".to_string();
+    state.tabs.issues.filter.set("retry label:bug assignee:@me milestone:");
     let fg = |state: &mut State, needle: &str| {
         let screen = draw_into(state, 120, 24);
         let (x, y) = find(&screen, needle);
@@ -370,7 +370,7 @@ fn an_overlay_hides_the_list_hints_and_shows_its_own_hints_once() {
         let mut state = full_state();
         state.issues.items.push(issue(1, "Add json output", &["feature"]));
         send(&mut state, KeyCode::Char('1'));
-        state.tabs.issues.filter = "o".to_string();
+        state.tabs.issues.filter.set("o");
         assert!(draw_into(&mut state, 160, 60).contains("esc to clear"), "{name}: the list shows the clear hint");
         for key in keys {
             send(&mut state, *key);
@@ -452,4 +452,37 @@ fn a_toast_longer_than_the_message_rows_ends_in_an_ellipsis() {
     assert!(toast.starts_with(&rows[0]), "the toast starts on the first row");
     let width = usize::from(MIN_WIDTH) - 4;
     assert!(rows.iter().all(|r| cells(r) < width), "every row has a margin inside the screen: {rows:?}");
+}
+
+#[test]
+fn the_message_field_shows_its_cursor_where_the_keys_moved_it() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('t'));
+    for c in "fix teh typo".chars() {
+        send(&mut state, KeyCode::Char(c));
+    }
+    for _ in 0..7 {
+        send(&mut state, KeyCode::Left);
+    }
+    send(&mut state, KeyCode::Char('X'));
+    send(&mut state, KeyCode::Home);
+    send(&mut state, KeyCode::Char('A'));
+    let screen = text(&render(&state, 120, 24));
+    assert!(screen.contains("❯ message to #3: A▏fix tXeh typo"), "{screen}");
+}
+
+#[test]
+fn the_filter_shows_its_cursor_and_keeps_its_term_colours() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char('/'));
+    for c in "label:bug retry".chars() {
+        send(&mut state, KeyCode::Char(c));
+    }
+    for _ in 0..6 {
+        send(&mut state, KeyCode::Left);
+    }
+    let screen = draw_into(&mut state, 120, 24);
+    assert!(screen.contains("❯ label:bug▏ retry"), "{screen}");
+    let (x, y) = find(&screen, "label:bug");
+    assert_eq!(Some(render(&state, 120, 24)[(x, y)].fg), palette::ACCENT.fg);
 }

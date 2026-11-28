@@ -25,14 +25,12 @@ pub(super) fn filter_key(state: &mut State, ev: &KeyEvent) -> Vec<Cmd> {
             state.filter_mut().clear();
             state.focus = Focus::List;
         }
-        Some(Key::Code(KeyCode::Backspace)) => {
-            state.filter_mut().pop();
-        }
         Some(Key::Code(KeyCode::Down)) => cycle_saved(state, Step::Next),
         Some(Key::Code(KeyCode::Up)) => cycle_saved(state, Step::Previous),
         Some(Key::Ctrl('c')) => return vec![Cmd::Quit],
-        Some(Key::Char(c)) => state.filter_mut().push(c),
-        _ => {}
+        _ => {
+            state.filter_mut().edit(ev);
+        }
     }
     Vec::new()
 }
@@ -53,7 +51,7 @@ fn cycle_saved(state: &mut State, step: Step) {
     }
     let at = saved.iter().position(|f| f == state.filter());
     let next = saved[step.from(at, n)].clone();
-    *state.filter_mut() = next;
+    state.filter_mut().set(&next);
 }
 
 /// One word of the typed filter, with the bytes it came from, so the prompt

@@ -290,9 +290,9 @@ fn a_session_row_for_a_pr_takes_its_title_and_filter_facets_from_the_pr() {
     state.sessions.insert(pr_key(11), pr_session(11, SessionState::Running));
     state.sessions.insert(issue_key(3), session(3, SessionState::Running));
     press(&mut state, key('3'));
-    *state.filter_mut() = "label:dependencies".to_string();
+    state.filter_mut().set("label:dependencies");
     assert_eq!(visible_rows(&state), [RowKey::Session(pr_key(11))]);
-    *state.filter_mut() = "PR 11".to_string();
+    state.filter_mut().set("PR 11");
     assert_eq!(visible_rows(&state), [RowKey::Session(pr_key(11))], "the PR title matches");
 }
 

@@ -24,7 +24,8 @@ pub(super) enum Step {
 }
 
 /// Puts the next or previous choice in place of the word at the end of the
-/// filter. With no choice, the filter stays as it is.
+/// filter, with the cursor after it, wherever the cursor was. With no choice,
+/// the filter stays as it is.
 pub(super) fn complete(state: &mut State, step: Step) {
     let previous = state.completion.take();
     let still_cycling = previous
@@ -41,9 +42,8 @@ pub(super) fn complete(state: &mut State, step: Step) {
         let at = step.from(None, choices.len());
         Completion { start, choices, at }
     };
-    let filter = state.filter_mut();
-    filter.truncate(c.start);
-    filter.push_str(&c.choices[c.at]);
+    let completed = format!("{}{}", &state.filter()[..c.start], c.choices[c.at]);
+    state.filter_mut().set(&completed);
     state.completion = Some(c);
 }
 

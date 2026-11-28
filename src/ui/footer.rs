@@ -1,6 +1,6 @@
 use super::header::feed_failure;
 use super::palette;
-use super::text::{cells, fit, one_line, row_line, span, spans_width, wrap};
+use super::text::{cells, field_spans, fit, one_line, row_line, span, spans_width, wrap};
 use crate::app::filter::{Term, TokenKind, Viewer, Who, tokens};
 use crate::app::keys::{Hint, Key};
 use crate::app::list::Tab;
@@ -53,15 +53,16 @@ const CLEAR_FILTER: &str = "esc to clear";
 /// The prompt opens the filter on a click, and its `esc to clear` clears it.
 pub(super) fn draw_prompt(frame: &mut Frame, area: Rect, state: &State, hits: &mut HitMap) {
     let mut spans = vec![span("❯ ", palette::ACCENT)];
+    let room = |spans: &[Span<'static>]| usize::from(area.width).saturating_sub(spans_width(spans));
     match (&state.focus, state.filter().is_empty()) {
         (Focus::Filter, _) => {
-            spans.extend(filter_spans(state, Style::default()));
-            spans.push(span("▏", palette::ACCENT));
+            let cursor = state.tabs.filter_field(state.tab).cursor();
+            spans.extend(field_spans(&filter_spans(state, Style::default()), cursor, room(&spans), palette::ACCENT));
         }
         (Focus::Message { key, text }, _) => {
             spans.push(span(format!("message to {key}: "), palette::LABEL));
-            spans.push(Span::raw(text.clone()));
-            spans.push(span("▏", palette::ACCENT));
+            let typed = [Span::raw(text.text().to_string())];
+            spans.extend(field_spans(&typed, text.cursor(), room(&spans), palette::ACCENT));
         }
         (_, false) => {
             spans.push(span("/", palette::LABEL));

@@ -277,3 +277,43 @@ fn the_diff_overlay_reads_then_shows_colored_lines_and_untracked_files() {
     let _ = draw_into(&mut state, 60, 8);
     assert!(state.hits.max_scroll > 0, "a short box scrolls");
 }
+
+fn press_ctrl(state: &mut State, c: char) {
+    let _ = app::update(state, Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)));
+}
+
+#[test]
+fn the_command_editor_shows_its_cursor_and_follows_it() {
+    let mut state = full_state();
+    send(&mut state, KeyCode::Char(','));
+    for _ in 0..4 {
+        send(&mut state, KeyCode::Char('j'));
+    }
+    send(&mut state, KeyCode::Enter);
+    press_ctrl(&mut state, 'j');
+    for c in "claude --model opus".chars() {
+        send(&mut state, KeyCode::Char(c));
+    }
+    send(&mut state, KeyCode::Home);
+    send(&mut state, KeyCode::Char('A'));
+    send(&mut state, KeyCode::Left);
+    send(&mut state, KeyCode::Left);
+    send(&mut state, KeyCode::Char('B'));
+    let screen = text(&render(&state, 100, 30));
+    assert!(screen.contains("command          B▏Aclaude --model opus "), "the mark is at the cursor\n{screen}");
+
+    let long = format!("claude {}", "--flag ".repeat(20));
+    press_ctrl(&mut state, 'j');
+    send(&mut state, KeyCode::End);
+    press_ctrl(&mut state, 'j');
+    for c in long.chars() {
+        send(&mut state, KeyCode::Char(c));
+    }
+    let screen = text(&render(&state, 100, 30));
+    assert!(screen.contains("--flag --flag ▏"), "at the end, the tail shows\n{screen}");
+    assert!(!screen.contains("command          claude"), "{screen}");
+    send(&mut state, KeyCode::Home);
+    send(&mut state, KeyCode::Char('X'));
+    let screen = text(&render(&state, 100, 30));
+    assert!(screen.contains("command          X▏claude --flag"), "the view follows the cursor home\n{screen}");
+}
