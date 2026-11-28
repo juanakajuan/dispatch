@@ -1,6 +1,7 @@
 use super::keys::{Key, key_of};
 use super::list::current_session;
 use super::msg::{Cmd, Job, ReadJob};
+use super::sessions::no_session;
 use super::toast;
 use super::{DiffBody, Focus, State};
 use crate::domain::SessionKey;
@@ -12,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 /// worker, and the overlay says so until it lands.
 pub(super) fn diff_key(state: &mut State) -> Vec<Cmd> {
     let Some(key) = current_session(state).map(|s| s.key) else {
-        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        no_session(state);
         return Vec::new();
     };
     state.focus = Focus::Diff { key, scroll: 0, body: DiffBody::Reading };

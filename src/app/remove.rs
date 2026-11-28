@@ -3,6 +3,7 @@ use super::feed::observe_now;
 use super::list::{current_session, pr_for_session};
 use super::merge::Armed;
 use super::msg::{Cmd, Job, WriteJob};
+use super::sessions::no_session;
 use super::toast;
 use crate::domain::{CommitOid, PrState, SessionKey};
 use crate::session::error::SessionError;
@@ -51,7 +52,7 @@ fn merged_sessions_count(n: usize) -> String {
 /// job checks the worktree again before it removes anything.
 pub(super) fn remove_key(state: &mut State, armed: Option<&Armed>) -> Vec<Cmd> {
     let Some(session) = current_session(state) else {
-        toast::info(state, "No session here.".to_string());
+        no_session(state);
         return Vec::new();
     };
     let key = session.key;

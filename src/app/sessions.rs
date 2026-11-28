@@ -70,8 +70,42 @@ fn plan_start(state: &State) -> Result<StartAction, StartBlocked> {
     }
 }
 
+/// `s` starts a session, or opens the batch dialog that starts several.
 pub(super) fn can_start(state: &State) -> bool {
-    plan_start(state).is_ok()
+    plan_start(state).is_ok_and(|a| !matches!(a, StartAction::Goto(_)))
+}
+
+/// `s` goes to the session the selected row already has.
+pub(super) fn s_goes_to_session(state: &State) -> bool {
+    matches!(plan_start(state), Ok(StartAction::Goto(_)))
+}
+
+/// The toast for a key that needs the selected row's session when the row
+/// has none.
+pub(super) fn no_session(state: &mut State) {
+    let row = match selected_row(state) {
+        Some(RowKey::Issue(_)) => "this issue",
+        Some(RowKey::Pr(_)) => "this PR",
+        Some(RowKey::Session(_)) | None => {
+            toast::info(state, "No session here.".to_string());
+            return;
+        }
+    };
+    let text = if can_start(state) {
+        format!("No session for {row}. Press s to start one.")
+    } else {
+        format!("No session for {row}.")
+    };
+    toast::info(state, text);
+}
+
+/// The toast for a key that needs a live session when the selected row has
+/// none: it has no session, or its session exited.
+pub(super) fn no_live_session(state: &mut State) {
+    match current_session(state).map(|s| s.key) {
+        Some(key) => toast::info(state, format!("{key} is not running. Press a to resume it.")),
+        None => no_session(state),
+    }
 }
 
 /// `s` on an issue or a PR, Enter on an issue, or a double-click on an issue.
@@ -112,7 +146,7 @@ pub(super) fn goto_session(state: &mut State, key: SessionKey) {
 
 pub(super) fn attach_key(state: &mut State) -> Vec<Cmd> {
     let Some(session) = current_session(state) else {
-        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        no_session(state);
         return Vec::new();
     };
     let (key, harness, mode) = (session.key, session.harness, session.mode);
@@ -157,7 +191,7 @@ fn start_again(state: &mut State, key: SessionKey) {
 /// exited one.
 pub(super) fn shell_key(state: &mut State) -> Vec<Cmd> {
     let Some(key) = current_session(state).map(|s| s.key) else {
-        toast::info(state, "No session for this issue. Press s to start one.".to_string());
+        no_session(state);
         return Vec::new();
     };
     vec![Cmd::Attach { key, to: AttachTo::Shell }]
@@ -169,7 +203,7 @@ pub(super) fn stop_key(state: &mut State) -> Vec<Cmd> {
         toast::info(state, format!("Stopping {key}…"));
         return vec![Cmd::Job(Job::Write(WriteJob::Stop(key)))];
     }
-    toast::info(state, "No running session here.".to_string());
+    no_live_session(state);
     Vec::new()
 }
 

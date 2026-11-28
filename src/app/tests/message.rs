@@ -19,12 +19,12 @@ fn sends_of(cmds: &[Cmd]) -> Vec<(SessionKey, SendKind, &str)> {
 fn t_on_a_row_with_no_running_session_refuses() {
     let (mut state, _) = app();
     assert!(press(&mut state, key('t')).is_empty());
-    assert_eq!(toast(&state), "No running session here.", "no session");
+    assert_eq!(toast(&state), "No session for this issue. Press s to start one.", "no session");
     assert!(matches!(state.focus, Focus::List));
 
     state.sessions.insert(issue_key(3), session(3, SessionState::Exited));
     press(&mut state, key('t'));
-    assert_eq!(toast(&state), "No running session here.", "an exited session");
+    assert_eq!(toast(&state), "#3 is not running. Press a to resume it.", "an exited session");
     assert!(matches!(state.focus, Focus::List));
 }
 

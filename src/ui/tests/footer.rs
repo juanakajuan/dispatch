@@ -110,6 +110,7 @@ fn footer_keys(state: &State, h: u16) -> Vec<Key> {
 #[test]
 fn key_bar_entries_and_the_sort_footer_are_clickable() {
     let mut state = full_state();
+    state.sessions.clear();
     let screen = draw_into(&mut state, 200, 24);
     for (needle, key) in [
         ("? to show keys", Key::Char('?')),
@@ -130,6 +131,7 @@ fn key_bar_entries_and_the_sort_footer_are_clickable() {
 #[test]
 fn a_key_bar_entry_cut_by_a_narrow_terminal_is_not_clickable() {
     let mut state = full_state();
+    state.sessions.clear();
     let screen = draw_into(&mut state, 40, 24);
     assert!(screen.contains("? to show keys") && screen.contains("q to quit"), "{screen}");
     assert!(!screen.contains("s to start session") && !screen.contains("S sort"), "{screen}");
@@ -315,6 +317,9 @@ fn prompt_placeholder_on_sessions_tab_matches_the_selected_session() {
 #[test]
 fn prompt_placeholder_on_issues_tab_matches_whether_the_row_can_start() {
     let mut state = full_state();
+    assert_eq!(prompt_line(&state), "❯ / to filter issues · s to go to session", "issue with a session");
+
+    state.sessions.clear();
     assert_eq!(prompt_line(&state), "❯ / to filter issues · s to start a session", "open issue");
 
     state.sessions.clear();
@@ -330,6 +335,9 @@ fn prompt_placeholder_on_issues_tab_matches_whether_the_row_can_start() {
 fn prompt_placeholder_on_prs_tab_matches_whether_the_pr_can_start() {
     let mut state = full_state();
     send(&mut state, KeyCode::Char('2'));
+    assert_eq!(prompt_line(&state), "❯ / to filter pull requests · s to go to session", "PR with a session");
+
+    state.sessions.clear();
     assert_eq!(prompt_line(&state), "❯ / to filter pull requests · s to start a session", "open PR");
 
     state.prs.items[0].state = PrState::Draft;

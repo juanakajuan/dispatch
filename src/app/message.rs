@@ -1,6 +1,7 @@
 use super::keys::{Key, key_of};
 use super::list::current_session;
 use super::msg::{Cmd, Job, SendKind, WriteJob};
+use super::sessions::no_live_session;
 use super::toast;
 use super::{Focus, State};
 use crate::domain::SessionKey;
@@ -12,7 +13,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 pub(super) fn open_message(state: &mut State) -> Vec<Cmd> {
     match current_session(state).filter(|s| s.state.is_live()) {
         Some(session) => state.focus = Focus::Message { key: session.key, text: Box::default() },
-        None => toast::info(state, "No running session here.".to_string()),
+        None => no_live_session(state),
     }
     Vec::new()
 }

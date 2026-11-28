@@ -98,7 +98,7 @@ fn no_session_selected_says_so() {
     let (mut state, _) = app();
     assert!(!shows(&state, "D", "remove"));
     assert!(press(&mut state, key('D')).is_empty());
-    assert_eq!(toast(&state), "No session here.");
+    assert_eq!(toast(&state), "No session for this issue. Press s to start one.");
 }
 
 #[test]

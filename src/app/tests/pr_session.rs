@@ -295,3 +295,35 @@ fn a_session_row_for_a_pr_takes_its_title_and_filter_facets_from_the_pr() {
     state.filter_mut().set("PR 11");
     assert_eq!(visible_rows(&state), [RowKey::Session(pr_key(11))], "the PR title matches");
 }
+
+#[test]
+fn a_session_key_on_a_pr_with_no_session_names_the_pr() {
+    for c in ['a', 'i', 'd', 'D', 'x', 't', '!'] {
+        let (mut state, _) = app();
+        on_pr(&mut state, 11);
+        assert!(press(&mut state, key(c)).is_empty(), "{c}");
+        assert_eq!(toast(&state), "No session for this PR. Press s to start one.", "{c}");
+    }
+}
+
+#[test]
+fn the_no_session_toast_offers_s_only_when_s_can_start() {
+    let (mut state, _) = app();
+    state.prs.items[1].state = PrState::Merged;
+    on_pr(&mut state, 11);
+    press(&mut state, key('a'));
+    assert_eq!(toast(&state), "No session for this PR.");
+}
+
+#[test]
+fn s_on_a_pr_whose_branch_has_a_session_offers_to_go_to_it() {
+    let (mut state, _) = app();
+    let mut existing = session(11, SessionState::Running);
+    existing.key = pr_key(11);
+    state.sessions.insert(pr_key(11), existing);
+    on_pr(&mut state, 11);
+    assert!(!shows(&state, "s", "start session"));
+    assert!(shows(&state, "s", "go to session"));
+    press(&mut state, key('s'));
+    assert_eq!(state.tab, Tab::Sessions);
+}

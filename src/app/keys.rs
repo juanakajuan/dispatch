@@ -10,7 +10,7 @@ use super::message::open_message;
 use super::msg::Cmd;
 use super::open::open_key;
 use super::remove::{clean_key, has_merged_sessions, removable, remove_key};
-use super::sessions::{attach_key, can_start, shell_key, start_key, stop_key};
+use super::sessions::{attach_key, can_start, s_goes_to_session, shell_key, start_key, stop_key};
 use super::summary::{has_transcript_summary, summary_key};
 use super::{Focus, OpenWith, State};
 use crate::session::SessionState;
@@ -81,6 +81,8 @@ impl KeyGroup {
 pub enum When {
     Always,
     CanStart,
+    /// `s` goes to the session the selected row already has.
+    GoesToSession,
     Markable,
     PrClosesIssue,
     SessionLive,
@@ -189,8 +191,8 @@ pub static BINDINGS: &[Binding] = &[
         keys: &[Key::Char('s')],
         action: Action::Start,
         group: KeyGroup::Sessions,
-        desc: "start a session for the issue or PR",
-        bar: &[bar("start session", When::CanStart)],
+        desc: "start a session, or go to the row's session",
+        bar: &[bar("start session", When::CanStart), bar("go to session", When::GoesToSession)],
     },
     Binding {
         keys: &[Key::Char(' ')],
@@ -376,8 +378,10 @@ pub fn footer_hints(state: &State) -> Vec<Hint> {
 pub fn prompt_hint(state: &State) -> &'static str {
     match state.tab {
         Tab::Issues if can_start(state) => "/ to filter issues · s to start a session",
+        Tab::Issues if s_goes_to_session(state) => "/ to filter issues · s to go to session",
         Tab::Issues => "/ to filter issues",
         Tab::Prs if can_start(state) => "/ to filter pull requests · s to start a session",
+        Tab::Prs if s_goes_to_session(state) => "/ to filter pull requests · s to go to session",
         Tab::Prs => "/ to filter pull requests",
         Tab::Sessions => match current_session(state).map(|s| s.state) {
             Some(SessionState::Running | SessionState::NeedsYou) => "/ to filter sessions · a to attach",
@@ -396,6 +400,7 @@ pub(super) fn key_bar(state: &State) -> Vec<Hint> {
     let shown = |when: When| match when {
         When::Always => true,
         When::CanStart => can_start(state),
+        When::GoesToSession => s_goes_to_session(state),
         When::Markable => markable(state),
         When::PrClosesIssue => closed_issue_of_pr(state).is_some(),
         When::SessionLive => session.is_some_and(SessionState::is_live),

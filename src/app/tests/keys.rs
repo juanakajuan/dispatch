@@ -22,7 +22,7 @@ fn key_bar_follows_the_context() {
         names(&state),
         [
             "? show keys",
-            "s start session",
+            "s go to session",
             "enter go to issue",
             "a resume",
             "! open shell",
@@ -224,7 +224,8 @@ fn s_to_start_session_hides_when_selected_row_cannot_start() {
     let mut existing = session(11, SessionState::Running);
     existing.key = pr_key(11);
     state.sessions.insert(pr_key(11), existing);
-    assert!(shows(&state, "s", "start session"), "existing session lets s jump to it");
+    assert!(!shows(&state, "s", "start session"), "existing session");
+    assert!(shows(&state, "s", "go to session"), "existing session lets s go to it");
     state.sessions.clear();
 
     let repo = RepoSlug::parse("maxbeizer/cli").expect("slug");
