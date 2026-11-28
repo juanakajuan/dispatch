@@ -261,7 +261,7 @@ fn attach_inside_switches_and_outside_suspends() {
 }
 
 #[test]
-fn shell_opens_an_untagged_window_and_attaches_to_it() {
+fn shell_opens_a_window_tagged_as_a_shell_and_attaches_to_it() {
     let base = temp_dir("tmux-shell");
     let mut ws = workspace(&base);
     let dir = base.join("orbit/.claude/worktrees/142");
@@ -294,8 +294,12 @@ fn shell_opens_an_untagged_window_and_attaches_to_it() {
     let sets: Vec<&String> = calls.iter().filter(|c| c.starts_with("tmux set-option")).collect();
     assert_eq!(
         sets,
-        ["tmux set-option -w -t @9 remain-on-exit off"],
-        "no tag, so observe does not list it, and it closes on exit even when remain-on-exit is on globally"
+        [&format!(
+            "tmux set-option -w -t @9 remain-on-exit off ; set-option -w -t @9 @dispatch-shell {}",
+            dir.display()
+        )],
+        "no worktree tag, so observe does not list it, a shell tag, so a remove finds it, \
+         and it closes on exit even when remain-on-exit is on globally"
     );
 
     ws.mux = Backend::Tmux(tmux::Place::Detached { session_name: "dispatch-orbit".to_string() });
@@ -303,6 +307,35 @@ fn shell_opens_an_untagged_window_and_attaches_to_it() {
     assert!(matches!(plan, AttachPlan::Suspend(_)));
     let calls = fake::calls();
     assert!(calls.iter().any(|c| c.starts_with("tmux new-window -d -t =dispatch-orbit: -P")), "{calls:?}");
+}
+
+#[test]
+fn a_second_shell_goes_to_the_open_one() {
+    let base = temp_dir("tmux-shell-again");
+    let ws = workspace(&base);
+    let dir = base.join("orbit/.claude/worktrees/142");
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let listed = dir.clone();
+    fake::install(move |call| {
+        let mut git = GitWorld::started();
+        if let Some(answer) = git.answer(call, &base) {
+            answer
+        } else if call.starts_with("tmux list-windows") && call.contains("@dispatch-shell") {
+            Ok(format!("@4\t\n@6\t{0}-other\n@9\t{0}\n", listed.display()))
+        } else if call.starts_with("tmux list-windows") {
+            Ok(format!("@4\t0\t{}\t\n", listed.display()))
+        } else {
+            Ok(String::new())
+        }
+    });
+    let plan = ws.attach_plan(issue_key(142), AttachTo::Shell).expect("plan");
+    assert_eq!(
+        plan,
+        AttachPlan::Switch(
+            ["tmux", "select-window", "-t", "@9", ";", "switch-client", "-t", "$1"].map(String::from).to_vec()
+        )
+    );
+    assert!(!fake::calls().iter().any(|c| c.starts_with("tmux new-") || c.starts_with("tmux set-option")));
 }
 
 #[test]
